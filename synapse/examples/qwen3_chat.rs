@@ -1,19 +1,15 @@
-//! Interactive chat with a Qwen3-0.6B-architecture model.
+//! Interactive chat with either a real Qwen3 checkpoint or a tiny demo model.
 //!
 //! Usage:
-//!   cargo run --example qwen3_chat --release
-//!
-//! This example builds a Qwen3-architecture model with random weights
-//! (since no real checkpoint is included) and demonstrates the full
-//! generation pipeline: prompt → prefill → decode → output.
-//!
-//! With real weights, replace the fake weight loading with:
-//!   `load_safetensors(Path::new("path/to/model.safetensors"))`
+//!   cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B
+//!   cargo run --example qwen3_chat --release -- --demo
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 use synapse_inference::config::*;
+use synapse_inference::engine::InferenceEngine;
 use synapse_inference::generation::{CombinedSampler, GenerationConfig, GenerationPipeline};
 use synapse_inference::model::ModelBuilder;
 use synapse_inference::weight_loading::{RawTensor, WeightMapper};
@@ -52,22 +48,22 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
         w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h], s + 2));
         w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h], s + 3));
         w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim], s + 4));
-        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 5));
-        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 6));
-        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 7));
-        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 8));
+        w.insert(format!("model.layers.{i}.self_attn.q_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 5));
+        w.insert(format!("model.layers.{i}.self_attn.k_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 6));
+        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 7));
+        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 8));
+        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 9));
+        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 10));
     }
     w.insert("model.norm.weight".into(), fake(vec![h], 9999));
     w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
     w
 }
 
-fn main() {
-    // ── Load config ──────────────────────────────────────────────────
+fn demo_engine() -> InferenceEngine {
     let config_json = include_str!("../configs/qwen3_0.6b.json");
-    let mut cfg = ModelConfig::from_json(config_json).expect("Failed to parse Qwen3 config");
+    let mut cfg = ModelConfig::from_json(config_json).expect("Failed to parse demo config");
 
-    // Use a smaller config for demo (full 0.6B is too slow without optimized backend)
     cfg.architecture.hidden_size = 64;
     cfg.architecture.num_layers = 4;
     cfg.architecture.vocab_size = 256;
@@ -85,33 +81,148 @@ fn main() {
         max_position_embeddings: 128,
     };
 
+    let mut model = ModelBuilder::from_config(&cfg);
+    let weights = generate_fake_hf_weights(&cfg);
+    let mapper = WeightMapper::qwen3();
+    let result = model.load_weights(weights, &mapper).expect("Demo weights should load");
+    assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
+    assert!(result.unexpected.is_empty(), "Unexpected keys: {:?}", result.unexpected);
+
+    InferenceEngine {
+        model,
+        config: cfg,
+        tokenizer: None,
+    }
+}
+
+fn parse_args() -> Result<Option<PathBuf>, String> {
+    let mut args = std::env::args().skip(1);
+    let mut model_dir = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--demo" => return Ok(None),
+            "--model-dir" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--model-dir requires a path".to_string())?;
+                model_dir = Some(PathBuf::from(value));
+            }
+            "--help" | "-h" => {
+                println!("Usage:");
+                println!("  cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B");
+                println!("  cargo run --example qwen3_chat --release -- --demo");
+                std::process::exit(0);
+            }
+            other => return Err(format!("Unknown argument: {other}")),
+        }
+    }
+
+    Ok(model_dir)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let model_dir = parse_args().map_err(io::Error::other)?;
+
+    if let Some(model_dir) = model_dir {
+        run_pretrained_chat(model_dir)?;
+    } else {
+        run_demo_chat();
+    }
+
+    Ok(())
+}
+
+fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    print!("Loading checkpoint from {}...", model_dir.display());
+    io::stdout().flush()?;
+    let engine = InferenceEngine::from_pretrained(&model_dir)?;
+    println!(" done ({} params)", engine.param_count());
+    println!("Type 'quit' to exit.");
+
+    let tokenizer = engine.tokenizer().expect("pretrained engine has tokenizer").clone();
+    let stop_sequences = tokenizer.encode("<|im_end|>")?;
+    let eos_token_id = tokenizer.eos_token_id();
+    let stdin = io::stdin();
+    let mut line_reader = stdin.lock().lines();
+
+    loop {
+        print!("\n> ");
+        io::stdout().flush()?;
+
+        let line = match line_reader.next() {
+            Some(Ok(l)) => l,
+            _ => break,
+        };
+
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "quit" || line == "exit" {
+            println!("Goodbye!");
+            break;
+        }
+
+        let prompt = format!(
+            "<|im_start|>user\n{line}<|im_end|>\n<|im_start|>assistant\n"
+        );
+        let prompt_tokens = engine.encode(&prompt)?;
+        let stream_tokenizer = tokenizer.clone();
+        let pipeline = GenerationPipeline::new(&engine.model);
+
+        let config = GenerationConfig {
+            max_new_tokens: 128,
+            eos_token_id,
+            stop_sequences: vec![stop_sequences.clone()],
+            combined: Some(CombinedSampler {
+                temperature: 0.7,
+                top_k: 40,
+                top_p: 0.9,
+                repetition_penalty: 1.1,
+            }),
+            seed: Some(42),
+            on_token: Some(Box::new(move |token| {
+                if let Ok(piece) = stream_tokenizer.decode_token_piece(token) {
+                    print!("{piece}");
+                    let _ = io::stdout().flush();
+                }
+            })),
+            ..Default::default()
+        };
+
+        let output = pipeline.generate(&prompt_tokens, config);
+        println!();
+        println!(
+            "Generated {} tokens in {:.3}s ({:.1} tok/s)",
+            output.num_generated_tokens,
+            output.elapsed.as_secs_f64(),
+            output.tokens_per_sec
+        );
+    }
+
+    Ok(())
+}
+
+fn run_demo_chat() {
+    let engine = demo_engine();
+    let pipeline = GenerationPipeline::new(&engine.model);
+
     println!("╔══════════════════════════════════════════════╗");
     println!("║  Synapse Qwen3 Chat (demo with random wts)  ║");
     println!("╠══════════════════════════════════════════════╣");
-    println!("║  Architecture: {} layers, h={}, vocab={}",
-        cfg.architecture.num_layers,
-        cfg.architecture.hidden_size,
-        cfg.architecture.vocab_size,
+    println!(
+        "║  Architecture: {} layers, h={}, vocab={}",
+        engine.config.architecture.num_layers,
+        engine.config.architecture.hidden_size,
+        engine.config.architecture.vocab_size,
     );
     println!("║  Attention: GQA, FFN: SwiGLU, Norm: RMSNorm ║");
+    println!("║  Use --model-dir for a real checkpoint      ║");
     println!("║  Type 'quit' to exit                        ║");
     println!("╚══════════════════════════════════════════════╝");
     println!();
 
-    // ── Build model with fake weights ────────────────────────────────
-    print!("Loading model...");
-    io::stdout().flush().unwrap();
-
-    let mut model = ModelBuilder::from_config(&cfg);
-    let weights = generate_fake_hf_weights(&cfg);
-    let mapper = WeightMapper::qwen3();
-    let result = model.load_weights(weights, &mapper);
-    assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
-    println!(" done ({} params)", model.param_count());
-
-    let pipeline = GenerationPipeline::new(&model);
-
-    // ── Chat loop ────────────────────────────────────────────────────
     let stdin = io::stdin();
     let mut line_reader = stdin.lock().lines();
 
@@ -133,10 +244,9 @@ fn main() {
             break;
         }
 
-        // Simple tokenization: map each byte to a token ID
         let prompt_tokens: Vec<u32> = line
             .bytes()
-            .map(|b| (b as u32) % cfg.architecture.vocab_size as u32)
+            .map(|b| (b as u32) % engine.config.architecture.vocab_size as u32)
             .collect();
 
         let config = GenerationConfig {
@@ -149,7 +259,6 @@ fn main() {
             }),
             seed: Some(42),
             on_token: Some(Box::new(|_token| {
-                // Streaming: print a dot for each generated token
                 print!(".");
                 io::stdout().flush().unwrap();
             })),

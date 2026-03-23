@@ -3,19 +3,16 @@ use std::fs::File;
 use std::path::Path;
 
 use memmap2::Mmap;
-use synapse_core::Tensor;
-
-use super::converter::{bf16_to_f32, f16_to_f32};
 use super::{RawTensor, WeightError};
+use super::converter::{bf16_to_f32, f16_to_f32};
 
-/// Load tensors from a safetensors file, returning `HashMap<String, Tensor>`.
+/// Load tensors from a safetensors file, returning raw tensors ready for model loading.
 ///
 /// Memory-maps the file for zero-copy access to tensor data.
-pub fn load_safetensors(path: &Path) -> Result<HashMap<String, Tensor>, WeightError> {
+pub fn load_safetensors(path: &Path) -> Result<HashMap<String, RawTensor>, WeightError> {
     let file = File::open(path).map_err(WeightError::Io)?;
     let mmap = unsafe { Mmap::map(&file) }.map_err(WeightError::Io)?;
-    let raw = parse_safetensors(&mmap)?;
-    raw_to_tensors(raw)
+    parse_safetensors(&mmap)
 }
 
 /// Parse safetensors from a byte slice into raw f32 data.
@@ -96,17 +93,6 @@ pub fn parse_safetensors(data: &[u8]) -> Result<HashMap<String, RawTensor>, Weig
 
     Ok(result)
 }
-
-fn raw_to_tensors(raw: HashMap<String, RawTensor>) -> Result<HashMap<String, Tensor>, WeightError> {
-    let mut result = HashMap::new();
-    for (name, rt) in raw {
-        let tensor =
-            Tensor::from_data(&rt.data, &rt.shape).map_err(WeightError::TensorError)?;
-        result.insert(name, tensor);
-    }
-    Ok(result)
-}
-
 fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
     bytes
         .chunks_exact(4)

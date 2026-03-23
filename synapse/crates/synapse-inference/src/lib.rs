@@ -5,6 +5,7 @@ pub mod kv_cache;
 pub mod model;
 pub mod quantization;
 pub mod registry;
+pub mod tokenizer;
 pub mod weight_loading;
 
 pub mod prelude {
@@ -27,6 +28,7 @@ pub mod prelude {
         f32_model_memory_bytes, quantize_model, MinMaxCalibration, PercentileCalibration,
         QuantizedCausalLM, QuantizedDecoderLayer, QuantizedLinear,
     };
+    pub use crate::tokenizer::{Tokenizer, TokenizerError};
 }
 
 #[cfg(test)]
@@ -364,7 +366,8 @@ mod model_tests {
         let nl = cfg.architecture.num_layers;
 
         let embed = vocab * h;
-        let per_layer = 2 * h // attn_norm + ffn_norm
+        let per_layer = 2 * h                 // attn_norm + ffn_norm
+            + 2 * cfg.attention.head_dim()   // q_norm + k_norm
             + q_dim * h       // w_q
             + kv_dim * h      // w_k
             + kv_dim * h      // w_v
@@ -404,6 +407,14 @@ mod model_tests {
             w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h]));
             w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h]));
             w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim]));
+            w.insert(
+                format!("model.layers.{i}.self_attn.q_norm.weight"),
+                fake(vec![cfg.attention.head_dim()]),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_norm.weight"),
+                fake(vec![cfg.attention.head_dim()]),
+            );
             w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h]));
             w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h]));
             w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h]));
@@ -484,7 +495,7 @@ mod model_tests {
         // Load fake weights so forward can run
         let weights = generate_fake_hf_weights(&cfg);
         let mapper = WeightMapper::qwen3();
-        let result = model.load_weights(weights, &mapper);
+        let result = model.load_weights(weights, &mapper).unwrap();
         assert!(result.missing.is_empty(), "Missing: {:?}", result.missing);
 
         // Forward pass
@@ -515,7 +526,7 @@ mod model_tests {
 
         let weights = generate_fake_hf_weights(&cfg);
         let mapper = WeightMapper::qwen3();
-        let result = model.load_weights(weights, &mapper);
+        let result = model.load_weights(weights, &mapper).unwrap();
 
         assert!(
             result.missing.is_empty(),

@@ -3,8 +3,6 @@ use std::fs::File;
 use std::path::Path;
 
 use memmap2::Mmap;
-use synapse_core::Tensor;
-
 use super::converter::f16_to_f32;
 use super::{RawTensor, WeightError};
 
@@ -34,18 +32,11 @@ const GGUF_META_UINT64: u32 = 10;
 const GGUF_META_INT64: u32 = 11;
 const GGUF_META_FLOAT64: u32 = 12;
 
-/// Load tensors from a GGUF file, returning `HashMap<String, Tensor>`.
-pub fn load_gguf(path: &Path) -> Result<HashMap<String, Tensor>, WeightError> {
+/// Load tensors from a GGUF file, returning raw tensors ready for model loading.
+pub fn load_gguf(path: &Path) -> Result<HashMap<String, RawTensor>, WeightError> {
     let file = File::open(path).map_err(WeightError::Io)?;
     let mmap = unsafe { Mmap::map(&file) }.map_err(WeightError::Io)?;
-    let raw = parse_gguf(&mmap)?;
-    let mut result = HashMap::new();
-    for (name, rt) in raw {
-        let tensor =
-            Tensor::from_data(&rt.data, &rt.shape).map_err(WeightError::TensorError)?;
-        result.insert(name, tensor);
-    }
-    Ok(result)
+    parse_gguf(&mmap)
 }
 
 /// Parse GGUF from a byte slice into raw f32 data.

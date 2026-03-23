@@ -74,10 +74,12 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
         w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h], s + 2));
         w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h], s + 3));
         w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim], s + 4));
-        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 5));
-        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 6));
-        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 7));
-        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 8));
+        w.insert(format!("model.layers.{i}.self_attn.q_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 5));
+        w.insert(format!("model.layers.{i}.self_attn.k_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 6));
+        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 7));
+        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 8));
+        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 9));
+        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 10));
     }
     w.insert("model.norm.weight".into(), fake(vec![h], 9999));
     w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
@@ -88,7 +90,7 @@ fn build_model(cfg: &ModelConfig) -> synapse_inference::model::CausalLM {
     let mut model = ModelBuilder::from_config(cfg);
     let weights = generate_fake_hf_weights(cfg);
     let mapper = WeightMapper::qwen3();
-    let result = model.load_weights(weights, &mapper);
+    let result = model.load_weights(weights, &mapper).unwrap();
     assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
     model
 }

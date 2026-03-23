@@ -58,6 +58,14 @@ impl WeightMapper {
                 "layers[{i}].attention.w_o",
             ),
             rule(
+                "model.layers.{i}.self_attn.q_norm.weight",
+                "layers[{i}].attention.q_norm",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.k_norm.weight",
+                "layers[{i}].attention.k_norm",
+            ),
+            rule(
                 "model.layers.{i}.mlp.gate_proj.weight",
                 "layers[{i}].ffn.w_gate",
             ),
@@ -226,6 +234,8 @@ mod tests {
             keys.push(format!("model.layers.{i}.self_attn.k_proj.weight"));
             keys.push(format!("model.layers.{i}.self_attn.v_proj.weight"));
             keys.push(format!("model.layers.{i}.self_attn.o_proj.weight"));
+            keys.push(format!("model.layers.{i}.self_attn.q_norm.weight"));
+            keys.push(format!("model.layers.{i}.self_attn.k_norm.weight"));
             keys.push(format!("model.layers.{i}.mlp.gate_proj.weight"));
             keys.push(format!("model.layers.{i}.mlp.up_proj.weight"));
             keys.push(format!("model.layers.{i}.mlp.down_proj.weight"));
@@ -244,6 +254,8 @@ mod tests {
             keys.push(format!("layers[{i}].attention.w_k"));
             keys.push(format!("layers[{i}].attention.w_v"));
             keys.push(format!("layers[{i}].attention.w_o"));
+            keys.push(format!("layers[{i}].attention.q_norm"));
+            keys.push(format!("layers[{i}].attention.k_norm"));
             keys.push(format!("layers[{i}].ffn.w_gate"));
             keys.push(format!("layers[{i}].ffn.w_up"));
             keys.push(format!("layers[{i}].ffn.w_down"));
@@ -275,9 +287,9 @@ mod tests {
             "All HF keys should be mapped"
         );
 
-        // Verify total: 28 layers × 9 per-layer + 3 global = 255
-        assert_eq!(hf_keys.len(), 28 * 9 + 3);
-        assert_eq!(result.mapping.len(), 255);
+        // Verify total: 28 layers × 11 per-layer + 3 global = 311
+        assert_eq!(hf_keys.len(), 28 * 11 + 3);
+        assert_eq!(result.mapping.len(), 311);
     }
 
     #[test]
@@ -299,6 +311,10 @@ mod tests {
         assert_eq!(
             mapper.map_name("model.layers.5.input_layernorm.weight"),
             Some("layers[5].attn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.self_attn.q_norm.weight"),
+            Some("layers[5].attention.q_norm".to_string())
         );
         assert_eq!(
             mapper.map_name("lm_head.weight"),

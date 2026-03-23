@@ -33,6 +33,8 @@ impl ModelBuilder {
                 w_k: Vec::new(),
                 w_v: Vec::new(),
                 w_o: Vec::new(),
+                q_norm_weight: Vec::new(),
+                k_norm_weight: Vec::new(),
                 ffn_norm_weight: Vec::new(),
                 ffn_gate: Vec::new(),
                 ffn_up: Vec::new(),

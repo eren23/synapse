@@ -268,6 +268,14 @@ mod tests {
                 fake(vec![h, q_dim]),
             );
             w.insert(
+                format!("model.layers.{i}.self_attn.q_norm.weight"),
+                fake(vec![cfg.attention.head_dim()]),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_norm.weight"),
+                fake(vec![cfg.attention.head_dim()]),
+            );
+            w.insert(
                 format!("model.layers.{i}.post_attention_layernorm.weight"),
                 fake(vec![h]),
             );
@@ -294,7 +302,7 @@ mod tests {
         let mut model = ModelBuilder::from_config(&cfg);
         let weights = generate_fake_hf_weights(&cfg);
         let mapper = WeightMapper::qwen3();
-        let result = model.load_weights(weights, &mapper);
+        let result = model.load_weights(weights, &mapper).unwrap();
         assert!(result.missing.is_empty(), "Missing: {:?}", result.missing);
         model
     }

@@ -61,8 +61,10 @@ fn main() {
 
     let mut cfg = ModelConfig::from_json(&config_json).expect("Failed to parse config");
 
+    let full_scale = args.iter().any(|a| a == "--full-scale");
+
     // Scale down for demo if using the full model (too slow for CPU benchmarking)
-    if cfg.architecture.hidden_size > 256 {
+    if !full_scale && cfg.architecture.hidden_size > 256 {
         println!("Scaling down {} for CPU benchmarking...", cfg.name);
         cfg.architecture.hidden_size = 128;
         cfg.architecture.num_layers = 4;

@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::config::ModelConfig;
 use crate::model::decoder_layer::{apply_norm, matmul_t};
 use crate::registry::NormVariant;
-use crate::weight_loading::{RawTensor, WeightMapper};
+use crate::weight_loading::{RawTensor, WeightError, WeightMapper};
 
 use super::DecoderLayer;
 
@@ -67,7 +67,7 @@ impl CausalLM {
         &mut self,
         weights: HashMap<String, RawTensor>,
         mapper: &WeightMapper,
-    ) -> LoadResult {
+    ) -> Result<LoadResult, WeightError> {
         let source_keys: Vec<String> = weights.keys().cloned().collect();
         let mapping = mapper.map_keys(&source_keys);
 
@@ -77,7 +77,7 @@ impl CausalLM {
         for (source, target) in &mapping.mapping {
             if expected.contains(target) {
                 if let Some(raw) = weights.get(source) {
-                    self.set_weight(target, &raw.data);
+                    self.set_weight(target, raw)?;
                     loaded.insert(target.clone());
                 }
             }
@@ -86,7 +86,7 @@ impl CausalLM {
         let missing: Vec<String> = expected.difference(&loaded).cloned().collect();
         let unexpected = mapping.unmapped;
 
-        LoadResult { missing, unexpected }
+        Ok(LoadResult { missing, unexpected })
     }
 
     /// Forward pass: token_ids → logits.
@@ -128,25 +128,46 @@ impl CausalLM {
 
     // ── Internal ─────────────────────────────────────────────────────
 
-    fn set_weight(&mut self, key: &str, data: &[f32]) {
+    fn set_weight(&mut self, key: &str, tensor: &RawTensor) -> Result<(), WeightError> {
+        self.validate_weight_shape(key, &tensor.shape)?;
         match key {
-            "embed_tokens.weight" => self.embed_tokens = data.to_vec(),
-            "norm.weight" => self.final_norm_weight = data.to_vec(),
+            "embed_tokens.weight" => self.embed_tokens = tensor.data.clone(),
+            "norm.weight" => self.final_norm_weight = tensor.data.clone(),
             "lm_head.weight" => {
                 if !self.config.architecture.tie_word_embeddings {
-                    self.lm_head_weight = Some(data.to_vec());
+                    self.lm_head_weight = Some(tensor.data.clone());
                 }
                 // For tied models, accept the key but reuse embed_tokens.
             }
             _ if key.starts_with("layers[") => {
                 if let Some((idx, field)) = parse_layer_key(key) {
                     if let Some(layer) = self.layers.get_mut(idx) {
-                        layer.set_weight(field, data);
+                        layer.set_weight(field, tensor)?;
                     }
                 }
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn validate_weight_shape(&self, key: &str, actual: &[usize]) -> Result<(), WeightError> {
+        let h = self.config.architecture.hidden_size;
+        let vocab = self.config.architecture.vocab_size;
+        let expected = match key {
+            "embed_tokens.weight" | "lm_head.weight" => vec![vocab, h],
+            "norm.weight" => vec![h],
+            _ => return Ok(()),
+        };
+
+        if actual != expected {
+            return Err(WeightError::ShapeMismatch(format!(
+                "{key}: expected {:?}, got {:?}",
+                expected, actual
+            )));
+        }
+
+        Ok(())
     }
 }
 

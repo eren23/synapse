@@ -1,4 +1,5 @@
 use crate::registry::{AttentionVariant, FFNVariant, NormVariant};
+use crate::weight_loading::{RawTensor, WeightError};
 
 /// A single decoder transformer layer (pre-norm architecture).
 ///
@@ -16,6 +17,8 @@ pub struct DecoderLayer {
     pub w_k: Vec<f32>,
     pub w_v: Vec<f32>,
     pub w_o: Vec<f32>,
+    pub q_norm_weight: Vec<f32>,
+    pub k_norm_weight: Vec<f32>,
     pub ffn_norm_weight: Vec<f32>,
     pub ffn_gate: Vec<f32>,
     pub ffn_up: Vec<f32>,
@@ -49,7 +52,7 @@ impl DecoderLayer {
         let kv_dim = self.attention.num_kv_heads() * self.attention.head_dim();
         let inter = self.ffn.intermediate_size();
 
-        let norms = 2 * h; // attn_norm + ffn_norm
+        let norms = 2 * h + 2 * self.attention.head_dim(); // attn_norm + q/k norm + ffn_norm
         let attn = q_dim * h + kv_dim * h + kv_dim * h + h * q_dim;
         let ffn = if is_gated_ffn(self.ffn.name()) {
             3 * inter * h
@@ -69,6 +72,8 @@ impl DecoderLayer {
             format!("layers[{i}].attention.w_k"),
             format!("layers[{i}].attention.w_v"),
             format!("layers[{i}].attention.w_o"),
+            format!("layers[{i}].attention.q_norm"),
+            format!("layers[{i}].attention.k_norm"),
             format!("layers[{i}].ffn_norm.weight"),
         ];
         if is_gated_ffn(self.ffn.name()) {
@@ -80,19 +85,50 @@ impl DecoderLayer {
     }
 
     /// Assign a weight by its field name (e.g. "attention.w_q").
-    pub fn set_weight(&mut self, field: &str, data: &[f32]) {
+    pub fn set_weight(&mut self, field: &str, tensor: &RawTensor) -> Result<(), WeightError> {
+        self.validate_weight_shape(field, &tensor.shape)?;
         match field {
-            "attn_norm.weight" => self.attn_norm_weight = data.to_vec(),
-            "attention.w_q" => self.w_q = data.to_vec(),
-            "attention.w_k" => self.w_k = data.to_vec(),
-            "attention.w_v" => self.w_v = data.to_vec(),
-            "attention.w_o" => self.w_o = data.to_vec(),
-            "ffn_norm.weight" => self.ffn_norm_weight = data.to_vec(),
-            "ffn.w_gate" => self.ffn_gate = data.to_vec(),
-            "ffn.w_up" => self.ffn_up = data.to_vec(),
-            "ffn.w_down" => self.ffn_down = data.to_vec(),
+            "attn_norm.weight" => self.attn_norm_weight = tensor.data.clone(),
+            "attention.w_q" => self.w_q = tensor.data.clone(),
+            "attention.w_k" => self.w_k = tensor.data.clone(),
+            "attention.w_v" => self.w_v = tensor.data.clone(),
+            "attention.w_o" => self.w_o = tensor.data.clone(),
+            "attention.q_norm" => self.q_norm_weight = tensor.data.clone(),
+            "attention.k_norm" => self.k_norm_weight = tensor.data.clone(),
+            "ffn_norm.weight" => self.ffn_norm_weight = tensor.data.clone(),
+            "ffn.w_gate" => self.ffn_gate = tensor.data.clone(),
+            "ffn.w_up" => self.ffn_up = tensor.data.clone(),
+            "ffn.w_down" => self.ffn_down = tensor.data.clone(),
             _ => {}
         }
+        Ok(())
+    }
+
+    fn validate_weight_shape(&self, field: &str, actual: &[usize]) -> Result<(), WeightError> {
+        let h = self.hidden_size;
+        let q_dim = self.attention.num_heads() * self.attention.head_dim();
+        let kv_dim = self.attention.num_kv_heads() * self.attention.head_dim();
+        let inter = self.ffn.intermediate_size();
+
+        let expected = match field {
+            "attn_norm.weight" | "ffn_norm.weight" => vec![h],
+            "attention.w_q" => vec![q_dim, h],
+            "attention.w_k" | "attention.w_v" => vec![kv_dim, h],
+            "attention.w_o" => vec![h, q_dim],
+            "attention.q_norm" | "attention.k_norm" => vec![self.attention.head_dim()],
+            "ffn.w_gate" | "ffn.w_up" => vec![inter, h],
+            "ffn.w_down" => vec![h, inter],
+            _ => return Ok(()),
+        };
+
+        if actual != expected {
+            return Err(WeightError::ShapeMismatch(format!(
+                "{field}: expected {:?}, got {:?}",
+                expected, actual
+            )));
+        }
+
+        Ok(())
     }
 
     // ── Attention ────────────────────────────────────────────────────
@@ -111,6 +147,22 @@ impl DecoderLayer {
         let q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
         let k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
         let v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        let q = apply_headwise_rmsnorm(
+            &q,
+            &self.q_norm_weight,
+            seq_len,
+            num_heads,
+            head_dim,
+            self.attn_norm.eps() as f32,
+        );
+        let k = apply_headwise_rmsnorm(
+            &k,
+            &self.k_norm_weight,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            self.attn_norm.eps() as f32,
+        );
 
         // Multi-head causal attention with GQA support
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
@@ -255,6 +307,35 @@ fn layernorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32
         let scale = 1.0 / (var + eps).sqrt();
         for j in 0..hidden_size {
             out[off + j] = (slice[j] - mean) * scale * weight[j];
+        }
+    }
+    out
+}
+
+fn apply_headwise_rmsnorm(
+    x: &[f32],
+    weight: &[f32],
+    rows: usize,
+    heads: usize,
+    head_dim: usize,
+    eps: f32,
+) -> Vec<f32> {
+    if weight.is_empty() {
+        return x.to_vec();
+    }
+
+    let mut out = vec![0.0f32; x.len()];
+    let stride = heads * head_dim;
+    for row in 0..rows {
+        let row_offset = row * stride;
+        for head in 0..heads {
+            let head_offset = row_offset + head * head_dim;
+            let slice = &x[head_offset..head_offset + head_dim];
+            let ms = slice.iter().map(|v| v * v).sum::<f32>() / head_dim as f32;
+            let scale = 1.0 / (ms + eps).sqrt();
+            for idx in 0..head_dim {
+                out[head_offset + idx] = slice[idx] * scale * weight[idx];
+            }
         }
     }
     out

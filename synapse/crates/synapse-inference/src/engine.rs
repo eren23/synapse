@@ -1,7 +1,10 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::ModelConfig;
+use crate::generation::{GenerationConfig, GenerationOutput, GenerationPipeline};
 use crate::model::{CausalLM, ModelBuilder, ModelOutput};
+use crate::tokenizer::{Tokenizer, TokenizerError};
+use crate::weight_loading::{load_gguf, load_safetensors, WeightError, WeightMapper};
 
 /// High-level inference orchestrator.
 ///
@@ -10,31 +13,38 @@ use crate::model::{CausalLM, ModelBuilder, ModelOutput};
 pub struct InferenceEngine {
     pub model: CausalLM,
     pub config: ModelConfig,
+    pub tokenizer: Option<Tokenizer>,
 }
 
 impl InferenceEngine {
-    /// Build an engine from a pretrained model directory.
-    ///
-    /// Steps:
-    /// 1. Read model config (passed in or from `config.json`)
-    /// 2. Build model skeleton from config
-    /// 3. Load weights from checkpoint files
-    /// 4. Init KV-cache (deferred to first forward)
-    /// 5. Init tokenizer (not yet implemented)
-    pub fn from_pretrained(
-        model_path: &Path,
-        config: ModelConfig,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        // Build model from config
-        let model = ModelBuilder::from_config(&config);
+    /// Build an engine from a Hugging Face-style pretrained model directory.
+    pub fn from_pretrained(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let config = ModelConfig::from_hf_file(&model_path.join("config.json"))?;
+        let checkpoint = find_checkpoint_file(model_path)?;
+        let tokenizer = Tokenizer::from_model_dir(model_path)?;
+        let mapper = WeightMapper::qwen3();
 
-        // Weight loading from files would go here:
-        //   - Scan for *.safetensors / *.gguf in model_path
-        //   - Use appropriate loader + weight mapper
-        //   - Call model.load_weights(...)
-        let _ = model_path; // acknowledge path for future use
+        let mut model = ModelBuilder::from_config(&config);
+        let weights = match checkpoint.extension().and_then(|ext| ext.to_str()) {
+            Some("gguf") => load_gguf(&checkpoint)?,
+            _ => load_safetensors(&checkpoint)?,
+        };
 
-        Ok(Self { model, config })
+        // CODEx: exact-mode pretrained loading should fail on checkpoint drift
+        // instead of silently dropping required tensors.
+        let result = model.load_weights(weights, &mapper)?;
+        if !result.missing.is_empty() {
+            return Err(Box::new(WeightError::MissingKeys(result.missing)));
+        }
+        if !result.unexpected.is_empty() {
+            return Err(Box::new(WeightError::UnexpectedKeys(result.unexpected)));
+        }
+
+        Ok(Self {
+            model,
+            config,
+            tokenizer: Some(tokenizer),
+        })
     }
 
     /// Build an engine from just a config (no weights loaded).
@@ -43,6 +53,7 @@ impl InferenceEngine {
         Self {
             model,
             config,
+            tokenizer: None,
         }
     }
 
@@ -55,4 +66,80 @@ impl InferenceEngine {
     pub fn param_count(&self) -> usize {
         self.model.param_count()
     }
+
+    pub fn encode(&self, text: &str) -> Result<Vec<u32>, TokenizerError> {
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or_else(|| TokenizerError::Invalid("No tokenizer loaded".into()))?;
+        tokenizer.encode(text)
+    }
+
+    pub fn decode(&self, token_ids: &[u32]) -> Result<String, TokenizerError> {
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or_else(|| TokenizerError::Invalid("No tokenizer loaded".into()))?;
+        tokenizer.decode(token_ids)
+    }
+
+    pub fn tokenizer(&self) -> Option<&Tokenizer> {
+        self.tokenizer.as_ref()
+    }
+
+    pub fn generate_text(
+        &self,
+        prompt: &str,
+        config: GenerationConfig,
+    ) -> Result<GenerationOutput, Box<dyn std::error::Error>> {
+        let prompt_tokens = self.encode(prompt)?;
+        let pipeline = GenerationPipeline::new(&self.model);
+        let mut output = pipeline.generate(&prompt_tokens, config);
+        let generated = &output.token_ids[output.num_prompt_tokens..];
+        output.text = self.decode(generated)?;
+        Ok(output)
+    }
+}
+
+fn find_checkpoint_file(model_path: &Path) -> Result<PathBuf, WeightError> {
+    let index = model_path.join("model.safetensors.index.json");
+    if index.exists() {
+        return Err(WeightError::InvalidFormat(
+            "Sharded safetensors checkpoints are not supported yet".into(),
+        ));
+    }
+
+    let canonical = model_path.join("model.safetensors");
+    if canonical.exists() {
+        return Ok(canonical);
+    }
+
+    let mut safetensors = Vec::new();
+    let mut gguf = Vec::new();
+    for entry in std::fs::read_dir(model_path).map_err(WeightError::Io)? {
+        let entry = entry.map_err(WeightError::Io)?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("safetensors") => safetensors.push(path),
+            Some("gguf") => gguf.push(path),
+            _ => {}
+        }
+    }
+
+    safetensors.sort();
+    gguf.sort();
+
+    if let Some(path) = safetensors.into_iter().next() {
+        return Ok(path);
+    }
+    if let Some(path) = gguf.into_iter().next() {
+        return Ok(path);
+    }
+
+    Err(WeightError::InvalidFormat(
+        "No checkpoint file found in model directory".into(),
+    ))
 }
