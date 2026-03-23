@@ -14,6 +14,7 @@ synapse-optim = { path = "crates/synapse-optim" }
 synapse-data = { path = "crates/synapse-data" }
 synapse-graph = { path = "crates/synapse-graph" }
 synapse-train = { path = "crates/synapse-train" }
+synapse-core = { path = "crates/synapse-core" }
 rand = "0.8"
 rand_distr = "0.4"
 
@@ -28,6 +29,14 @@ path = "examples/mnist.rs"
 [[example]]
 name = "cifar10"
 path = "examples/cifar10.rs"
+
+[[example]]
+name = "text_classification"
+path = "examples/text_classification.rs"
+
+[[example]]
+name = "vision_transformer"
+path = "examples/vision_transformer.rs"
 
 [[test]]
 name = "graph_optimization"
@@ -48,3 +57,23 @@ path = "tests/benchmarks/memory_bench.rs"
 [[test]]
 name = "matmul_bench"
 path = "tests/benchmarks/matmul_bench.rs"
+
+[[test]]
+name = "transformer_e2e"
+path = "tests/integration/transformer_e2e.rs"
+
+[[test]]
+name = "attention_correctness"
+path = "tests/integration/attention_correctness.rs"
+
+[[test]]
+name = "transformer_graph_opt"
+path = "tests/integration/transformer_graph_opt.rs"
+
+[[test]]
+name = "attention_bench"
+path = "tests/benchmarks/attention_bench.rs"
+
+[[test]]
+name = "transformer_throughput"
+path = "tests/benchmarks/transformer_throughput.rs"

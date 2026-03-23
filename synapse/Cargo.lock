@@ -496,6 +496,7 @@ dependencies = [
  "rand",
  "rand_distr",
  "synapse-autograd",
+ "synapse-core",
  "synapse-data",
  "synapse-graph",
  "synapse-nn",
@@ -506,6 +507,13 @@ dependencies = [
 [[package]]
 name = "synapse-autograd"
 version = "0.1.0"
+
+[[package]]
+name = "synapse-core"
+version = "0.1.0"
+dependencies = [
+ "synapse-sys",
+]
 
 [[package]]
 name = "synapse-data"
@@ -534,6 +542,10 @@ version = "0.1.0"
 dependencies = [
  "rand",
 ]
+
+[[package]]
+name = "synapse-sys"
+version = "0.1.0"
 
 [[package]]
 name = "synapse-train"

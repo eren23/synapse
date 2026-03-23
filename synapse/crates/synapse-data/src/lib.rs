@@ -2,6 +2,8 @@ pub mod collate;
 pub mod dataloader;
 pub mod dataset;
 pub mod sampler;
+pub mod text_dataset;
+pub mod tokenizer;
 pub mod transform;
 
 use std::fmt;

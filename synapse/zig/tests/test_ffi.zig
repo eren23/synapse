@@ -561,3 +561,491 @@ test "vec ops: null pointer errors" {
     try expectEqual(ffi.SYN_ERR_NULL_PTR, ffi.syn_vreduce_sum(null, 4, null));
     try expectEqual(ffi.SYN_ERR_NULL_PTR, ffi.syn_vreduce_max(null, 4, null));
 }
+
+// ============================================================
+// LayerNorm
+// ============================================================
+
+test "layernorm: forward normalizes rows" {
+    // Input: [2, 4]
+    var in_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(8, &in_storage));
+    var in_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(in_storage, &in_data));
+    const vals = [_]f32{ 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0 };
+    for (0..8) |i| in_data[i] = vals[i];
+    const in_dims = [_]usize{ 2, 4 };
+    var in_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(in_storage, &in_dims, 2, &in_tensor));
+
+    // Gamma: all 1s
+    var g_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(4, &g_storage));
+    var g_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(g_storage, &g_data));
+    for (0..4) |i| g_data[i] = 1.0;
+    const g_dims = [_]usize{4};
+    var gamma_t: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(g_storage, &g_dims, 1, &gamma_t));
+
+    // Beta: all 0s
+    var b_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(4, &b_storage));
+    var b_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(b_storage, &b_data));
+    for (0..4) |i| b_data[i] = 0.0;
+    const b_dims = [_]usize{4};
+    var beta_t: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(b_storage, &b_dims, 1, &beta_t));
+
+    // Call layernorm (normalized_dim=1 → normalize over last dim of size 4)
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_layernorm_forward(&result, in_tensor, gamma_t, beta_t, 1, 1e-5));
+    try expect(result != null);
+
+    // Normalized rows should sum to ~0
+    var rdata: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_data_ptr(result, &rdata));
+    var sum_row0: f32 = 0;
+    var sum_row1: f32 = 0;
+    for (0..4) |i| sum_row0 += rdata[i];
+    for (4..8) |i| sum_row1 += rdata[i];
+    try expectApprox(@as(f32, 0.0), sum_row0, 1e-4);
+    try expectApprox(@as(f32, 0.0), sum_row1, 1e-4);
+
+    // First element of row 0: (1 - 2.5) / sqrt(1.25 + 1e-5) ≈ -1.3416
+    try expectApprox(@as(f32, -1.3416), rdata[0], 1e-3);
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(result));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(beta_t));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(gamma_t));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(in_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(b_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(g_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(in_storage));
+}
+
+test "layernorm: null and error codes" {
+    try expectEqual(ffi.SYN_ERR_NULL_PTR, ffi.syn_layernorm_forward(null, null, null, null, 1, 1e-5));
+
+    // Shape mismatch: input [2,4], gamma [3]
+    var in_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(8, &in_storage));
+    const in_dims = [_]usize{ 2, 4 };
+    var in_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(in_storage, &in_dims, 2, &in_tensor));
+
+    var g_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(3, &g_storage));
+    const g_dims = [_]usize{3};
+    var gamma_t: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(g_storage, &g_dims, 1, &gamma_t));
+
+    var b_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(4, &b_storage));
+    const b_dims = [_]usize{4};
+    var beta_t: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(b_storage, &b_dims, 1, &beta_t));
+
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_ERR_SHAPE_MISMATCH, ffi.syn_layernorm_forward(
+        &result,
+        in_tensor,
+        gamma_t,
+        beta_t,
+        1,
+        1e-5,
+    ));
+
+    // Invalid normalized_dim=0
+    try expectEqual(ffi.SYN_ERR_INVALID_ARG, ffi.syn_layernorm_forward(
+        &result,
+        in_tensor,
+        gamma_t,
+        beta_t,
+        0,
+        1e-5,
+    ));
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(beta_t));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(gamma_t));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(in_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(b_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(g_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(in_storage));
+}
+
+// ============================================================
+// Scaled dot-product attention
+// ============================================================
+
+test "attention: basic forward with all-ones" {
+    // Q = K = V = all 1.0, shape [1,1,2,4]
+    // Expected: output = all 1.0 (softmax weights are uniform → weighted avg of identical rows)
+    const numel = 8;
+    const dims = [_]usize{ 1, 1, 2, 4 };
+
+    // Helper: create tensor with all-ones data
+    var q_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &q_storage));
+    var q_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(q_storage, &q_data));
+    for (0..numel) |i| q_data[i] = 1.0;
+    var q_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(q_storage, &dims, 4, &q_tensor));
+
+    var k_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &k_storage));
+    var k_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(k_storage, &k_data));
+    for (0..numel) |i| k_data[i] = 1.0;
+    var k_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(k_storage, &dims, 4, &k_tensor));
+
+    var v_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &v_storage));
+    var v_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(v_storage, &v_data));
+    for (0..numel) |i| v_data[i] = 1.0;
+    var v_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(v_storage, &dims, 4, &v_tensor));
+
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_scaled_dot_product_attention(
+        &result,
+        null,
+        q_tensor,
+        k_tensor,
+        v_tensor,
+        0.5,
+        0,
+    ));
+    try expect(result != null);
+
+    // Verify shape [1,1,2,4]
+    var rdims: [8]usize = undefined;
+    var ndim: usize = 0;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_shape(result, &rdims, &ndim));
+    try expectEqual(@as(usize, 4), ndim);
+    try expectEqual(@as(usize, 1), rdims[0]);
+    try expectEqual(@as(usize, 1), rdims[1]);
+    try expectEqual(@as(usize, 2), rdims[2]);
+    try expectEqual(@as(usize, 4), rdims[3]);
+
+    // All outputs should be ≈1.0
+    var rdata: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_data_ptr(result, &rdata));
+    for (0..numel) |i| {
+        try expectApprox(@as(f32, 1.0), rdata[i], 1e-4);
+    }
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(result));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(v_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(k_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(q_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(v_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(k_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(q_storage));
+}
+
+test "attention: with attention weights output" {
+    const numel = 8;
+    const dims = [_]usize{ 1, 1, 2, 4 };
+
+    var q_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &q_storage));
+    var q_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(q_storage, &q_data));
+    for (0..numel) |i| q_data[i] = 1.0;
+    var q_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(q_storage, &dims, 4, &q_tensor));
+
+    var k_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &k_storage));
+    var k_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(k_storage, &k_data));
+    for (0..numel) |i| k_data[i] = 1.0;
+    var k_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(k_storage, &dims, 4, &k_tensor));
+
+    var v_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &v_storage));
+    var v_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(v_storage, &v_data));
+    for (0..numel) |i| v_data[i] = 1.0;
+    var v_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(v_storage, &dims, 4, &v_tensor));
+
+    var result: ?*anyopaque = null;
+    var weights: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_scaled_dot_product_attention(
+        &result,
+        &weights,
+        q_tensor,
+        k_tensor,
+        v_tensor,
+        0.5,
+        0,
+    ));
+    try expect(result != null);
+    try expect(weights != null);
+
+    // Weights shape should be [1,1,2,2]
+    var wdims: [8]usize = undefined;
+    var wndim: usize = 0;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_shape(weights, &wdims, &wndim));
+    try expectEqual(@as(usize, 4), wndim);
+    try expectEqual(@as(usize, 2), wdims[2]); // seq_q
+    try expectEqual(@as(usize, 2), wdims[3]); // seq_k
+
+    // Uniform weights → each should be 0.5
+    var wdata: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_data_ptr(weights, &wdata));
+    for (0..4) |i| {
+        try expectApprox(@as(f32, 0.5), wdata[i], 1e-4);
+    }
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(weights));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(result));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(v_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(k_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(q_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(v_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(k_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(q_storage));
+}
+
+test "attention: null and shape mismatch errors" {
+    try expectEqual(ffi.SYN_ERR_NULL_PTR, ffi.syn_scaled_dot_product_attention(
+        null,
+        null,
+        null,
+        null,
+        null,
+        0.5,
+        0,
+    ));
+
+    // Q [1,1,2,4] vs K [1,1,2,8] → d_head mismatch
+    var q_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(8, &q_storage));
+    const q_dims = [_]usize{ 1, 1, 2, 4 };
+    var q_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(q_storage, &q_dims, 4, &q_tensor));
+
+    var k_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(16, &k_storage));
+    const k_dims = [_]usize{ 1, 1, 2, 8 };
+    var k_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(k_storage, &k_dims, 4, &k_tensor));
+
+    var v_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(8, &v_storage));
+    const v_dims = [_]usize{ 1, 1, 2, 4 };
+    var v_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(v_storage, &v_dims, 4, &v_tensor));
+
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_ERR_SHAPE_MISMATCH, ffi.syn_scaled_dot_product_attention(
+        &result,
+        null,
+        q_tensor,
+        k_tensor,
+        v_tensor,
+        0.5,
+        0,
+    ));
+
+    // 2D tensor → InvalidDimensions
+    var flat_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(6, &flat_storage));
+    const flat_dims = [_]usize{ 2, 3 };
+    var flat_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(flat_storage, &flat_dims, 2, &flat_tensor));
+
+    try expectEqual(ffi.SYN_ERR_INVALID_DIMENSIONS, ffi.syn_scaled_dot_product_attention(
+        &result,
+        null,
+        flat_tensor,
+        k_tensor,
+        v_tensor,
+        0.5,
+        0,
+    ));
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(flat_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(flat_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(v_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(k_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(q_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(v_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(k_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(q_storage));
+}
+
+// ============================================================
+// RoPE
+// ============================================================
+
+test "rope: identity at position 0" {
+    // Input [1,1,2,4], cos/sin tables [2,2]
+    // At pos=0 with cos=1 sin=0 → output == input
+    const numel = 8;
+    var in_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(numel, &in_storage));
+    var in_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(in_storage, &in_data));
+    for (0..numel) |i| in_data[i] = @as(f32, @floatFromInt(i + 1));
+    const in_dims = [_]usize{ 1, 1, 2, 4 };
+    var in_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(in_storage, &in_dims, 4, &in_tensor));
+
+    // cos table: [2, 2] = [[1,1],[cos(theta0),cos(theta1)]]
+    const table_numel = 4;
+    var cos_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(table_numel, &cos_storage));
+    var cos_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(cos_storage, &cos_data));
+    cos_data[0] = 1.0;
+    cos_data[1] = 1.0; // pos=0: cos(0)=1
+    cos_data[2] = 0.5;
+    cos_data[3] = 0.9; // pos=1: arbitrary
+    const table_dims = [_]usize{ 2, 2 };
+    var cos_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(cos_storage, &table_dims, 2, &cos_tensor));
+
+    // sin table: [2, 2] = [[0,0],[sin(theta0),sin(theta1)]]
+    var sin_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(table_numel, &sin_storage));
+    var sin_data: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_data(sin_storage, &sin_data));
+    sin_data[0] = 0.0;
+    sin_data[1] = 0.0; // pos=0: sin(0)=0
+    sin_data[2] = 0.866;
+    sin_data[3] = 0.436; // pos=1: arbitrary
+    var sin_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(sin_storage, &table_dims, 2, &sin_tensor));
+
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_rope_forward(&result, in_tensor, cos_tensor, sin_tensor, 0));
+    try expect(result != null);
+
+    var rdata: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_data_ptr(result, &rdata));
+    // Position 0 (first 4 elements): cos=1,sin=0 → output=input
+    try expectApprox(@as(f32, 1.0), rdata[0], 1e-5);
+    try expectApprox(@as(f32, 2.0), rdata[1], 1e-5);
+    try expectApprox(@as(f32, 3.0), rdata[2], 1e-5);
+    try expectApprox(@as(f32, 4.0), rdata[3], 1e-5);
+
+    // Position 1: rotated
+    // pair0: (5*0.5 - 6*0.866, 5*0.866 + 6*0.5) = (-2.696, 7.33)
+    try expectApprox(@as(f32, 5.0 * 0.5 - 6.0 * 0.866), rdata[4], 1e-3);
+    try expectApprox(@as(f32, 5.0 * 0.866 + 6.0 * 0.5), rdata[5], 1e-3);
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(result));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(sin_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(cos_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(in_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(sin_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(cos_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(in_storage));
+}
+
+test "rope: null and invalid dimension errors" {
+    try expectEqual(ffi.SYN_ERR_NULL_PTR, ffi.syn_rope_forward(null, null, null, null, 0));
+
+    // 2D input → InvalidDimensions
+    var in_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(8, &in_storage));
+    const in_dims = [_]usize{ 2, 4 };
+    var in_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(in_storage, &in_dims, 2, &in_tensor));
+
+    var cos_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(4, &cos_storage));
+    const t_dims = [_]usize{ 2, 2 };
+    var cos_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(cos_storage, &t_dims, 2, &cos_tensor));
+
+    var sin_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(4, &sin_storage));
+    var sin_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(sin_storage, &t_dims, 2, &sin_tensor));
+
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_ERR_INVALID_DIMENSIONS, ffi.syn_rope_forward(
+        &result,
+        in_tensor,
+        cos_tensor,
+        sin_tensor,
+        0,
+    ));
+
+    // 4D with odd d_head → InvalidArg
+    var odd_storage: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_create(6, &odd_storage));
+    const odd_dims = [_]usize{ 1, 1, 2, 3 };
+    var odd_tensor: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_create(odd_storage, &odd_dims, 4, &odd_tensor));
+
+    try expectEqual(ffi.SYN_ERR_INVALID_ARG, ffi.syn_rope_forward(
+        &result,
+        odd_tensor,
+        cos_tensor,
+        sin_tensor,
+        0,
+    ));
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(odd_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(odd_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(sin_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(cos_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(in_tensor));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(sin_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(cos_storage));
+    try expectEqual(ffi.SYN_OK, ffi.syn_storage_release(in_storage));
+}
+
+// ============================================================
+// Causal mask
+// ============================================================
+
+test "causal_mask: 3x3 lower-triangular" {
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_OK, ffi.syn_causal_mask(&result, 3));
+    try expect(result != null);
+
+    var rdims: [8]usize = undefined;
+    var ndim: usize = 0;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_shape(result, &rdims, &ndim));
+    try expectEqual(@as(usize, 2), ndim);
+    try expectEqual(@as(usize, 3), rdims[0]);
+    try expectEqual(@as(usize, 3), rdims[1]);
+
+    var rdata: [*]f32 = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_data_ptr(result, &rdata));
+
+    // Row 0: [0, -inf, -inf]
+    try expectApprox(@as(f32, 0.0), rdata[0], 1e-6);
+    try expect(rdata[1] == -std.math.inf(f32));
+    try expect(rdata[2] == -std.math.inf(f32));
+
+    // Row 1: [0, 0, -inf]
+    try expectApprox(@as(f32, 0.0), rdata[3], 1e-6);
+    try expectApprox(@as(f32, 0.0), rdata[4], 1e-6);
+    try expect(rdata[5] == -std.math.inf(f32));
+
+    // Row 2: [0, 0, 0]
+    try expectApprox(@as(f32, 0.0), rdata[6], 1e-6);
+    try expectApprox(@as(f32, 0.0), rdata[7], 1e-6);
+    try expectApprox(@as(f32, 0.0), rdata[8], 1e-6);
+
+    try expectEqual(ffi.SYN_OK, ffi.syn_tensor_destroy(result));
+}
+
+test "causal_mask: null and invalid args" {
+    try expectEqual(ffi.SYN_ERR_NULL_PTR, ffi.syn_causal_mask(null, 3));
+    var result: ?*anyopaque = null;
+    try expectEqual(ffi.SYN_ERR_INVALID_ARG, ffi.syn_causal_mask(&result, 0));
+}

@@ -418,7 +418,318 @@ fn test_full_optimization_pipeline() {
     assert!(MemoryOptimalScheduler::validate_order(&g, &order));
 }
 
+// ── Attention Fusion Tests ───────────────────────────────────────────────
+
+#[test]
+fn test_attention_fusion_reduces_nodes() {
+    let mut g = build_attention_graph(4, 8, 6, 6, 8);
+    let before = g.node_count();
+
+    FuseAttention::new().run(&mut g);
+    let after = g.node_count();
+
+    assert!(after < before, "Attention fusion should reduce node count: before={}, after={}", before, after);
+    // 9 ops replaced by 1 fused => net reduction of 8
+    assert_eq!(before - after, 8);
+
+    let output_id = g.outputs()[0];
+    let fused = g.node(output_id).unwrap();
+    assert!(matches!(fused.kind, NodeKind::Op(OpKind::FusedAttention)));
+}
+
+#[test]
+fn test_attention_fusion_idempotent() {
+    let mut g = build_attention_graph(2, 4, 3, 3, 4);
+    FuseAttention::new().run(&mut g);
+    let count = g.node_count();
+
+    let changed = FuseAttention::new().run(&mut g);
+    assert!(!changed);
+    assert_eq!(g.node_count(), count);
+}
+
+#[test]
+fn test_attention_fusion_numerically_identical() {
+    let seq_len = 2;
+    let d_model = 4;
+    let d_k = 3;
+    let d_v = 3;
+    let d_out = 4;
+
+    let (g_unfused, param_ids) = build_attention_graph_with_ids(seq_len, d_model, d_k, d_v, d_out);
+
+    let input_data: Vec<f32> = (0..seq_len * d_model).map(|i| (i as f32) * 0.1 + 0.05).collect();
+    let w_q_data: Vec<f32> = (0..d_model * d_k).map(|i| (i as f32) * 0.02 - 0.1).collect();
+    let w_k_data: Vec<f32> = (0..d_model * d_k).map(|i| (i as f32) * 0.03 + 0.05).collect();
+    let w_v_data: Vec<f32> = (0..d_model * d_v).map(|i| (i as f32) * 0.01 - 0.02).collect();
+    let w_o_data: Vec<f32> = (0..d_v * d_out).map(|i| (i as f32) * 0.04 + 0.01).collect();
+
+    let mut inputs = HashMap::new();
+    inputs.insert(param_ids[0], input_data);
+    inputs.insert(param_ids[1], w_q_data);
+    inputs.insert(param_ids[2], w_k_data);
+    inputs.insert(param_ids[3], w_v_data);
+    inputs.insert(param_ids[4], w_o_data);
+
+    let unfused_output_id = g_unfused.outputs()[0];
+    let unfused_result = g_unfused.execute(&inputs);
+    let unfused_out = unfused_result[&unfused_output_id].clone();
+
+    let mut g_fused = g_unfused.clone();
+    FuseAttention::new().run(&mut g_fused);
+
+    let fused_output_id = g_fused.outputs()[0];
+    let fused_result = g_fused.execute(&inputs);
+    let fused_out = fused_result[&fused_output_id].clone();
+
+    assert_eq!(unfused_out.len(), fused_out.len());
+    for (i, (u, f)) in unfused_out.iter().zip(fused_out.iter()).enumerate() {
+        assert!(
+            (u - f).abs() < 1e-4,
+            "Attention fusion mismatch at {}: unfused={}, fused={}, diff={}",
+            i, u, f, (u - f).abs()
+        );
+    }
+}
+
+// ── LayerNorm Residual Fusion Tests ─────────────────────────────────────
+
+#[test]
+fn test_layernorm_residual_fusion_reduces_nodes() {
+    let mut g = build_add_layernorm_graph(16);
+    let before = g.node_count();
+
+    FuseLayerNormResidual::new().run(&mut g);
+    let after = g.node_count();
+
+    assert!(after < before, "LayerNorm+Residual fusion should reduce: before={}, after={}", before, after);
+    // Add + LayerNorm replaced by 1 fused => net reduction of 1
+    assert_eq!(before - after, 1);
+}
+
+#[test]
+fn test_layernorm_residual_fusion_idempotent() {
+    let mut g = build_add_layernorm_graph(8);
+    FuseLayerNormResidual::new().run(&mut g);
+    let count = g.node_count();
+
+    let changed = FuseLayerNormResidual::new().run(&mut g);
+    assert!(!changed);
+    assert_eq!(g.node_count(), count);
+}
+
+#[test]
+fn test_layernorm_residual_fusion_numerically_identical() {
+    let dim = 8;
+    let mut g = Graph::new();
+    let x = g.add_node(NodeKind::Input("x".into()), vec![], NodeMeta::new(vec![dim], DType::F32), "x");
+    let residual = g.add_node(NodeKind::Input("res".into()), vec![], NodeMeta::new(vec![dim], DType::F32), "res");
+    let gamma = g.add_node(
+        NodeKind::Constant(vec![2.0, 0.5, 1.5, 0.8, 1.0, 1.2, 0.3, 0.9]),
+        vec![],
+        NodeMeta::new(vec![dim], DType::F32),
+        "gamma",
+    );
+    let beta = g.add_node(
+        NodeKind::Constant(vec![0.1, -0.2, 0.3, 0.0, -0.1, 0.2, -0.3, 0.4]),
+        vec![],
+        NodeMeta::new(vec![dim], DType::F32),
+        "beta",
+    );
+    let add = g.add_node(NodeKind::Op(OpKind::Add), vec![x, residual], NodeMeta::new(vec![dim], DType::F32), "add");
+    let ln = g.add_node(NodeKind::Op(OpKind::LayerNorm), vec![add, gamma, beta], NodeMeta::new(vec![dim], DType::F32), "ln");
+    g.mark_output(ln);
+
+    let x_data: Vec<f32> = (0..dim).map(|i| (i as f32) * 0.3 - 1.0).collect();
+    let res_data: Vec<f32> = (0..dim).map(|i| (i as f32) * 0.1 + 0.5).collect();
+
+    let mut inputs = HashMap::new();
+    inputs.insert(x, x_data);
+    inputs.insert(residual, res_data);
+
+    let unfused_out = g.execute(&inputs)[&ln].clone();
+
+    let mut g_fused = g.clone();
+    FuseLayerNormResidual::new().run(&mut g_fused);
+    let fused_output_id = g_fused.outputs()[0];
+    let fused_out = g_fused.execute(&inputs)[&fused_output_id].clone();
+
+    for (i, (u, f)) in unfused_out.iter().zip(fused_out.iter()).enumerate() {
+        assert!(
+            (u - f).abs() < 1e-5,
+            "LayerNorm+Residual mismatch at {}: unfused={}, fused={}",
+            i, u, f
+        );
+    }
+}
+
+// ── Regression: existing passes still work with new IR variants ─────────
+
+#[test]
+fn test_existing_passes_unaffected_by_new_variants() {
+    // Verify DCE, constant folding, and Phase 1 fusions still work correctly
+    let mut g = Graph::new();
+    let x = g.add_node(NodeKind::Input("x".into()), vec![], NodeMeta::new(vec![8, 16], DType::F32), "x");
+    let w = g.add_node(NodeKind::Parameter("w".into()), vec![], NodeMeta::new(vec![16, 32], DType::F32), "w");
+    let bias = g.add_node(NodeKind::Constant(vec![0.1; 32]), vec![], NodeMeta::new(vec![32], DType::F32), "bias");
+
+    let mm = g.add_node(NodeKind::Op(OpKind::MatMul), vec![x, w], NodeMeta::new(vec![8, 32], DType::F32), "mm");
+    let add = g.add_node(NodeKind::Op(OpKind::Add), vec![mm, bias], NodeMeta::new(vec![8, 32], DType::F32), "add");
+    let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![add], NodeMeta::new(vec![8, 32], DType::F32), "relu");
+
+    // Dead branch
+    let c1 = g.add_node(NodeKind::Constant(vec![1.0, 2.0]), vec![], NodeMeta::new(vec![2], DType::F32), "c1");
+    let c2 = g.add_node(NodeKind::Constant(vec![3.0, 4.0]), vec![], NodeMeta::new(vec![2], DType::F32), "c2");
+    let _dead = g.add_node(NodeKind::Op(OpKind::Add), vec![c1, c2], NodeMeta::new(vec![2], DType::F32), "dead");
+
+    g.mark_output(relu);
+
+    let passes: Vec<Box<dyn OptimizationPass>> = vec![
+        Box::new(ConstantFolding::new()),
+        Box::new(FuseMatMulBiasRelu::new()),
+        Box::new(DeadCodeElimination::new()),
+    ];
+    let applied = run_passes(&mut g, &passes);
+    assert!(!applied.is_empty());
+    assert_eq!(g.node_count(), 4); // x, w, bias, fused
+}
+
+#[test]
+fn test_full_pipeline_with_new_passes() {
+    // Build a graph with both attention and layernorm+residual patterns
+    let dim = 8;
+    let mut g = Graph::new();
+
+    // Simple Add -> LayerNorm subgraph
+    let x = g.add_node(NodeKind::Input("x".into()), vec![], NodeMeta::new(vec![dim], DType::F32), "x");
+    let res = g.add_node(NodeKind::Input("res".into()), vec![], NodeMeta::new(vec![dim], DType::F32), "res");
+    let gamma = g.add_node(NodeKind::Constant(vec![1.0; dim]), vec![], NodeMeta::new(vec![dim], DType::F32), "gamma");
+    let beta = g.add_node(NodeKind::Constant(vec![0.0; dim]), vec![], NodeMeta::new(vec![dim], DType::F32), "beta");
+    let add = g.add_node(NodeKind::Op(OpKind::Add), vec![x, res], NodeMeta::new(vec![dim], DType::F32), "add");
+    let ln = g.add_node(NodeKind::Op(OpKind::LayerNorm), vec![add, gamma, beta], NodeMeta::new(vec![dim], DType::F32), "ln");
+
+    // Dead branch
+    let dead = g.add_node(NodeKind::Op(OpKind::Neg), vec![x], NodeMeta::new(vec![dim], DType::F32), "dead");
+    let _dead2 = g.add_node(NodeKind::Op(OpKind::Relu), vec![dead], NodeMeta::new(vec![dim], DType::F32), "dead2");
+
+    g.mark_output(ln);
+
+    let passes: Vec<Box<dyn OptimizationPass>> = vec![
+        Box::new(FuseLayerNormResidual::new()),
+        Box::new(DeadCodeElimination::new()),
+    ];
+    run_passes(&mut g, &passes);
+
+    // After fusion: x, res, gamma, beta, fused_ln_res = 5
+    // After DCE: dead branch removed
+    assert_eq!(g.node_count(), 5);
+
+    let output_id = g.outputs()[0];
+    let fused = g.node(output_id).unwrap();
+    assert!(matches!(fused.kind, NodeKind::Op(OpKind::FusedLayerNormResidual)));
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────
+
+fn build_attention_graph(
+    seq_len: usize,
+    d_model: usize,
+    d_k: usize,
+    d_v: usize,
+    d_out: usize,
+) -> Graph {
+    let (g, _) = build_attention_graph_with_ids(seq_len, d_model, d_k, d_v, d_out);
+    g
+}
+
+/// Returns (graph, [input, w_q, w_k, w_v, w_o]) - scale is a constant in the graph
+fn build_attention_graph_with_ids(
+    seq_len: usize,
+    d_model: usize,
+    d_k: usize,
+    d_v: usize,
+    d_out: usize,
+) -> (Graph, Vec<NodeId>) {
+    let mut g = Graph::new();
+
+    let input = g.add_node(
+        NodeKind::Input("input".into()), vec![],
+        NodeMeta::new(vec![seq_len, d_model], DType::F32), "input",
+    );
+    let w_q = g.add_node(
+        NodeKind::Parameter("W_q".into()), vec![],
+        NodeMeta::new(vec![d_model, d_k], DType::F32), "W_q",
+    );
+    let w_k = g.add_node(
+        NodeKind::Parameter("W_k".into()), vec![],
+        NodeMeta::new(vec![d_model, d_k], DType::F32), "W_k",
+    );
+    let w_v = g.add_node(
+        NodeKind::Parameter("W_v".into()), vec![],
+        NodeMeta::new(vec![d_model, d_v], DType::F32), "W_v",
+    );
+    let scale_val = 1.0 / (d_k as f32).sqrt();
+    let scale = g.add_node(
+        NodeKind::Constant(vec![scale_val; seq_len * seq_len]), vec![],
+        NodeMeta::new(vec![seq_len, seq_len], DType::F32), "scale",
+    );
+    let w_o = g.add_node(
+        NodeKind::Parameter("W_o".into()), vec![],
+        NodeMeta::new(vec![d_v, d_out], DType::F32), "W_o",
+    );
+
+    let q = g.add_node(
+        NodeKind::Op(OpKind::MatMul), vec![input, w_q],
+        NodeMeta::new(vec![seq_len, d_k], DType::F32), "q_proj",
+    );
+    let k = g.add_node(
+        NodeKind::Op(OpKind::MatMul), vec![input, w_k],
+        NodeMeta::new(vec![seq_len, d_k], DType::F32), "k_proj",
+    );
+    let k_t = g.add_node(
+        NodeKind::Op(OpKind::Transpose), vec![k],
+        NodeMeta::new(vec![d_k, seq_len], DType::F32), "k_transpose",
+    );
+    let v = g.add_node(
+        NodeKind::Op(OpKind::MatMul), vec![input, w_v],
+        NodeMeta::new(vec![seq_len, d_v], DType::F32), "v_proj",
+    );
+    let scores = g.add_node(
+        NodeKind::Op(OpKind::MatMul), vec![q, k_t],
+        NodeMeta::new(vec![seq_len, seq_len], DType::F32), "scores",
+    );
+    let scaled = g.add_node(
+        NodeKind::Op(OpKind::Mul), vec![scores, scale],
+        NodeMeta::new(vec![seq_len, seq_len], DType::F32), "scaled",
+    );
+    let weights = g.add_node(
+        NodeKind::Op(OpKind::Softmax), vec![scaled],
+        NodeMeta::new(vec![seq_len, seq_len], DType::F32), "weights",
+    );
+    let attended = g.add_node(
+        NodeKind::Op(OpKind::MatMul), vec![weights, v],
+        NodeMeta::new(vec![seq_len, d_v], DType::F32), "attended",
+    );
+    let output = g.add_node(
+        NodeKind::Op(OpKind::MatMul), vec![attended, w_o],
+        NodeMeta::new(vec![seq_len, d_out], DType::F32), "output_proj",
+    );
+    g.mark_output(output);
+
+    (g, vec![input, w_q, w_k, w_v, w_o])
+}
+
+fn build_add_layernorm_graph(dim: usize) -> Graph {
+    let mut g = Graph::new();
+    let x = g.add_node(NodeKind::Input("x".into()), vec![], NodeMeta::new(vec![dim], DType::F32), "x");
+    let res = g.add_node(NodeKind::Input("res".into()), vec![], NodeMeta::new(vec![dim], DType::F32), "res");
+    let gamma = g.add_node(NodeKind::Constant(vec![1.0; dim]), vec![], NodeMeta::new(vec![dim], DType::F32), "gamma");
+    let beta = g.add_node(NodeKind::Constant(vec![0.0; dim]), vec![], NodeMeta::new(vec![dim], DType::F32), "beta");
+    let add = g.add_node(NodeKind::Op(OpKind::Add), vec![x, res], NodeMeta::new(vec![dim], DType::F32), "add");
+    let ln = g.add_node(NodeKind::Op(OpKind::LayerNorm), vec![add, gamma, beta], NodeMeta::new(vec![dim], DType::F32), "ln");
+    g.mark_output(ln);
+    g
+}
 
 fn build_conv_bn_graph(channels: usize, spatial: usize) -> Graph {
     let total = channels * spatial;

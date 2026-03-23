@@ -219,6 +219,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_batchnorm_ops_tests = b.addRunArtifact(batchnorm_ops_tests);
 
+    // LayerNorm ops unit tests
+    const layernorm_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_layernorm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_layernorm_ops_tests = b.addRunArtifact(layernorm_ops_tests);
+
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&run_tensor_tests.step);
     test_step.dependOn(&run_alloc_tests.step);
@@ -227,6 +240,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_reduce_ops_tests.step);
     test_step.dependOn(&run_softmax_ops_tests.step);
     test_step.dependOn(&run_batchnorm_ops_tests.step);
+    test_step.dependOn(&run_layernorm_ops_tests.step);
 
     // Allocator tests only (separate step)
     const alloc_test_step = b.step("test-alloc", "Run allocator unit tests only");
@@ -249,6 +263,9 @@ pub fn build(b: *std.Build) void {
 
     const batchnorm_ops_test_step = b.step("test-batchnorm", "Run batchnorm ops unit tests only");
     batchnorm_ops_test_step.dependOn(&run_batchnorm_ops_tests.step);
+
+    const layernorm_ops_test_step = b.step("test-layernorm", "Run layernorm ops unit tests only");
+    layernorm_ops_test_step.dependOn(&run_layernorm_ops_tests.step);
 
     // Matmul ops unit tests
     const matmul_ops_tests = b.addTest(.{
@@ -300,6 +317,40 @@ pub fn build(b: *std.Build) void {
 
     const pool_ops_test_step = b.step("test-pool", "Run pooling ops unit tests only");
     pool_ops_test_step.dependOn(&run_pool_ops_tests.step);
+
+    // RoPE ops unit tests
+    const rope_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_rope.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_rope_ops_tests = b.addRunArtifact(rope_ops_tests);
+    test_step.dependOn(&run_rope_ops_tests.step);
+
+    const rope_ops_test_step = b.step("test-rope", "Run RoPE ops unit tests only");
+    rope_ops_test_step.dependOn(&run_rope_ops_tests.step);
+
+    // Attention ops unit tests
+    const attention_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_attention.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_attention_ops_tests = b.addRunArtifact(attention_ops_tests);
+    test_step.dependOn(&run_attention_ops_tests.step);
+
+    const attention_ops_test_step = b.step("test-attention", "Run attention ops unit tests only");
+    attention_ops_test_step.dependOn(&run_attention_ops_tests.step);
 
     // Tensor unit tests (standalone)
     const tensor_test_step = b.step("test-tensor", "Run tensor unit tests only");
@@ -470,4 +521,52 @@ pub fn build(b: *std.Build) void {
     const run_bench_conv = b.addRunArtifact(bench_conv);
     const bench_conv_step = b.step("bench-conv", "Run Conv2d benchmarks");
     bench_conv_step.dependOn(&run_bench_conv.step);
+
+    // LayerNorm benchmarks — compiled with ReleaseFast
+    const bench_layernorm = b.addExecutable(.{
+        .name = "bench_layernorm",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_layernorm.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    b.installArtifact(bench_layernorm);
+
+    const run_bench_layernorm = b.addRunArtifact(bench_layernorm);
+    const bench_layernorm_step = b.step("bench-layernorm", "Run LayerNorm benchmarks");
+    bench_layernorm_step.dependOn(&run_bench_layernorm.step);
+
+    // RoPE benchmarks — compiled with ReleaseFast
+    const bench_rope = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_rope.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+            },
+        }),
+    });
+    const run_bench_rope = b.addRunArtifact(bench_rope);
+    const bench_rope_step = b.step("bench-rope", "Run RoPE benchmarks (ReleaseFast)");
+    bench_rope_step.dependOn(&run_bench_rope.step);
+
+    // Attention benchmarks — compiled with ReleaseFast
+    const bench_attention = b.addExecutable(.{
+        .name = "bench_attention",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_attention.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_attention);
+
+    const run_bench_attention = b.addRunArtifact(bench_attention);
+    const bench_attention_step = b.step("bench-attention", "Run attention benchmarks");
+    bench_attention_step.dependOn(&run_bench_attention.step);
 }

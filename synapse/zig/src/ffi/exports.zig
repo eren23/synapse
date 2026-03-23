@@ -24,6 +24,9 @@ const matmul_ops = synapse.ops.matmul;
 const conv_ops = synapse.ops.conv;
 const pool_ops = synapse.ops.pool;
 const transpose_ops = synapse.ops.transpose;
+const layernorm_ops = synapse.ops.layernorm;
+const attention_ops = synapse.ops.attention;
+const rope_ops = synapse.ops.rope;
 
 // --- Allocator modules (separate named modules, no file overlap with synapse) ---
 const ArenaAllocator = @import("arena").ArenaAllocator;
@@ -71,6 +74,7 @@ fn mapError(err: anyerror) c_int {
         error.InvalidStride => SYN_ERR_INVALID_ARG,
         error.IncompatibleShapes => SYN_ERR_SHAPE_MISMATCH,
         error.RankTooHigh => SYN_ERR_INVALID_DIMENSIONS,
+        error.InvalidNormDims => SYN_ERR_INVALID_ARG,
         else => SYN_ERR_INTERNAL,
     };
 }
@@ -770,4 +774,195 @@ pub export fn syn_vreduce_max(src: ?[*]const f32, len: usize, out: ?*f32) c_int 
     const s = src orelse return SYN_ERR_NULL_PTR;
     out_ptr.* = vecHmax(s[0..len]);
     return SYN_OK;
+}
+
+// ============================================================
+// Layer normalization (trailing dims, gamma/beta affine)
+// ============================================================
+
+pub export fn syn_layernorm_forward(
+    out: ?*?*anyopaque,
+    input: ?*anyopaque,
+    gamma: ?*anyopaque,
+    beta: ?*anyopaque,
+    normalized_dim: usize,
+    eps: f32,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const gamma_tw = ptrToTensor(gamma) orelse return SYN_ERR_NULL_PTR;
+    const beta_tw = ptrToTensor(beta) orelse return SYN_ERR_NULL_PTR;
+
+    if (!in_tw.tensor.isContiguous()) return SYN_ERR_NOT_CONTIGUOUS;
+
+    const ndim = in_tw.tensor.shape.ndim;
+    if (normalized_dim == 0 or normalized_dim > ndim) return SYN_ERR_INVALID_ARG;
+
+    // Compute norm_size and validate gamma/beta lengths
+    var norm_size: usize = 1;
+    for ((ndim - normalized_dim)..ndim) |d| norm_size *= in_tw.tensor.shape.dims[d];
+    if (gamma_tw.tensor.numel() != norm_size or beta_tw.tensor.numel() != norm_size)
+        return SYN_ERR_SHAPE_MISMATCH;
+
+    const gamma_data = gamma_tw.tensor.storage.dataAs(f32);
+    const beta_data = beta_tw.tensor.storage.dataAs(f32);
+    const g_off = gamma_tw.tensor.offset;
+    const b_off = beta_tw.tensor.offset;
+
+    const result = layernorm_ops.layerNorm(
+        ffi_allocator,
+        in_tw.tensor,
+        normalized_dim,
+        gamma_data[g_off .. g_off + norm_size],
+        beta_data[b_off .. b_off + norm_size],
+        eps,
+    ) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Scaled dot-product attention
+// ============================================================
+
+pub export fn syn_scaled_dot_product_attention(
+    out: ?*?*anyopaque,
+    attn_weights_out: ?*?*anyopaque,
+    query: ?*anyopaque,
+    key: ?*anyopaque,
+    value: ?*anyopaque,
+    scale: f32,
+    causal: c_int,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const q_tw = ptrToTensor(query) orelse return SYN_ERR_NULL_PTR;
+    const k_tw = ptrToTensor(key) orelse return SYN_ERR_NULL_PTR;
+    const v_tw = ptrToTensor(value) orelse return SYN_ERR_NULL_PTR;
+    _ = scale; // Scale is derived internally from d_head
+
+    const config = attention_ops.AttentionConfig{
+        .causal = causal != 0,
+        .return_weights = attn_weights_out != null,
+    };
+
+    const attn_result = attention_ops.attention(
+        ffi_allocator,
+        q_tw.tensor,
+        k_tw.tensor,
+        v_tw.tensor,
+        config,
+    ) catch |err| return mapError(err);
+
+    // Wrap output tensor
+    const out_status = wrapTensor(attn_result.output, out_ptr);
+    if (out_status != SYN_OK) {
+        if (attn_result.weights) |w| w.release();
+        return out_status;
+    }
+
+    // Wrap weights if requested
+    if (attn_weights_out) |w_ptr| {
+        if (attn_result.weights) |w| {
+            const w_tw = ffi_allocator.create(TensorWrapper) catch {
+                w.release();
+                // Undo output wrap
+                const o_tw: *TensorWrapper = @ptrCast(@alignCast(out_ptr.*));
+                o_tw.tensor.release();
+                ffi_allocator.destroy(o_tw);
+                out_ptr.* = null;
+                return SYN_ERR_OUT_OF_MEMORY;
+            };
+            w_tw.tensor = w;
+            w_ptr.* = @ptrCast(w_tw);
+        } else {
+            w_ptr.* = null;
+        }
+    } else {
+        if (attn_result.weights) |w| w.release();
+    }
+
+    return SYN_OK;
+}
+
+// ============================================================
+// Rotary positional embedding (RoPE)
+// ============================================================
+
+pub export fn syn_rope_forward(
+    out: ?*?*anyopaque,
+    input: ?*anyopaque,
+    cos_table: ?*anyopaque,
+    sin_table: ?*anyopaque,
+    offset: usize,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const cos_tw = ptrToTensor(cos_table) orelse return SYN_ERR_NULL_PTR;
+    const sin_tw = ptrToTensor(sin_table) orelse return SYN_ERR_NULL_PTR;
+
+    // Input must be 4D: [batch, heads, seq, d_head]
+    if (in_tw.tensor.shape.ndim != 4) return SYN_ERR_INVALID_DIMENSIONS;
+    if (!in_tw.tensor.isContiguous()) return SYN_ERR_NOT_CONTIGUOUS;
+
+    const batch = in_tw.tensor.shape.dims[0];
+    const heads = in_tw.tensor.shape.dims[1];
+    const seq_len = in_tw.tensor.shape.dims[2];
+    const d_head = in_tw.tensor.shape.dims[3];
+
+    if (d_head < 2 or d_head % 2 != 0) return SYN_ERR_INVALID_ARG;
+    const half_d = d_head / 2;
+
+    // Validate cos/sin tables cover the needed positions
+    const cos_numel = cos_tw.tensor.numel();
+    const sin_numel = sin_tw.tensor.numel();
+    const needed = (seq_len + offset) * half_d;
+    if (cos_numel < needed or sin_numel < needed) return SYN_ERR_SHAPE_MISMATCH;
+
+    // Allocate output
+    const numel = in_tw.tensor.numel();
+    const out_storage = Storage.create(ffi_allocator, f32, numel) catch return SYN_ERR_OUT_OF_MEMORY;
+    const out_tensor = TensorF32.init(out_storage, in_tw.tensor.shape);
+    out_storage.release();
+
+    const in_data = in_tw.tensor.storage.dataAs(f32);
+    const out_data = out_tensor.storage.dataAs(f32);
+    const cos_data = cos_tw.tensor.storage.dataAs(f32);
+    const sin_data = sin_tw.tensor.storage.dataAs(f32);
+
+    rope_ops.ropeSimd(
+        out_data[out_tensor.offset .. out_tensor.offset + numel],
+        in_data[in_tw.tensor.offset .. in_tw.tensor.offset + numel],
+        cos_data[cos_tw.tensor.offset .. cos_tw.tensor.offset + cos_numel],
+        sin_data[sin_tw.tensor.offset .. sin_tw.tensor.offset + sin_numel],
+        batch,
+        heads,
+        seq_len,
+        d_head,
+        half_d,
+        offset,
+    );
+
+    return wrapTensor(out_tensor, out_ptr);
+}
+
+// ============================================================
+// Causal attention mask
+// ============================================================
+
+pub export fn syn_causal_mask(out: ?*?*anyopaque, seq_len: usize) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (seq_len == 0) return SYN_ERR_INVALID_ARG;
+
+    const numel = seq_len * seq_len;
+    const storage = Storage.create(ffi_allocator, f32, numel) catch return SYN_ERR_OUT_OF_MEMORY;
+    const mask = TensorF32.init(storage, Shape.init(&[_]usize{ seq_len, seq_len }));
+    storage.release();
+
+    const data = mask.storage.dataAs(f32);
+    for (0..seq_len) |i| {
+        for (0..seq_len) |j| {
+            data[i * seq_len + j] = if (j <= i) 0.0 else -std.math.inf(f32);
+        }
+    }
+
+    return wrapTensor(mask, out_ptr);
 }

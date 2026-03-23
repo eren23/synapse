@@ -1,10 +1,13 @@
 pub mod activation;
 pub mod arithmetic;
+pub mod attention;
 pub mod batchnorm;
 pub mod conv;
+pub mod layernorm;
 pub mod loss;
 pub mod matmul;
 pub mod pool;
 pub mod reduce;
 pub mod reshape;
+pub mod rope;
 pub mod softmax;

@@ -199,6 +199,53 @@ syn_status_t syn_vfma(float *dst, const float *a, const float *b,
 syn_status_t syn_vreduce_sum(const float *src, size_t len, float *out);
 syn_status_t syn_vreduce_max(const float *src, size_t len, float *out);
 
+/* ------------------------------------------------------------------ */
+/* Layer normalization (trailing dims)                                  */
+/*   input:  N-D tensor                                                */
+/*   gamma, beta: 1-D tensors with size = product of trailing dims     */
+/*   normalized_dim: number of trailing dimensions to normalize over   */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_layernorm_forward(syn_tensor_t **out,
+                                   syn_tensor_t *input,
+                                   syn_tensor_t *gamma,
+                                   syn_tensor_t *beta,
+                                   size_t normalized_dim,
+                                   float eps);
+
+/* ------------------------------------------------------------------ */
+/* Scaled dot-product attention                                        */
+/*   Q: [batch, heads, seq_q, d_head]                                  */
+/*   K: [batch, heads, seq_k, d_head]                                  */
+/*   V: [batch, heads, seq_k, d_head]                                  */
+/*   attn_weights: optional [batch, heads, seq_q, seq_k]; NULL to skip */
+/*   scale: accepted for API compat; internally derived from d_head    */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_scaled_dot_product_attention(syn_tensor_t **out,
+                                              syn_tensor_t **attn_weights,
+                                              syn_tensor_t *query,
+                                              syn_tensor_t *key,
+                                              syn_tensor_t *value,
+                                              float scale,
+                                              int32_t causal);
+
+/* ------------------------------------------------------------------ */
+/* Rotary positional embedding (RoPE)                                  */
+/*   input: [batch, heads, seq, d_head]  (d_head must be even)         */
+/*   cos_table, sin_table: precomputed [max_seq, d_head/2]             */
+/*   offset: position offset for KV-cache scenarios                    */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_rope_forward(syn_tensor_t **out,
+                              syn_tensor_t *input,
+                              syn_tensor_t *cos_table,
+                              syn_tensor_t *sin_table,
+                              size_t offset);
+
+/* ------------------------------------------------------------------ */
+/* Causal attention mask: [seq_len, seq_len]                           */
+/*   mask[i][j] = 0 if j <= i, -inf otherwise (additive mask)         */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_causal_mask(syn_tensor_t **out, size_t seq_len);
+
 #ifdef __cplusplus
 }
 #endif

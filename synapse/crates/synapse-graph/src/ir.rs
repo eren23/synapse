@@ -67,10 +67,16 @@ pub enum OpKind {
     // Neural network
     Conv2d,
     BatchNorm,
+    // Attention / transformer ops
+    Softmax,
+    Transpose,
+    LayerNorm,
     // Fused operations
     FusedMatMulBiasRelu,
     FusedConvBatchNorm,
     FusedElementWise(Vec<OpKind>),
+    FusedAttention,
+    FusedLayerNormResidual,
 }
 
 impl fmt::Display for OpKind {
@@ -88,6 +94,9 @@ impl fmt::Display for OpKind {
             OpKind::Tanh => write!(f, "Tanh"),
             OpKind::Conv2d => write!(f, "Conv2d"),
             OpKind::BatchNorm => write!(f, "BatchNorm"),
+            OpKind::Softmax => write!(f, "Softmax"),
+            OpKind::Transpose => write!(f, "Transpose"),
+            OpKind::LayerNorm => write!(f, "LayerNorm"),
             OpKind::FusedMatMulBiasRelu => write!(f, "FusedMatMulBiasRelu"),
             OpKind::FusedConvBatchNorm => write!(f, "FusedConvBatchNorm"),
             OpKind::FusedElementWise(ops) => {
@@ -100,6 +109,8 @@ impl fmt::Display for OpKind {
                 }
                 write!(f, ")")
             }
+            OpKind::FusedAttention => write!(f, "FusedAttention"),
+            OpKind::FusedLayerNormResidual => write!(f, "FusedLayerNormResidual"),
         }
     }
 }
@@ -511,6 +522,134 @@ fn execute_op(
                 }
             }
             current
+        }
+        OpKind::Softmax => {
+            let a = &values[&input_ids[0]];
+            if meta.shape.len() >= 2 {
+                // Row-wise softmax for 2D tensors
+                let rows = meta.shape[0];
+                let cols = meta.shape[1];
+                let mut result = vec![0.0f32; rows * cols];
+                for i in 0..rows {
+                    let row = &a[i * cols..(i + 1) * cols];
+                    let max_val = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = row.iter().map(|x| (x - max_val).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    for j in 0..cols {
+                        result[i * cols + j] = exps[j] / sum;
+                    }
+                }
+                result
+            } else {
+                let max_val = a.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let exps: Vec<f32> = a.iter().map(|x| (x - max_val).exp()).collect();
+                let sum: f32 = exps.iter().sum();
+                exps.iter().map(|x| x / sum).collect()
+            }
+        }
+        OpKind::Transpose => {
+            // 2D matrix transpose: input [M, N] -> output [N, M]
+            let a = &values[&input_ids[0]];
+            let out_rows = meta.shape[0]; // N
+            let out_cols = meta.shape[1]; // M
+            let mut result = vec![0.0f32; out_rows * out_cols];
+            for i in 0..out_cols {
+                for j in 0..out_rows {
+                    result[j * out_cols + i] = a[i * out_rows + j];
+                }
+            }
+            result
+        }
+        OpKind::LayerNorm => {
+            // inputs: [input, gamma, beta]
+            let x = &values[&input_ids[0]];
+            let gamma = &values[&input_ids[1]];
+            let beta = &values[&input_ids[2]];
+            let eps = 1e-5_f32;
+            let n = x.len() as f32;
+            let mean = x.iter().sum::<f32>() / n;
+            let var = x.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n;
+            let inv_std = 1.0 / (var + eps).sqrt();
+            x.iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let gi = gamma[i % gamma.len()];
+                    let bi = beta[i % beta.len()];
+                    gi * (v - mean) * inv_std + bi
+                })
+                .collect()
+        }
+        OpKind::FusedAttention => {
+            // inputs: [input, W_q, W_k, W_v, scale, W_o]
+            let input = &values[&input_ids[0]];
+            let w_q = &values[&input_ids[1]];
+            let w_k = &values[&input_ids[2]];
+            let w_v = &values[&input_ids[3]];
+            let scale = &values[&input_ids[4]];
+            let w_o = &values[&input_ids[5]];
+
+            let seq_len = meta.shape[0];
+            let d_out = meta.shape[1];
+            let d_model = input.len() / seq_len;
+            let d_k = w_q.len() / d_model;
+            let d_v = w_v.len() / d_model;
+
+            // Q = input @ W_q  [seq_len, d_k]
+            let q = matmul_f32(input, w_q, seq_len, d_model, d_k);
+            // K = input @ W_k  [seq_len, d_k]
+            let k = matmul_f32(input, w_k, seq_len, d_model, d_k);
+            // K^T [d_k, seq_len]
+            let mut k_t = vec![0.0f32; d_k * seq_len];
+            for i in 0..seq_len {
+                for j in 0..d_k {
+                    k_t[j * seq_len + i] = k[i * d_k + j];
+                }
+            }
+            // scores = Q @ K^T  [seq_len, seq_len]
+            let scores = matmul_f32(&q, &k_t, seq_len, d_k, seq_len);
+            // scaled = scores * scale
+            let scale_val = scale[0];
+            let scaled: Vec<f32> = scores.iter().map(|s| s * scale_val).collect();
+            // Row-wise softmax
+            let mut weights = vec![0.0f32; seq_len * seq_len];
+            for i in 0..seq_len {
+                let row = &scaled[i * seq_len..(i + 1) * seq_len];
+                let max_val = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let exps: Vec<f32> = row.iter().map(|x| (x - max_val).exp()).collect();
+                let sum: f32 = exps.iter().sum();
+                for j in 0..seq_len {
+                    weights[i * seq_len + j] = exps[j] / sum;
+                }
+            }
+            // V = input @ W_v  [seq_len, d_v]
+            let v = matmul_f32(input, w_v, seq_len, d_model, d_v);
+            // attended = weights @ V  [seq_len, d_v]
+            let attended = matmul_f32(&weights, &v, seq_len, seq_len, d_v);
+            // output = attended @ W_o  [seq_len, d_out]
+            matmul_f32(&attended, w_o, seq_len, d_v, d_out)
+        }
+        OpKind::FusedLayerNormResidual => {
+            // inputs: [x, residual, gamma, beta]
+            let x = &values[&input_ids[0]];
+            let residual = &values[&input_ids[1]];
+            let gamma = &values[&input_ids[2]];
+            let beta = &values[&input_ids[3]];
+            let eps = 1e-5_f32;
+            // sum = x + residual
+            let sum: Vec<f32> = x.iter().zip(residual.iter()).map(|(a, b)| a + b).collect();
+            // LayerNorm(sum)
+            let n = sum.len() as f32;
+            let mean = sum.iter().sum::<f32>() / n;
+            let var = sum.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n;
+            let inv_std = 1.0 / (var + eps).sqrt();
+            sum.iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    let gi = gamma[i % gamma.len()];
+                    let bi = beta[i % beta.len()];
+                    gi * (v - mean) * inv_std + bi
+                })
+                .collect()
         }
     }
 }
