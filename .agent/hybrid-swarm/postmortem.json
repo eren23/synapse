@@ -7,247 +7,553 @@
     "skipped_tasks": 0,
     "success_rate": 1.0,
     "total_cost_usd": 0.0,
-    "total_duration_s": 10224.5
+    "total_duration_s": 10548.6
   },
   "decomposition": {
-    "score": 0.55,
+    "score": 0.15,
     "issues": [
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-1",
-        "message": "Target file 'synapse/zig/src/ops/layernorm.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/src/ops/rmsnorm.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-1",
-        "message": "Target file 'synapse/zig/tests/test_layernorm.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/tests/test_rmsnorm.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-1",
-        "message": "Target file 'synapse/zig/tests/bench_layernorm.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/tests/bench_rmsnorm.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-2",
-        "message": "Target file 'synapse/zig/src/ops/attention.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/src/ops/silu.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-2",
-        "message": "Target file 'synapse/zig/tests/test_attention.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/tests/test_silu.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-2",
-        "message": "Target file 'synapse/zig/tests/bench_attention.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/tests/bench_silu.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-3",
-        "message": "Target file 'synapse/zig/src/ops/rope.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/src/ops/quantize.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-3",
-        "message": "Target file 'synapse/zig/tests/test_rope.zig' does not exist (will be created)",
+        "message": "Target file 'synapse/zig/src/ops/qmatmul.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
-        "task_id": "task-5",
-        "message": "Target file 'synapse/crates/synapse-sys/src/lib.rs' does not exist (will be created)",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/tests/test_quantize.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
-        "task_id": "task-5",
-        "message": "Target file 'synapse/crates/synapse-core/src/lib.rs' does not exist (will be created)",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/tests/test_qmatmul.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/tests/bench_qmatmul.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-4",
+        "message": "Target file 'synapse/zig/src/ops/kvcache.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-4",
+        "message": "Target file 'synapse/zig/tests/test_kvcache.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-4",
+        "message": "Target file 'synapse/zig/tests/bench_kvcache.zig' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-6",
-        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/attention.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/mod.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/model_config.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/attention.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/norm.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/ffn.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/position.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/config/quantization.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/registry/mod.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/crates/synapse-inference/src/registry/factory.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/configs/qwen3_0.6b.json' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/configs/llama3.2_1b.json' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/configs/mistral_7b.json' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-7",
-        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/layernorm.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/registry/norm.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-7",
-        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/rope.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/registry/ffn.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-8",
-        "message": "Target file 'synapse/crates/synapse-nn/src/positional.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/registry/attention.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/crates/synapse-inference/src/registry/position.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-9",
-        "message": "Target file 'synapse/crates/synapse-nn/src/attention.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/kv_cache/mod.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/crates/synapse-inference/src/kv_cache/cache.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/crates/synapse-inference/src/kv_cache/strategy.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-10",
-        "message": "Target file 'synapse/crates/synapse-nn/src/layernorm.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/weight_loading/mod.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-10",
+        "message": "Target file 'synapse/crates/synapse-inference/src/weight_loading/safetensors.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-10",
+        "message": "Target file 'synapse/crates/synapse-inference/src/weight_loading/gguf.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-10",
+        "message": "Target file 'synapse/crates/synapse-inference/src/weight_loading/weight_map.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-10",
+        "message": "Target file 'synapse/crates/synapse-inference/src/weight_loading/converter.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-11",
-        "message": "Target file 'synapse/crates/synapse-nn/src/transformer.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/tokenizer/mod.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-inference/src/tokenizer/bpe.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-inference/src/tokenizer/sentencepiece.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-inference/src/tokenizer/vocabulary.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-inference/src/tokenizer/pre_tokenizer.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-12",
-        "message": "Target file 'synapse/crates/synapse-data/src/tokenizer.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/model/mod.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-12",
-        "message": "Target file 'synapse/crates/synapse-data/src/text_dataset.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/model/builder.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-inference/src/model/decoder_layer.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-inference/src/model/causal_lm.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-inference/src/engine.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-13",
-        "message": "Target file 'synapse/crates/synapse-graph/src/fuse_attention.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/generation/mod.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-13",
-        "message": "Target file 'synapse/crates/synapse-graph/src/fuse_layernorm_residual.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/generation/pipeline.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-inference/src/generation/sampler.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-inference/src/generation/stopping.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-inference/src/generation/output.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-14",
-        "message": "Target file 'synapse/examples/text_classification.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/quantization/mod.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "info",
         "category": "file_existence",
         "task_id": "task-14",
-        "message": "Target file 'synapse/examples/vision_transformer.rs' does not exist (will be created)",
+        "message": "Target file 'synapse/crates/synapse-inference/src/quantization/int8.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-inference/src/quantization/quantized_linear.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-inference/src/quantization/calibration.rs' does not exist (will be created)",
         "suggestion": ""
       },
       {
         "severity": "warning",
         "category": "file_existence",
         "task_id": "task-15",
-        "message": "Target file 'synapse/tests/integration/transformer_e2e.rs' does not exist",
+        "message": "Target file 'synapse/tests/integration/inference_e2e.rs' does not exist",
         "suggestion": "Verify the file path or change task_kind to 'implement'"
       },
       {
         "severity": "warning",
         "category": "file_existence",
         "task_id": "task-15",
-        "message": "Target file 'synapse/tests/integration/attention_correctness.rs' does not exist",
+        "message": "Target file 'synapse/tests/integration/quantization_accuracy.rs' does not exist",
         "suggestion": "Verify the file path or change task_kind to 'implement'"
       },
       {
         "severity": "warning",
         "category": "file_existence",
         "task_id": "task-15",
-        "message": "Target file 'synapse/tests/integration/transformer_graph_opt.rs' does not exist",
+        "message": "Target file 'synapse/tests/integration/kvcache_correctness.rs' does not exist",
         "suggestion": "Verify the file path or change task_kind to 'implement'"
       },
       {
         "severity": "warning",
         "category": "file_existence",
         "task_id": "task-15",
-        "message": "Target file 'synapse/tests/benchmarks/attention_bench.rs' does not exist",
+        "message": "Target file 'synapse/tests/integration/config_driven_assembly.rs' does not exist",
         "suggestion": "Verify the file path or change task_kind to 'implement'"
       },
       {
         "severity": "warning",
         "category": "file_existence",
         "task_id": "task-15",
-        "message": "Target file 'synapse/tests/benchmarks/transformer_throughput.rs' does not exist",
+        "message": "Target file 'synapse/tests/benchmarks/inference_throughput.rs' does not exist",
+        "suggestion": "Verify the file path or change task_kind to 'implement'"
+      },
+      {
+        "severity": "warning",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/tests/benchmarks/prefill_throughput.rs' does not exist",
+        "suggestion": "Verify the file path or change task_kind to 'implement'"
+      },
+      {
+        "severity": "warning",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/tests/benchmarks/quantization_speedup.rs' does not exist",
+        "suggestion": "Verify the file path or change task_kind to 'implement'"
+      },
+      {
+        "severity": "warning",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/tests/benchmarks/memory_usage.rs' does not exist",
+        "suggestion": "Verify the file path or change task_kind to 'implement'"
+      },
+      {
+        "severity": "warning",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/examples/qwen3_chat.rs' does not exist",
+        "suggestion": "Verify the file path or change task_kind to 'implement'"
+      },
+      {
+        "severity": "warning",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/examples/model_benchmark.rs' does not exist",
         "suggestion": "Verify the file path or change task_kind to 'implement'"
       },
       {
         "severity": "warning",
         "category": "overlap",
+        "task_id": "task-1",
+        "message": "Tasks 'task-1' and 'task-2' both target 'synapse/zig/build.zig' without dep edge",
+        "suggestion": "Add a dependency or split file responsibilities"
+      },
+      {
+        "severity": "warning",
+        "category": "overlap",
+        "task_id": "task-1",
+        "message": "Tasks 'task-1' and 'task-3' both target 'synapse/zig/build.zig' without dep edge",
+        "suggestion": "Add a dependency or split file responsibilities"
+      },
+      {
+        "severity": "warning",
+        "category": "overlap",
+        "task_id": "task-1",
+        "message": "Tasks 'task-1' and 'task-4' both target 'synapse/zig/build.zig' without dep edge",
+        "suggestion": "Add a dependency or split file responsibilities"
+      },
+      {
+        "severity": "warning",
+        "category": "overlap",
+        "task_id": "task-2",
+        "message": "Tasks 'task-2' and 'task-3' both target 'synapse/zig/build.zig' without dep edge",
+        "suggestion": "Add a dependency or split file responsibilities"
+      },
+      {
+        "severity": "warning",
+        "category": "overlap",
+        "task_id": "task-2",
+        "message": "Tasks 'task-2' and 'task-4' both target 'synapse/zig/build.zig' without dep edge",
+        "suggestion": "Add a dependency or split file responsibilities"
+      },
+      {
+        "severity": "warning",
+        "category": "overlap",
+        "task_id": "task-3",
+        "message": "Tasks 'task-3' and 'task-4' both target 'synapse/zig/build.zig' without dep edge",
+        "suggestion": "Add a dependency or split file responsibilities"
+      },
+      {
+        "severity": "warning",
+        "category": "granularity",
         "task_id": "task-6",
-        "message": "Tasks 'task-6' and 'task-7' both target 'synapse/crates/synapse-autograd/src/ops/mod.rs' without dep edge",
-        "suggestion": "Add a dependency or split file responsibilities"
-      },
-      {
-        "severity": "warning",
-        "category": "overlap",
-        "task_id": "task-8",
-        "message": "Tasks 'task-8' and 'task-10' both target 'synapse/crates/synapse-nn/src/lib.rs' without dep edge",
-        "suggestion": "Add a dependency or split file responsibilities"
-      },
-      {
-        "severity": "warning",
-        "category": "overlap",
-        "task_id": "task-8",
-        "message": "Tasks 'task-8' and 'task-11' both target 'synapse/crates/synapse-nn/src/lib.rs' without dep edge",
-        "suggestion": "Add a dependency or split file responsibilities"
-      },
-      {
-        "severity": "warning",
-        "category": "overlap",
-        "task_id": "task-9",
-        "message": "Tasks 'task-9' and 'task-10' both target 'synapse/crates/synapse-nn/src/lib.rs' without dep edge",
-        "suggestion": "Add a dependency or split file responsibilities"
+        "message": "Task targets 15 files (may be too broad)",
+        "suggestion": "Consider splitting into smaller tasks"
       }
     ]
   },
   "execution": {
     "critical_path": [
       "task-1",
-      "task-4",
       "task-5",
       "task-7",
-      "task-8",
-      "task-9",
-      "task-11",
+      "task-12",
       "task-13",
+      "task-14",
       "task-15"
     ],
     "critical_path_duration_s": 0.0,
@@ -256,20 +562,11 @@
   "failures": {
     "root_causes": [
       {
-        "task_id": "task-1",
+        "task_id": "task-8",
         "cause": "agent_error",
         "confidence": 0.5,
         "affected_tasks": [
-          "task-1"
-        ],
-        "wasted_cost": 0
-      },
-      {
-        "task_id": "task-2",
-        "cause": "agent_error",
-        "confidence": 0.5,
-        "affected_tasks": [
-          "task-2"
+          "task-8"
         ],
         "wasted_cost": 0
       },
@@ -288,8 +585,10 @@
   },
   "robustness": {
     "rate_limit_events": 0,
-    "concurrency_adjustments": 12,
+    "concurrency_adjustments": 8,
     "budget_warnings": 0
   },
-  "recommendations": []
+  "recommendations": [
+    "Low decomposition quality \u2014 review task granularity and dependency edges"
+  ]
 }
