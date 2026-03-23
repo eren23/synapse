@@ -1,5 +1,6 @@
 use crate::config::ModelConfig;
 use crate::registry::{create_attention, create_ffn, create_norm};
+use crate::weight_loading::AlignedBuffer;
 
 use super::causal_lm::CausalLM;
 use super::decoder_layer::DecoderLayer;
@@ -7,7 +8,7 @@ use super::decoder_layer::DecoderLayer;
 /// Assembles a [`CausalLM`] from a [`ModelConfig`].
 ///
 /// The returned model has the correct structure (layers, norms, attention
-/// geometry) but weights are uninitialized (empty `Vec`s). Call
+/// geometry) but weights are uninitialized (empty buffers). Call
 /// [`CausalLM::load_weights`] to populate them before inference.
 pub struct ModelBuilder;
 
@@ -28,29 +29,29 @@ impl ModelBuilder {
                 ffn_norm: create_norm(&config.norm),
                 ffn: create_ffn(&config.ffn),
                 hidden_size: arch.hidden_size,
-                attn_norm_weight: Vec::new(),
-                w_q: Vec::new(),
-                w_k: Vec::new(),
-                w_v: Vec::new(),
-                w_o: Vec::new(),
-                q_norm_weight: Vec::new(),
-                k_norm_weight: Vec::new(),
-                ffn_norm_weight: Vec::new(),
-                ffn_gate: Vec::new(),
-                ffn_up: Vec::new(),
-                ffn_down: Vec::new(),
+                attn_norm_weight: AlignedBuffer::new_zeroed(0),
+                w_q: AlignedBuffer::new_zeroed(0),
+                w_k: AlignedBuffer::new_zeroed(0),
+                w_v: AlignedBuffer::new_zeroed(0),
+                w_o: AlignedBuffer::new_zeroed(0),
+                q_norm_weight: AlignedBuffer::new_zeroed(0),
+                k_norm_weight: AlignedBuffer::new_zeroed(0),
+                ffn_norm_weight: AlignedBuffer::new_zeroed(0),
+                ffn_gate: AlignedBuffer::new_zeroed(0),
+                ffn_up: AlignedBuffer::new_zeroed(0),
+                ffn_down: AlignedBuffer::new_zeroed(0),
             });
         }
 
         CausalLM {
             final_norm: create_norm(&config.norm),
             layers,
-            embed_tokens: Vec::new(),
-            final_norm_weight: Vec::new(),
+            embed_tokens: AlignedBuffer::new_zeroed(0),
+            final_norm_weight: AlignedBuffer::new_zeroed(0),
             lm_head_weight: if arch.tie_word_embeddings {
                 None
             } else {
-                Some(Vec::new())
+                Some(AlignedBuffer::new_zeroed(0))
             },
             config: config.clone(),
         }

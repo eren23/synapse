@@ -2,6 +2,8 @@ pub mod config;
 pub mod engine;
 pub mod generation;
 pub mod kv_cache;
+#[cfg(feature = "metal")]
+pub mod metal;
 pub mod model;
 pub mod quantization;
 pub mod registry;
@@ -610,13 +612,14 @@ mod quantization_tests {
     ///
     /// Produces values in approximately [-0.18, 0.18] (Xavier-scale for d=32),
     /// which keeps INT8 quantization error well below 1%.
-    fn gen_weights(len: usize, seed: u32) -> Vec<f32> {
-        (0..len)
+    fn gen_weights(len: usize, seed: u32) -> crate::weight_loading::AlignedBuffer {
+        let v: Vec<f32> = (0..len)
             .map(|i| {
                 let x = ((i as u32).wrapping_mul(2654435761).wrapping_add(seed)) as f32;
                 (x / u32::MAX as f32) * 0.36 - 0.18 // range ~[-0.18, 0.18]
             })
-            .collect()
+            .collect();
+        crate::weight_loading::AlignedBuffer::from_slice(&v)
     }
 
     /// Normalized RMSE: ||f32 - int8||_2 / ||f32||_2.
@@ -644,16 +647,16 @@ mod quantization_tests {
         let inter = cfg.ffn.intermediate_size();
 
         model.embed_tokens = gen_weights(vocab * h, 1);
-        model.final_norm_weight = vec![1.0f32; h];
+        model.final_norm_weight = crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
 
         for (i, layer) in model.layers.iter_mut().enumerate() {
             let s = (i as u32 + 1) * 100;
-            layer.attn_norm_weight = vec![1.0f32; h];
+            layer.attn_norm_weight = crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
             layer.w_q = gen_weights(q_dim * h, s + 1);
             layer.w_k = gen_weights(kv_dim * h, s + 2);
             layer.w_v = gen_weights(kv_dim * h, s + 3);
             layer.w_o = gen_weights(h * q_dim, s + 4);
-            layer.ffn_norm_weight = vec![1.0f32; h];
+            layer.ffn_norm_weight = crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
             layer.ffn_gate = gen_weights(inter * h, s + 5);
             layer.ffn_up = gen_weights(inter * h, s + 6);
             layer.ffn_down = gen_weights(h * inter, s + 7);

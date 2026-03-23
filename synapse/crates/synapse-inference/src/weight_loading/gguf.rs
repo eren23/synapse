@@ -4,7 +4,7 @@ use std::path::Path;
 
 use memmap2::Mmap;
 use super::converter::f16_to_f32;
-use super::{RawTensor, WeightError};
+use super::{AlignedBuffer, RawTensor, WeightError};
 
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_DEFAULT_ALIGNMENT: usize = 32;
@@ -123,7 +123,7 @@ pub fn parse_gguf(data: &[u8]) -> Result<HashMap<String, RawTensor>, WeightError
         result.insert(
             info.name,
             RawTensor {
-                data: f32_data,
+                data: AlignedBuffer::from_slice(&f32_data),
                 shape: info.shape,
             },
         );

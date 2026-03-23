@@ -9,7 +9,7 @@ pub fn bf16_to_f32(data: &[u16]) -> Vec<f32> {
 }
 
 /// Convert a single f16 bit pattern to f32.
-fn f16_bits_to_f32(h: u16) -> f32 {
+pub(crate) fn f16_bits_to_f32(h: u16) -> f32 {
     let sign = ((h >> 15) & 1) as u32;
     let exp = ((h >> 10) & 0x1f) as u32;
     let mant = (h & 0x3ff) as u32;
@@ -41,7 +41,7 @@ fn f16_bits_to_f32(h: u16) -> f32 {
 
 /// Convert a single bf16 bit pattern to f32.
 /// bf16 is the upper 16 bits of an f32.
-fn bf16_bits_to_f32(b: u16) -> f32 {
+pub(crate) fn bf16_bits_to_f32(b: u16) -> f32 {
     f32::from_bits((b as u32) << 16)
 }
 

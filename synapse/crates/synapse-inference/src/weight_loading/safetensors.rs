@@ -3,21 +3,27 @@ use std::fs::File;
 use std::path::Path;
 
 use memmap2::Mmap;
-use super::{RawTensor, WeightError};
-use super::converter::{bf16_to_f32, f16_to_f32};
+use super::{AlignedBuffer, RawTensor, WeightError};
+use super::converter::{bf16_bits_to_f32, f16_bits_to_f32};
 
 /// Load tensors from a safetensors file, returning raw tensors ready for model loading.
 ///
 /// Memory-maps the file for zero-copy access to tensor data.
+/// Tensor data is loaded directly into 64-byte-aligned buffers in a single pass.
 pub fn load_safetensors(path: &Path) -> Result<HashMap<String, RawTensor>, WeightError> {
     let file = File::open(path).map_err(WeightError::Io)?;
     let mmap = unsafe { Mmap::map(&file) }.map_err(WeightError::Io)?;
     parse_safetensors(&mmap)
 }
 
-/// Parse safetensors from a byte slice into raw f32 data.
+/// Parse safetensors from a byte slice into aligned f32 buffers.
 ///
 /// Format: `[u64 header_size][JSON header][tensor data...]`
+///
+/// For F32 tensors: raw bytes are copied directly into a 64-byte-aligned buffer
+/// (single allocation, single memcpy — no intermediate Vec).
+///
+/// For F16/BF16: elements are converted directly into the aligned buffer in one pass.
 pub fn parse_safetensors(data: &[u8]) -> Result<HashMap<String, RawTensor>, WeightError> {
     if data.len() < 8 {
         return Err(WeightError::InvalidFormat("File too small".into()));
@@ -75,36 +81,35 @@ pub fn parse_safetensors(data: &[u8]) -> Result<HashMap<String, RawTensor>, Weig
 
         let tensor_bytes = &data[data_start + start..data_start + end];
 
-        let f32_data = match dtype {
-            "F32" => bytes_to_f32(tensor_bytes),
+        let aligned_data = match dtype {
+            // Fast path: direct memcpy from mmap into aligned buffer (no intermediate alloc)
+            "F32" => AlignedBuffer::from_f32_bytes(tensor_bytes),
+            // Single-pass conversion: bytes → aligned f32 buffer (no intermediate Vec<u16>)
             "F16" => {
-                let u16_data = bytes_to_u16(tensor_bytes);
-                f16_to_f32(&u16_data)
+                let count = tensor_bytes.len() / 2;
+                let mut buf = AlignedBuffer::new_zeroed(count);
+                for (i, chunk) in tensor_bytes.chunks_exact(2).enumerate() {
+                    let bits = u16::from_le_bytes(chunk.try_into().unwrap());
+                    buf[i] = f16_bits_to_f32(bits);
+                }
+                buf
             }
             "BF16" => {
-                let u16_data = bytes_to_u16(tensor_bytes);
-                bf16_to_f32(&u16_data)
+                let count = tensor_bytes.len() / 2;
+                let mut buf = AlignedBuffer::new_zeroed(count);
+                for (i, chunk) in tensor_bytes.chunks_exact(2).enumerate() {
+                    let bits = u16::from_le_bytes(chunk.try_into().unwrap());
+                    buf[i] = bf16_bits_to_f32(bits);
+                }
+                buf
             }
             other => return Err(WeightError::UnsupportedDtype(other.to_string())),
         };
 
-        result.insert(name.clone(), RawTensor { data: f32_data, shape });
+        result.insert(name.clone(), RawTensor { data: aligned_data, shape });
     }
 
     Ok(result)
-}
-fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-        .collect()
-}
-
-fn bytes_to_u16(bytes: &[u8]) -> Vec<u16> {
-    bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes(c.try_into().unwrap()))
-        .collect()
 }
 
 #[cfg(test)]
@@ -243,5 +248,50 @@ mod tests {
         let tensors = parse_safetensors(&data).unwrap();
         assert_eq!(tensors.len(), 1);
         assert!(tensors.contains_key("w"));
+    }
+
+    #[test]
+    fn all_buffers_are_64_byte_aligned() {
+        let f32_vals: Vec<f32> = (0..256).map(|i| i as f32).collect();
+        let f32_bytes = f32_to_bytes(&f32_vals);
+
+        let f16_bits: Vec<u16> = vec![0x3C00, 0x4000, 0x3800, 0xBC00];
+        let f16_raw = f16_to_bytes(&f16_bits);
+
+        let bf16_bits: Vec<u16> = vec![0x3F80, 0x4000, 0xBF80];
+        let bf16_raw = f16_to_bytes(&bf16_bits);
+
+        let file_data = make_safetensors(&[
+            ("f32_tensor", "F32", &[256], &f32_bytes),
+            ("f16_tensor", "F16", &[4], &f16_raw),
+            ("bf16_tensor", "BF16", &[3], &bf16_raw),
+        ]);
+
+        let tensors = parse_safetensors(&file_data).unwrap();
+
+        for (name, tensor) in &tensors {
+            assert!(
+                tensor.data.is_aligned(),
+                "Tensor '{name}' buffer is not 64-byte aligned"
+            );
+        }
+    }
+
+    #[test]
+    fn f32_loading_identical_within_tolerance() {
+        // Verify the aligned path produces values identical to the old bytes_to_f32 path
+        let original: Vec<f32> = (0..1024).map(|i| (i as f32) * 0.001 - 0.5).collect();
+        let bytes = f32_to_bytes(&original);
+
+        let file_data = make_safetensors(&[("w", "F32", &[1024], &bytes)]);
+        let tensors = parse_safetensors(&file_data).unwrap();
+        let loaded = &tensors["w"];
+
+        for (i, (&got, &want)) in loaded.data.iter().zip(original.iter()).enumerate() {
+            assert!(
+                (got - want).abs() < 1e-7,
+                "Mismatch at index {i}: got {got}, want {want}"
+            );
+        }
     }
 }

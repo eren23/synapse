@@ -40,8 +40,9 @@ const PoolAllocator = @import("pool").PoolAllocator;
 // FFI pool uses 128-byte fixed slots.
 const FfiPool = PoolAllocator(128);
 
-// All FFI allocations go through the page allocator (no libc dependency).
-const ffi_allocator = std.heap.page_allocator;
+// Use libc malloc for FFI allocations — page_allocator (mmap/munmap per call)
+// is catastrophically slow for the per-call packing buffers in syn_sgemm.
+const ffi_allocator = std.heap.c_allocator;
 
 // ============================================================
 // Status codes

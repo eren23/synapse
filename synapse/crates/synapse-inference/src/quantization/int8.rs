@@ -78,8 +78,8 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
                 ffn_norm: create_norm(&cfg.norm),
                 ffn: create_ffn(&cfg.ffn),
                 hidden_size: h,
-                attn_norm_weight: layer.attn_norm_weight.clone(),
-                ffn_norm_weight: layer.ffn_norm_weight.clone(),
+                attn_norm_weight: layer.attn_norm_weight.to_vec(),
+                ffn_norm_weight: layer.ffn_norm_weight.to_vec(),
                 w_q,
                 w_k,
                 w_v,
@@ -95,9 +95,9 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
         config: model.config.clone(),
         layers,
         final_norm: create_norm(&cfg.norm),
-        embed_tokens: model.embed_tokens.clone(),
-        final_norm_weight: model.final_norm_weight.clone(),
-        lm_head_weight: model.lm_head_weight.clone(),
+        embed_tokens: model.embed_tokens.to_vec(),
+        final_norm_weight: model.final_norm_weight.to_vec(),
+        lm_head_weight: model.lm_head_weight.as_ref().map(|w| w.to_vec()),
     }
 }
 
@@ -130,9 +130,14 @@ impl QuantizedDecoderLayer {
         let groups = num_heads / num_kv_heads;
         let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let q = self.w_q.forward(x, seq_len);
-        let k = self.w_k.forward(x, seq_len);
-        let v = self.w_v.forward(x, seq_len);
+        // Quantize x once and share across Q/K/V projections.
+        let k_dim = self.hidden_size;
+        let (x_int8, scales_x) =
+            synapse_core::quantize_per_channel_int8(x, seq_len, k_dim)
+                .expect("quantize_per_channel_int8 failed for attention input");
+        let q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        let k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        let v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, seq_len);
 
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
 
@@ -172,8 +177,12 @@ impl QuantizedDecoderLayer {
 
         match self.ffn.name() {
             "SwiGLU" => {
-                let gate = self.ffn_gate.forward(x, tokens);
-                let up = self.ffn_up.forward(x, tokens);
+                // Quantize x once and share across gate/up projections.
+                let (x_int8, scales_x) =
+                    synapse_core::quantize_per_channel_int8(x, tokens, h)
+                        .expect("quantize_per_channel_int8 failed for SwiGLU input");
+                let gate = self.ffn_gate.forward_pre_quantized(&x_int8, &scales_x, tokens);
+                let up = self.ffn_up.forward_pre_quantized(&x_int8, &scales_x, tokens);
                 let mut hidden = vec![0.0f32; tokens * inter];
                 for i in 0..hidden.len() {
                     hidden[i] = silu(gate[i]) * up[i];
@@ -181,8 +190,12 @@ impl QuantizedDecoderLayer {
                 self.ffn_down.forward(&hidden, tokens)
             }
             "GeGLU" => {
-                let gate = self.ffn_gate.forward(x, tokens);
-                let up = self.ffn_up.forward(x, tokens);
+                // Quantize x once and share across gate/up projections.
+                let (x_int8, scales_x) =
+                    synapse_core::quantize_per_channel_int8(x, tokens, h)
+                        .expect("quantize_per_channel_int8 failed for GeGLU input");
+                let gate = self.ffn_gate.forward_pre_quantized(&x_int8, &scales_x, tokens);
+                let up = self.ffn_up.forward_pre_quantized(&x_int8, &scales_x, tokens);
                 let mut hidden = vec![0.0f32; tokens * inter];
                 for i in 0..hidden.len() {
                     hidden[i] = gelu(gate[i]) * up[i];

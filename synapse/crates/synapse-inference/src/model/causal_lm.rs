@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::config::ModelConfig;
 use crate::model::decoder_layer::{apply_norm, matmul_t};
 use crate::registry::NormVariant;
-use crate::weight_loading::{RawTensor, WeightError, WeightMapper};
+use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError, WeightMapper};
 
 use super::DecoderLayer;
 
@@ -27,11 +27,11 @@ pub struct CausalLM {
     pub layers: Vec<DecoderLayer>,
     pub final_norm: Box<dyn NormVariant>,
 
-    // ── Weights ──────────────────────────────────────────────────────
-    pub embed_tokens: Vec<f32>,
-    pub final_norm_weight: Vec<f32>,
+    // ── Weights (64-byte aligned for SIMD) ───────────────────────────
+    pub embed_tokens: AlignedBuffer,
+    pub final_norm_weight: AlignedBuffer,
     /// `None` when `tie_word_embeddings` is true (reuses `embed_tokens`).
-    pub lm_head_weight: Option<Vec<f32>>,
+    pub lm_head_weight: Option<AlignedBuffer>,
 }
 
 impl CausalLM {
