@@ -28,6 +28,7 @@ pub type syn_storage_t = std::ffi::c_void;
 pub type syn_tensor_t = std::ffi::c_void;
 pub type syn_arena_t = std::ffi::c_void;
 pub type syn_pool_t = std::ffi::c_void;
+pub type syn_kvcache_t = std::ffi::c_void;
 
 pub type syn_status_t = c_int;
 
@@ -229,4 +230,84 @@ extern "C" {
     // Causal attention mask
     // ------------------------------------------------------------------
     pub fn syn_causal_mask(out: *mut *mut syn_tensor_t, seq_len: usize) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // RMS normalization
+    // ------------------------------------------------------------------
+    pub fn syn_rmsnorm_forward(
+        out: *mut *mut syn_tensor_t,
+        input: *mut syn_tensor_t,
+        gamma: *mut syn_tensor_t,
+        num_norm_dims: usize,
+        eps: f32,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // SiLU activation
+    // ------------------------------------------------------------------
+    pub fn syn_silu(dst: *mut f32, src: *const f32, len: usize) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // Fused SwiGLU
+    // ------------------------------------------------------------------
+    pub fn syn_swiglu(
+        dst: *mut f32, gate: *const f32, up: *const f32, len: usize,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // Per-channel INT8 quantization / dequantization
+    // ------------------------------------------------------------------
+    pub fn syn_quantize_per_channel_int8(
+        data: *const f32,
+        channels: usize,
+        channel_size: usize,
+        out: *mut i8,
+        scales: *mut f32,
+    ) -> syn_status_t;
+
+    pub fn syn_dequantize_per_channel_int8(
+        data: *const i8,
+        channels: usize,
+        channel_size: usize,
+        out: *mut f32,
+        scales: *const f32,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // INT8 quantized GEMM
+    // ------------------------------------------------------------------
+    pub fn syn_qgemm_int8(
+        m: usize, n: usize, k: usize,
+        a: *const i8, lda: usize,
+        b: *const i8, ldb: usize,
+        c: *mut f32, ldc: usize,
+        scales_a: *const f32,
+        scales_b: *const f32,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // KV-Cache
+    // ------------------------------------------------------------------
+    pub fn syn_kvcache_create(
+        max_seq: usize, n_kv_heads: usize, head_dim: usize,
+        out: *mut *mut syn_kvcache_t,
+    ) -> syn_status_t;
+
+    pub fn syn_kvcache_destroy(cache: *mut syn_kvcache_t) -> syn_status_t;
+
+    pub fn syn_kvcache_append(
+        cache: *mut syn_kvcache_t,
+        k_token: *const f32,
+        v_token: *const f32,
+        stride: usize,
+    ) -> syn_status_t;
+
+    pub fn syn_kvcache_slice(
+        cache: *mut syn_kvcache_t,
+        k_out: *mut *const f32,
+        v_out: *mut *const f32,
+        seq_len_out: *mut usize,
+    ) -> syn_status_t;
+
+    pub fn syn_kvcache_reset(cache: *mut syn_kvcache_t) -> syn_status_t;
 }

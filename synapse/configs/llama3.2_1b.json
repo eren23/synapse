@@ -1,0 +1,32 @@
+{
+    "name": "LLaMA-3.2-1B",
+    "architecture": {
+        "hidden_size": 2048,
+        "num_layers": 16,
+        "vocab_size": 128256,
+        "max_sequence_length": 131072,
+        "tie_word_embeddings": true
+    },
+    "attention": {
+        "type": "GQA",
+        "num_heads": 32,
+        "num_kv_heads": 8,
+        "head_dim": 64
+    },
+    "norm": {
+        "type": "RMSNorm",
+        "eps": 1e-5
+    },
+    "ffn": {
+        "type": "SwiGLU",
+        "intermediate_size": 8192
+    },
+    "position": {
+        "type": "RoPE",
+        "base": 500000.0,
+        "max_position_embeddings": 131072
+    },
+    "quantization": {
+        "type": "F16"
+    }
+}

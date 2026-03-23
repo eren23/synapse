@@ -27,6 +27,11 @@ const transpose_ops = synapse.ops.transpose;
 const layernorm_ops = synapse.ops.layernorm;
 const attention_ops = synapse.ops.attention;
 const rope_ops = synapse.ops.rope;
+const rmsnorm_ops = synapse.ops.rmsnorm;
+const silu_ops = synapse.ops.silu;
+const quantize_ops = synapse.ops.quantize;
+const qmatmul_ops = synapse.ops.qmatmul;
+const kvcache_ops = synapse.ops.kvcache;
 
 // --- Allocator modules (separate named modules, no file overlap with synapse) ---
 const ArenaAllocator = @import("arena").ArenaAllocator;
@@ -75,6 +80,7 @@ fn mapError(err: anyerror) c_int {
         error.IncompatibleShapes => SYN_ERR_SHAPE_MISMATCH,
         error.RankTooHigh => SYN_ERR_INVALID_DIMENSIONS,
         error.InvalidNormDims => SYN_ERR_INVALID_ARG,
+        error.CacheFull => SYN_ERR_INVALID_ARG,
         else => SYN_ERR_INTERNAL,
     };
 }
@@ -96,6 +102,10 @@ inline fn ptrToArena(p: ?*anyopaque) ?*ArenaAllocator {
 }
 
 inline fn ptrToPool(p: ?*anyopaque) ?*FfiPool {
+    return @ptrCast(@alignCast(p orelse return null));
+}
+
+inline fn ptrToKvCache(p: ?*anyopaque) ?*kvcache_ops.KvCache {
     return @ptrCast(@alignCast(p orelse return null));
 }
 
@@ -965,4 +975,202 @@ pub export fn syn_causal_mask(out: ?*?*anyopaque, seq_len: usize) c_int {
     }
 
     return wrapTensor(mask, out_ptr);
+}
+
+// ============================================================
+// RMS normalization (trailing dims, gamma affine)
+// ============================================================
+
+pub export fn syn_rmsnorm_forward(
+    out: ?*?*anyopaque,
+    input: ?*anyopaque,
+    gamma: ?*anyopaque,
+    num_norm_dims: usize,
+    eps: f32,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const gamma_tw = ptrToTensor(gamma) orelse return SYN_ERR_NULL_PTR;
+
+    if (!in_tw.tensor.isContiguous()) return SYN_ERR_NOT_CONTIGUOUS;
+
+    const ndim = in_tw.tensor.shape.ndim;
+    if (num_norm_dims == 0 or num_norm_dims > ndim) return SYN_ERR_INVALID_ARG;
+
+    // Compute norm_size and validate gamma length
+    var norm_size: usize = 1;
+    for ((ndim - num_norm_dims)..ndim) |d| norm_size *= in_tw.tensor.shape.dims[d];
+    if (gamma_tw.tensor.numel() != norm_size) return SYN_ERR_SHAPE_MISMATCH;
+
+    const gamma_data = gamma_tw.tensor.storage.dataAs(f32);
+    const g_off = gamma_tw.tensor.offset;
+
+    const result = rmsnorm_ops.rmsNorm(
+        ffi_allocator,
+        in_tw.tensor,
+        num_norm_dims,
+        gamma_data[g_off .. g_off + norm_size],
+        eps,
+    ) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// SiLU activation (flat f32 arrays)
+// ============================================================
+
+pub export fn syn_silu(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    silu_ops.silu(d[0..len], s[0..len]);
+    return SYN_OK;
+}
+
+// ============================================================
+// Fused SwiGLU: dst[i] = silu(gate[i]) * up[i] (flat f32 arrays)
+// ============================================================
+
+pub export fn syn_swiglu(dst: ?[*]f32, gate: ?[*]const f32, up: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const g = gate orelse return SYN_ERR_NULL_PTR;
+    const u = up orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    silu_ops.swigluFused(d[0..len], g[0..len], u[0..len]);
+    return SYN_OK;
+}
+
+// ============================================================
+// Per-channel INT8 quantization
+// ============================================================
+
+pub export fn syn_quantize_per_channel_int8(
+    data: ?[*]const f32,
+    channels: usize,
+    channel_size: usize,
+    out: ?[*]i8,
+    scales: ?[*]f32,
+) c_int {
+    const d = data orelse return SYN_ERR_NULL_PTR;
+    const o = out orelse return SYN_ERR_NULL_PTR;
+    const s = scales orelse return SYN_ERR_NULL_PTR;
+    if (channels == 0 or channel_size == 0) return SYN_ERR_INVALID_ARG;
+    quantize_ops.quantizePerChannelInt8(d, channels, channel_size, o, s);
+    return SYN_OK;
+}
+
+// ============================================================
+// Per-channel INT8 dequantization
+// ============================================================
+
+pub export fn syn_dequantize_per_channel_int8(
+    data: ?[*]const i8,
+    channels: usize,
+    channel_size: usize,
+    out: ?[*]f32,
+    scales: ?[*]const f32,
+) c_int {
+    const d = data orelse return SYN_ERR_NULL_PTR;
+    const o = out orelse return SYN_ERR_NULL_PTR;
+    const s = scales orelse return SYN_ERR_NULL_PTR;
+    if (channels == 0 or channel_size == 0) return SYN_ERR_INVALID_ARG;
+    quantize_ops.dequantizePerChannelInt8(d, channels, channel_size, o, s);
+    return SYN_OK;
+}
+
+// ============================================================
+// INT8 quantized GEMM with per-channel scaling
+// ============================================================
+
+pub export fn syn_qgemm_int8(
+    m: usize,
+    n: usize,
+    k: usize,
+    a: ?[*]const i8,
+    lda: usize,
+    b: ?[*]const i8,
+    ldb: usize,
+    c: ?[*]f32,
+    ldc: usize,
+    scales_a: ?[*]const f32,
+    scales_b: ?[*]const f32,
+) c_int {
+    const a_ptr = a orelse return SYN_ERR_NULL_PTR;
+    const b_ptr = b orelse return SYN_ERR_NULL_PTR;
+    const c_ptr = c orelse return SYN_ERR_NULL_PTR;
+    const sa = scales_a orelse return SYN_ERR_NULL_PTR;
+    const sb = scales_b orelse return SYN_ERR_NULL_PTR;
+    if (m == 0 or n == 0 or k == 0) return SYN_OK;
+
+    const eff_kc = @min(qmatmul_ops.KC, k);
+    const eff_mc = ((@min(qmatmul_ops.MC, m) + qmatmul_ops.MR - 1) / qmatmul_ops.MR) * qmatmul_ops.MR;
+    const eff_nc = ((@min(qmatmul_ops.NC, n) + qmatmul_ops.NR - 1) / qmatmul_ops.NR) * qmatmul_ops.NR;
+
+    const pa = ffi_allocator.alloc(i8, eff_mc * eff_kc) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(pa);
+    const pb = ffi_allocator.alloc(i8, eff_nc * eff_kc) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(pb);
+
+    qmatmul_ops.int8GemmTiled(m, n, k, a_ptr, lda, b_ptr, ldb, c_ptr, ldc, sa, sb, pa.ptr, pb.ptr);
+    return SYN_OK;
+}
+
+// ============================================================
+// KV-Cache management
+// ============================================================
+
+pub export fn syn_kvcache_create(
+    max_seq: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    out: ?*?*anyopaque,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const cache = ffi_allocator.create(kvcache_ops.KvCache) catch return SYN_ERR_OUT_OF_MEMORY;
+    cache.* = kvcache_ops.KvCache.create(ffi_allocator, max_seq, n_kv_heads, head_dim) catch |err| {
+        ffi_allocator.destroy(cache);
+        return mapError(err);
+    };
+    out_ptr.* = @ptrCast(cache);
+    return SYN_OK;
+}
+
+pub export fn syn_kvcache_destroy(cache: ?*anyopaque) c_int {
+    const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
+    c.destroy(ffi_allocator);
+    ffi_allocator.destroy(c);
+    return SYN_OK;
+}
+
+pub export fn syn_kvcache_append(
+    cache: ?*anyopaque,
+    k_token: ?[*]const f32,
+    v_token: ?[*]const f32,
+    stride: usize,
+) c_int {
+    const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
+    const kp = k_token orelse return SYN_ERR_NULL_PTR;
+    const vp = v_token orelse return SYN_ERR_NULL_PTR;
+    c.append(kp[0..stride], vp[0..stride]) catch |err| return mapError(err);
+    return SYN_OK;
+}
+
+pub export fn syn_kvcache_slice(
+    cache: ?*anyopaque,
+    k_out: ?*[*]const f32,
+    v_out: ?*[*]const f32,
+    seq_len_out: ?*usize,
+) c_int {
+    const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
+    const s = c.slice();
+    if (k_out) |p| p.* = s.k.ptr;
+    if (v_out) |p| p.* = s.v.ptr;
+    if (seq_len_out) |p| p.* = s.seq_len;
+    return SYN_OK;
+}
+
+pub export fn syn_kvcache_reset(cache: ?*anyopaque) c_int {
+    const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
+    c.reset();
+    return SYN_OK;
 }

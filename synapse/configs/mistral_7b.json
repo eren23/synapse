@@ -1,0 +1,33 @@
+{
+    "name": "Mistral-7B-v0.3",
+    "architecture": {
+        "hidden_size": 4096,
+        "num_layers": 32,
+        "vocab_size": 32768,
+        "max_sequence_length": 32768,
+        "tie_word_embeddings": false
+    },
+    "attention": {
+        "type": "SlidingWindow",
+        "num_heads": 32,
+        "num_kv_heads": 8,
+        "head_dim": 128,
+        "window_size": 4096
+    },
+    "norm": {
+        "type": "RMSNorm",
+        "eps": 1e-5
+    },
+    "ffn": {
+        "type": "SwiGLU",
+        "intermediate_size": 14336
+    },
+    "position": {
+        "type": "RoPE",
+        "base": 1000000.0,
+        "max_position_embeddings": 32768
+    },
+    "quantization": {
+        "type": "F32"
+    }
+}

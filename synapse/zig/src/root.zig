@@ -17,4 +17,9 @@ pub const ops = struct {
     pub const transpose = @import("ops/transpose.zig");
     pub const rope = @import("ops/rope.zig");
     pub const attention = @import("ops/attention.zig");
+    pub const rmsnorm = @import("ops/rmsnorm.zig");
+    pub const silu = @import("ops/silu.zig");
+    pub const quantize = @import("ops/quantize.zig");
+    pub const qmatmul = @import("ops/qmatmul.zig");
+    pub const kvcache = @import("ops/kvcache.zig");
 };

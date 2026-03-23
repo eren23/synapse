@@ -281,6 +281,254 @@ impl Tensor {
             Ok(Tensor::from_raw(out))
         }
     }
+
+    /// RMS normalization over trailing dimensions.
+    ///
+    /// `gamma` is a 1-D affine parameter sized to the product of
+    /// the last `num_norm_dims` dimensions of `self`.
+    pub fn rmsnorm(
+        &self,
+        gamma: &Tensor,
+        num_norm_dims: usize,
+        eps: f32,
+    ) -> Result<Tensor, SynapseError> {
+        let mut out: *mut ffi::syn_tensor_t = ptr::null_mut();
+        unsafe {
+            check_status(ffi::syn_rmsnorm_forward(
+                &mut out,
+                self.ptr,
+                gamma.ptr,
+                num_norm_dims,
+                eps,
+            ))?;
+            Ok(Tensor::from_raw(out))
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// Flat-array activation helpers
+// ------------------------------------------------------------------
+
+/// In-place SiLU activation: `dst[i] = src[i] / (1 + exp(-src[i]))`.
+pub fn silu(dst: &mut [f32], src: &[f32]) -> Result<(), SynapseError> {
+    assert_eq!(dst.len(), src.len());
+    unsafe {
+        check_status(ffi::syn_silu(
+            dst.as_mut_ptr(),
+            src.as_ptr(),
+            src.len(),
+        ))
+    }
+}
+
+/// Fused SwiGLU: `dst[i] = silu(gate[i]) * up[i]`.
+pub fn swiglu(dst: &mut [f32], gate: &[f32], up: &[f32]) -> Result<(), SynapseError> {
+    assert_eq!(dst.len(), gate.len());
+    assert_eq!(gate.len(), up.len());
+    unsafe {
+        check_status(ffi::syn_swiglu(
+            dst.as_mut_ptr(),
+            gate.as_ptr(),
+            up.as_ptr(),
+            gate.len(),
+        ))
+    }
+}
+
+// ------------------------------------------------------------------
+// INT8 quantization helpers
+// ------------------------------------------------------------------
+
+/// Quantize a `[channels, channel_size]` f32 matrix to per-channel INT8.
+///
+/// Returns `(quantized_data, scales)`.
+pub fn quantize_per_channel_int8(
+    data: &[f32],
+    channels: usize,
+    channel_size: usize,
+) -> Result<(Vec<i8>, Vec<f32>), SynapseError> {
+    if channels == 0 || channel_size == 0 {
+        return Err(SynapseError::InvalidArg);
+    }
+    if data.len() != channels * channel_size {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    let mut out = vec![0i8; channels * channel_size];
+    let mut scales = vec![0.0f32; channels];
+    unsafe {
+        check_status(ffi::syn_quantize_per_channel_int8(
+            data.as_ptr(),
+            channels,
+            channel_size,
+            out.as_mut_ptr(),
+            scales.as_mut_ptr(),
+        ))?;
+    }
+    Ok((out, scales))
+}
+
+/// Dequantize a `[channels, channel_size]` INT8 matrix back to f32.
+pub fn dequantize_per_channel_int8(
+    data: &[i8],
+    channels: usize,
+    channel_size: usize,
+    scales: &[f32],
+) -> Result<Vec<f32>, SynapseError> {
+    if channels == 0 || channel_size == 0 {
+        return Err(SynapseError::InvalidArg);
+    }
+    if data.len() != channels * channel_size || scales.len() != channels {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    let mut out = vec![0.0f32; channels * channel_size];
+    unsafe {
+        check_status(ffi::syn_dequantize_per_channel_int8(
+            data.as_ptr(),
+            channels,
+            channel_size,
+            out.as_mut_ptr(),
+            scales.as_ptr(),
+        ))?;
+    }
+    Ok(out)
+}
+
+/// INT8 quantized GEMM: `C[m,n] = diag(scales_a) * (A_i8 * B_i8) * diag(scales_b)`.
+pub fn qgemm_int8(
+    m: usize,
+    n: usize,
+    k: usize,
+    a: &[i8],
+    b: &[i8],
+    scales_a: &[f32],
+    scales_b: &[f32],
+) -> Result<Vec<f32>, SynapseError> {
+    if m == 0 || n == 0 || k == 0 {
+        return Ok(vec![0.0f32; m * n]);
+    }
+    if a.len() < m * k || b.len() < k * n {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    if scales_a.len() < m || scales_b.len() < n {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    let mut c = vec![0.0f32; m * n];
+    unsafe {
+        check_status(ffi::syn_qgemm_int8(
+            m, n, k,
+            a.as_ptr(), k,
+            b.as_ptr(), n,
+            c.as_mut_ptr(), n,
+            scales_a.as_ptr(),
+            scales_b.as_ptr(),
+        ))?;
+    }
+    Ok(c)
+}
+
+// ------------------------------------------------------------------
+// KV-Cache (RAII wrapper over opaque FFI handle)
+// ------------------------------------------------------------------
+
+/// An owned, RAII-managed KV-cache backed by the Zig runtime.
+pub struct KvCache {
+    ptr: *mut ffi::syn_kvcache_t,
+    stride: usize,
+}
+
+unsafe impl Send for KvCache {}
+
+impl Drop for KvCache {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() {
+            unsafe { ffi::syn_kvcache_destroy(self.ptr) };
+        }
+    }
+}
+
+impl fmt::Debug for KvCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "KvCache(stride={})", self.stride)
+    }
+}
+
+impl KvCache {
+    /// Create a KV-cache with pre-allocated buffers.
+    pub fn new(max_seq: usize, n_kv_heads: usize, head_dim: usize) -> Result<Self, SynapseError> {
+        let mut ptr: *mut ffi::syn_kvcache_t = ptr::null_mut();
+        unsafe {
+            check_status(ffi::syn_kvcache_create(
+                max_seq, n_kv_heads, head_dim, &mut ptr,
+            ))?;
+        }
+        Ok(KvCache { ptr, stride: n_kv_heads * head_dim })
+    }
+
+    /// Append K/V vectors for a single token.
+    ///
+    /// Both slices must have exactly `n_kv_heads * head_dim` elements.
+    pub fn append(&mut self, k_token: &[f32], v_token: &[f32]) -> Result<(), SynapseError> {
+        if k_token.len() != self.stride || v_token.len() != self.stride {
+            return Err(SynapseError::ShapeMismatch);
+        }
+        unsafe {
+            check_status(ffi::syn_kvcache_append(
+                self.ptr,
+                k_token.as_ptr(),
+                v_token.as_ptr(),
+                self.stride,
+            ))
+        }
+    }
+
+    /// Get the current sequence length and pointers into the populated region.
+    pub fn seq_len(&self) -> Result<usize, SynapseError> {
+        let mut seq_len: usize = 0;
+        unsafe {
+            check_status(ffi::syn_kvcache_slice(
+                self.ptr,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut seq_len,
+            ))?;
+        }
+        Ok(seq_len)
+    }
+
+    /// Get zero-copy slices of the populated K and V data.
+    ///
+    /// The returned slices are valid until the next `append` or `reset`.
+    pub fn slice(&self) -> Result<(&[f32], &[f32], usize), SynapseError> {
+        let mut k_ptr: *const f32 = ptr::null();
+        let mut v_ptr: *const f32 = ptr::null();
+        let mut seq_len: usize = 0;
+        unsafe {
+            check_status(ffi::syn_kvcache_slice(
+                self.ptr,
+                &mut k_ptr,
+                &mut v_ptr,
+                &mut seq_len,
+            ))?;
+            let total = seq_len * self.stride;
+            let k = if total > 0 {
+                std::slice::from_raw_parts(k_ptr, total)
+            } else {
+                &[]
+            };
+            let v = if total > 0 {
+                std::slice::from_raw_parts(v_ptr, total)
+            } else {
+                &[]
+            };
+            Ok((k, v, seq_len))
+        }
+    }
+
+    /// Reset the position counter to 0. No deallocation.
+    pub fn reset(&mut self) -> Result<(), SynapseError> {
+        unsafe { check_status(ffi::syn_kvcache_reset(self.ptr)) }
+    }
 }
 
 #[cfg(test)]
@@ -515,6 +763,305 @@ mod tests {
     fn test_causal_mask_memory_safety_10k() {
         for _ in 0..10_000 {
             let _mask = Tensor::causal_mask(4).unwrap();
+        }
+    }
+
+    // ================================================================
+    // FFI roundtrip: RMS normalization
+    // ================================================================
+
+    #[test]
+    fn test_rmsnorm_roundtrip() {
+        // input: [2, 4], normalize over last dim
+        let input = Tensor::from_data(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            &[2, 4],
+        )
+        .unwrap();
+        let gamma = Tensor::from_data(&[1.0, 1.0, 1.0, 1.0], &[4]).unwrap();
+
+        let result = input.rmsnorm(&gamma, 1, 1e-5).unwrap();
+        assert_eq!(result.shape().unwrap(), &[2, 4]);
+
+        let data = result.to_vec().unwrap();
+        // RMS norm preserves relative ordering within each row
+        assert!(data[0] < data[1] && data[1] < data[2] && data[2] < data[3]);
+        // Verify RMS normalization property: sqrt(mean(out^2)) ≈ 1 (with gamma=1)
+        let row0 = &data[0..4];
+        let rms: f32 = (row0.iter().map(|x| x * x).sum::<f32>() / 4.0).sqrt();
+        assert!((rms - 1.0).abs() < 0.1, "RMS should be ~1, got {}", rms);
+    }
+
+    #[test]
+    fn test_rmsnorm_shape_mismatch() {
+        let input = Tensor::from_data(&[1.0, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+        // gamma has wrong size (3 instead of 2)
+        let gamma = Tensor::from_data(&[1.0, 1.0, 1.0], &[3]).unwrap();
+        let err = input.rmsnorm(&gamma, 1, 1e-5);
+        assert!(err.is_err());
+        assert_eq!(err.unwrap_err(), SynapseError::ShapeMismatch);
+    }
+
+    #[test]
+    fn test_rmsnorm_invalid_norm_dims() {
+        let input = Tensor::from_data(&[1.0, 2.0], &[2]).unwrap();
+        let gamma = Tensor::from_data(&[1.0, 1.0], &[2]).unwrap();
+        // num_norm_dims=0 is invalid
+        let err = input.rmsnorm(&gamma, 0, 1e-5);
+        assert!(err.is_err());
+        assert_eq!(err.unwrap_err(), SynapseError::InvalidArg);
+    }
+
+    #[test]
+    fn test_rmsnorm_memory_safety_10k() {
+        for _ in 0..10_000 {
+            let input = Tensor::from_data(&[1.0, 2.0, 3.0, 4.0], &[1, 4]).unwrap();
+            let gamma = Tensor::from_data(&[1.0, 1.0, 1.0, 1.0], &[4]).unwrap();
+            let _result = input.rmsnorm(&gamma, 1, 1e-5).unwrap();
+        }
+    }
+
+    // ================================================================
+    // FFI roundtrip: SiLU activation
+    // ================================================================
+
+    #[test]
+    fn test_silu_roundtrip() {
+        let src = [0.0, 1.0, -1.0, 2.0];
+        let mut dst = [0.0f32; 4];
+        silu(&mut dst, &src).unwrap();
+
+        // silu(0) = 0
+        assert!(dst[0].abs() < 1e-6);
+        // silu(x) > 0 for x > 0
+        assert!(dst[1] > 0.0);
+        // silu(x) < 0 for x < 0
+        assert!(dst[2] < 0.0);
+        // silu(2) ≈ 2 * sigmoid(2) ≈ 2 * 0.8808 ≈ 1.7616
+        assert!((dst[3] - 1.7616).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_silu_null_ptr() {
+        let mut dst = [0.0f32; 4];
+        // Should succeed with zero length even though src is arbitrary
+        let result = silu(&mut dst[..0], &[]);
+        assert!(result.is_ok());
+    }
+
+    // ================================================================
+    // FFI roundtrip: SwiGLU
+    // ================================================================
+
+    #[test]
+    fn test_swiglu_roundtrip() {
+        let gate = [0.0, 1.0, 2.0, -1.0];
+        let up = [1.0, 2.0, 3.0, 4.0];
+        let mut dst = [0.0f32; 4];
+        swiglu(&mut dst, &gate, &up).unwrap();
+
+        // swiglu(0, x) = silu(0) * x = 0
+        assert!(dst[0].abs() < 1e-6);
+        // swiglu(g, u) = silu(g) * u
+        assert!(dst[1] > 0.0); // silu(1) * 2
+        assert!(dst[2] > 0.0); // silu(2) * 3
+        assert!(dst[3] < 0.0); // silu(-1) * 4 < 0
+    }
+
+    // ================================================================
+    // FFI roundtrip: quantize / dequantize
+    // ================================================================
+
+    #[test]
+    fn test_quantize_dequantize_roundtrip() {
+        let data = vec![1.0, -2.0, 3.0, -4.0, 0.5, -0.5, 1.5, -1.5];
+        let channels = 2;
+        let channel_size = 4;
+
+        let (quantized, scales) = quantize_per_channel_int8(&data, channels, channel_size).unwrap();
+        assert_eq!(quantized.len(), 8);
+        assert_eq!(scales.len(), 2);
+
+        let dequantized = dequantize_per_channel_int8(&quantized, channels, channel_size, &scales).unwrap();
+        assert_eq!(dequantized.len(), 8);
+
+        // Dequantized should be close to original (quantization error < scale)
+        for (orig, deq) in data.iter().zip(dequantized.iter()) {
+            let err = (orig - deq).abs();
+            assert!(err < 0.1, "quantization error too large: {} vs {}", orig, deq);
+        }
+    }
+
+    #[test]
+    fn test_quantize_invalid_dimensions() {
+        let result = quantize_per_channel_int8(&[], 0, 0);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), SynapseError::InvalidArg);
+    }
+
+    #[test]
+    fn test_quantize_shape_mismatch() {
+        // data has 4 elements but channels * channel_size = 6
+        let result = quantize_per_channel_int8(&[1.0, 2.0, 3.0, 4.0], 2, 3);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), SynapseError::ShapeMismatch);
+    }
+
+    // ================================================================
+    // FFI roundtrip: INT8 quantized GEMM
+    // ================================================================
+
+    #[test]
+    fn test_qgemm_roundtrip() {
+        // Simple 2x3 * 3x2 = 2x2 with identity-like scales
+        let a: Vec<i8> = vec![1, 2, 3, 4, 5, 6];
+        let b: Vec<i8> = vec![7, 8, 9, 10, 11, 12];
+        let scales_a = vec![1.0f32, 1.0];
+        let scales_b = vec![1.0f32, 1.0];
+
+        let c = qgemm_int8(2, 2, 3, &a, &b, &scales_a, &scales_b).unwrap();
+        assert_eq!(c.len(), 4);
+
+        // Verify: C[0,0] = 1*7 + 2*9 + 3*11 = 7+18+33 = 58
+        assert!((c[0] - 58.0).abs() < 1e-3, "C[0,0] = {}", c[0]);
+        // C[0,1] = 1*8 + 2*10 + 3*12 = 8+20+36 = 64
+        assert!((c[1] - 64.0).abs() < 1e-3, "C[0,1] = {}", c[1]);
+    }
+
+    #[test]
+    fn test_qgemm_with_scales() {
+        let a: Vec<i8> = vec![127, 0, 0, 127];
+        let b: Vec<i8> = vec![127, 0, 0, 127];
+        let scales_a = vec![2.0f32, 3.0];
+        let scales_b = vec![0.5f32, 1.0];
+
+        let c = qgemm_int8(2, 2, 2, &a, &b, &scales_a, &scales_b).unwrap();
+        // C[0,0] = scales_a[0] * scales_b[0] * (127*127) = 2*0.5*16129 = 16129.0
+        assert!((c[0] - 16129.0).abs() < 1e-1, "C[0,0] = {}", c[0]);
+    }
+
+    #[test]
+    fn test_qgemm_zero_dimensions() {
+        let c = qgemm_int8(0, 0, 0, &[], &[], &[], &[]).unwrap();
+        assert!(c.is_empty());
+    }
+
+    // ================================================================
+    // FFI roundtrip: KV-Cache
+    // ================================================================
+
+    #[test]
+    fn test_kvcache_create_and_slice() {
+        let cache = KvCache::new(16, 2, 4).unwrap();
+        let seq_len = cache.seq_len().unwrap();
+        assert_eq!(seq_len, 0);
+    }
+
+    #[test]
+    fn test_kvcache_append_and_slice() {
+        let mut cache = KvCache::new(16, 2, 4).unwrap(); // stride = 8
+        let k_token = vec![1.0f32; 8];
+        let v_token = vec![2.0f32; 8];
+
+        cache.append(&k_token, &v_token).unwrap();
+        let (k, v, seq_len) = cache.slice().unwrap();
+
+        assert_eq!(seq_len, 1);
+        assert_eq!(k.len(), 8);
+        assert_eq!(v.len(), 8);
+        assert!(approx_eq(k, &k_token, 1e-6));
+        assert!(approx_eq(v, &v_token, 1e-6));
+    }
+
+    #[test]
+    fn test_kvcache_multiple_appends() {
+        let mut cache = KvCache::new(16, 1, 4).unwrap(); // stride = 4
+
+        for i in 0..5 {
+            let val = i as f32;
+            cache.append(&[val; 4], &[val + 10.0; 4]).unwrap();
+        }
+
+        let (k, v, seq_len) = cache.slice().unwrap();
+        assert_eq!(seq_len, 5);
+        assert_eq!(k.len(), 20);
+        assert_eq!(v.len(), 20);
+
+        // Verify first token
+        assert!(approx_eq(&k[0..4], &[0.0; 4], 1e-6));
+        assert!(approx_eq(&v[0..4], &[10.0; 4], 1e-6));
+    }
+
+    #[test]
+    fn test_kvcache_reset() {
+        let mut cache = KvCache::new(16, 1, 4).unwrap();
+        cache.append(&[1.0; 4], &[2.0; 4]).unwrap();
+        assert_eq!(cache.seq_len().unwrap(), 1);
+
+        cache.reset().unwrap();
+        assert_eq!(cache.seq_len().unwrap(), 0);
+
+        // Can append again after reset
+        cache.append(&[3.0; 4], &[4.0; 4]).unwrap();
+        assert_eq!(cache.seq_len().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_kvcache_shape_mismatch() {
+        let mut cache = KvCache::new(16, 2, 4).unwrap(); // stride = 8
+        // Wrong stride (4 instead of 8)
+        let err = cache.append(&[1.0; 4], &[2.0; 4]);
+        assert!(err.is_err());
+        assert_eq!(err.unwrap_err(), SynapseError::ShapeMismatch);
+    }
+
+    #[test]
+    fn test_kvcache_invalid_dimensions() {
+        let err = KvCache::new(0, 2, 4);
+        assert!(err.is_err());
+        assert_eq!(err.unwrap_err(), SynapseError::InvalidDimensions);
+    }
+
+    #[test]
+    fn test_kvcache_memory_safety_10k() {
+        for _ in 0..10_000 {
+            let mut cache = KvCache::new(4, 1, 4).unwrap();
+            cache.append(&[1.0; 4], &[2.0; 4]).unwrap();
+            let _ = cache.slice().unwrap();
+            cache.reset().unwrap();
+            // Cache dropped via RAII.
+        }
+    }
+
+    // ================================================================
+    // Memory safety: SiLU/SwiGLU/quantize 10K cycles
+    // ================================================================
+
+    #[test]
+    fn test_silu_memory_safety_10k() {
+        for _ in 0..10_000 {
+            let mut dst = [0.0f32; 4];
+            silu(&mut dst, &[1.0, 2.0, 3.0, 4.0]).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_quantize_dequantize_memory_safety_10k() {
+        for _ in 0..10_000 {
+            let data = vec![1.0, -2.0, 3.0, -4.0];
+            let (q, s) = quantize_per_channel_int8(&data, 1, 4).unwrap();
+            let _d = dequantize_per_channel_int8(&q, 1, 4, &s).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_qgemm_memory_safety_10k() {
+        let a: Vec<i8> = vec![1, 2, 3, 4];
+        let b: Vec<i8> = vec![5, 6, 7, 8];
+        let sa = vec![1.0f32, 1.0];
+        let sb = vec![1.0f32, 1.0];
+        for _ in 0..10_000 {
+            let _c = qgemm_int8(2, 2, 2, &a, &b, &sa, &sb).unwrap();
         }
     }
 }

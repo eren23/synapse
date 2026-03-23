@@ -39,8 +39,9 @@ typedef int32_t syn_status_t;
 /* ------------------------------------------------------------------ */
 typedef struct syn_storage_s syn_storage_t;
 typedef struct syn_tensor_s  syn_tensor_t;
-typedef struct syn_arena_s   syn_arena_t;
-typedef struct syn_pool_s    syn_pool_t;
+typedef struct syn_arena_s    syn_arena_t;
+typedef struct syn_pool_s     syn_pool_t;
+typedef struct syn_kvcache_s  syn_kvcache_t;
 
 /* ------------------------------------------------------------------ */
 /* Storage (ref-counted, 64-byte aligned f32 buffer)                   */
@@ -245,6 +246,93 @@ syn_status_t syn_rope_forward(syn_tensor_t **out,
 /*   mask[i][j] = 0 if j <= i, -inf otherwise (additive mask)         */
 /* ------------------------------------------------------------------ */
 syn_status_t syn_causal_mask(syn_tensor_t **out, size_t seq_len);
+
+/* ------------------------------------------------------------------ */
+/* RMS normalization (trailing dims)                                    */
+/*   input:  N-D tensor                                                */
+/*   gamma: 1-D tensor with size = product of trailing dims            */
+/*   num_norm_dims: number of trailing dimensions to normalize over    */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_rmsnorm_forward(syn_tensor_t **out,
+                                  syn_tensor_t *input,
+                                  syn_tensor_t *gamma,
+                                  size_t num_norm_dims,
+                                  float eps);
+
+/* ------------------------------------------------------------------ */
+/* SiLU activation on flat f32 arrays                                  */
+/*   dst[i] = src[i] / (1 + exp(-src[i]))                             */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_silu(float *dst, const float *src, size_t len);
+
+/* ------------------------------------------------------------------ */
+/* Fused SwiGLU on flat f32 arrays                                     */
+/*   dst[i] = silu(gate[i]) * up[i]                                    */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_swiglu(float *dst, const float *gate, const float *up,
+                         size_t len);
+
+/* ------------------------------------------------------------------ */
+/* Per-channel INT8 quantization                                       */
+/*   data: [channels × channel_size] row-major f32 input               */
+/*   out:  [channels × channel_size] int8 output                       */
+/*   scales: [channels] per-channel scale factors (written)             */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_quantize_per_channel_int8(const float *data,
+                                            size_t channels,
+                                            size_t channel_size,
+                                            int8_t *out,
+                                            float *scales);
+
+/* ------------------------------------------------------------------ */
+/* Per-channel INT8 dequantization                                     */
+/*   data: [channels × channel_size] int8 input                        */
+/*   out:  [channels × channel_size] f32 output                        */
+/*   scales: [channels] per-channel scale factors (read)                */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_dequantize_per_channel_int8(const int8_t *data,
+                                              size_t channels,
+                                              size_t channel_size,
+                                              float *out,
+                                              const float *scales);
+
+/* ------------------------------------------------------------------ */
+/* INT8 quantized GEMM: C = diag(scales_a) * (A_i8 * B_i8) * diag(sb) */
+/*   C must be pre-allocated [m × n], zeroed internally.               */
+/* ------------------------------------------------------------------ */
+syn_status_t syn_qgemm_int8(size_t m, size_t n, size_t k,
+                              const int8_t *a, size_t lda,
+                              const int8_t *b, size_t ldb,
+                              float *c, size_t ldc,
+                              const float *scales_a,
+                              const float *scales_b);
+
+/* ------------------------------------------------------------------ */
+/* KV-Cache for autoregressive inference                               */
+/*   Manages pre-allocated K/V buffers [max_seq, n_kv_heads, head_dim] */
+/* ------------------------------------------------------------------ */
+
+/** Create a KV-cache with pre-allocated buffers. */
+syn_status_t syn_kvcache_create(size_t max_seq, size_t n_kv_heads,
+                                 size_t head_dim, syn_kvcache_t **out);
+
+/** Destroy the KV-cache and free backing buffers. */
+syn_status_t syn_kvcache_destroy(syn_kvcache_t *cache);
+
+/** Append K/V vectors for one token.  stride = n_kv_heads * head_dim. */
+syn_status_t syn_kvcache_append(syn_kvcache_t *cache,
+                                 const float *k_token,
+                                 const float *v_token,
+                                 size_t stride);
+
+/** Get zero-copy views into populated region. Any out-pointer may be NULL. */
+syn_status_t syn_kvcache_slice(syn_kvcache_t *cache,
+                                const float **k_out,
+                                const float **v_out,
+                                size_t *seq_len_out);
+
+/** Reset position counter to 0.  No deallocation. */
+syn_status_t syn_kvcache_reset(syn_kvcache_t *cache);
 
 #ifdef __cplusplus
 }

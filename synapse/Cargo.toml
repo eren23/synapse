@@ -15,6 +15,7 @@ synapse-data = { path = "crates/synapse-data" }
 synapse-graph = { path = "crates/synapse-graph" }
 synapse-train = { path = "crates/synapse-train" }
 synapse-core = { path = "crates/synapse-core" }
+synapse-inference = { path = "crates/synapse-inference" }
 rand = "0.8"
 rand_distr = "0.4"
 
@@ -77,3 +78,43 @@ path = "tests/benchmarks/attention_bench.rs"
 [[test]]
 name = "transformer_throughput"
 path = "tests/benchmarks/transformer_throughput.rs"
+
+[[test]]
+name = "inference_e2e"
+path = "tests/integration/inference_e2e.rs"
+
+[[test]]
+name = "quantization_accuracy"
+path = "tests/integration/quantization_accuracy.rs"
+
+[[test]]
+name = "kvcache_correctness"
+path = "tests/integration/kvcache_correctness.rs"
+
+[[test]]
+name = "config_driven_assembly"
+path = "tests/integration/config_driven_assembly.rs"
+
+[[test]]
+name = "prefill_throughput"
+path = "tests/benchmarks/prefill_throughput.rs"
+
+[[test]]
+name = "inference_throughput"
+path = "tests/benchmarks/inference_throughput.rs"
+
+[[test]]
+name = "quantization_speedup"
+path = "tests/benchmarks/quantization_speedup.rs"
+
+[[test]]
+name = "memory_usage"
+path = "tests/benchmarks/memory_usage.rs"
+
+[[example]]
+name = "qwen3_chat"
+path = "examples/qwen3_chat.rs"
+
+[[example]]
+name = "model_benchmark"
+path = "examples/model_benchmark.rs"

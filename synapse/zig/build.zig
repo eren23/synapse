@@ -352,6 +352,99 @@ pub fn build(b: *std.Build) void {
     const attention_ops_test_step = b.step("test-attention", "Run attention ops unit tests only");
     attention_ops_test_step.dependOn(&run_attention_ops_tests.step);
 
+    // RMSNorm ops unit tests
+    const rmsnorm_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_rmsnorm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_rmsnorm_ops_tests = b.addRunArtifact(rmsnorm_ops_tests);
+    test_step.dependOn(&run_rmsnorm_ops_tests.step);
+
+    const rmsnorm_ops_test_step = b.step("test-rmsnorm", "Run RMSNorm ops unit tests only");
+    rmsnorm_ops_test_step.dependOn(&run_rmsnorm_ops_tests.step);
+
+    // SiLU ops unit tests
+    const silu_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_silu.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_silu_ops_tests = b.addRunArtifact(silu_ops_tests);
+    test_step.dependOn(&run_silu_ops_tests.step);
+
+    const silu_ops_test_step = b.step("test-silu", "Run SiLU ops unit tests only");
+    silu_ops_test_step.dependOn(&run_silu_ops_tests.step);
+
+    // Quantize ops unit tests
+    const quantize_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_quantize.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_quantize_ops_tests = b.addRunArtifact(quantize_ops_tests);
+    test_step.dependOn(&run_quantize_ops_tests.step);
+
+    const quantize_ops_test_step = b.step("test-quantize", "Run quantize ops unit tests only");
+    quantize_ops_test_step.dependOn(&run_quantize_ops_tests.step);
+
+    // Quantized matmul ops unit tests
+    const qmatmul_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_qmatmul.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_qmatmul_ops_tests = b.addRunArtifact(qmatmul_ops_tests);
+    test_step.dependOn(&run_qmatmul_ops_tests.step);
+
+    const qmatmul_ops_test_step = b.step("test-qmatmul", "Run quantized matmul ops unit tests only");
+    qmatmul_ops_test_step.dependOn(&run_qmatmul_ops_tests.step);
+
+    // KV-Cache module
+    const kvcache_mod = b.addModule("kvcache", .{
+        .root_source_file = b.path("src/ops/kvcache.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // KV-Cache unit tests
+    const kvcache_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_kvcache.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "kvcache", .module = kvcache_mod },
+                .{ .name = "tracking", .module = tracking_mod },
+            },
+        }),
+    });
+    const run_kvcache_ops_tests = b.addRunArtifact(kvcache_ops_tests);
+    test_step.dependOn(&run_kvcache_ops_tests.step);
+
+    const kvcache_ops_test_step = b.step("test-kvcache", "Run KV-Cache ops unit tests only");
+    kvcache_ops_test_step.dependOn(&run_kvcache_ops_tests.step);
+
     // Tensor unit tests (standalone)
     const tensor_test_step = b.step("test-tensor", "Run tensor unit tests only");
     tensor_test_step.dependOn(&run_tensor_tests.step);
@@ -569,4 +662,70 @@ pub fn build(b: *std.Build) void {
     const run_bench_attention = b.addRunArtifact(bench_attention);
     const bench_attention_step = b.step("bench-attention", "Run attention benchmarks");
     bench_attention_step.dependOn(&run_bench_attention.step);
+
+    // RMSNorm benchmarks — compiled with ReleaseFast
+    const bench_rmsnorm = b.addExecutable(.{
+        .name = "bench_rmsnorm",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_rmsnorm.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    b.installArtifact(bench_rmsnorm);
+
+    const run_bench_rmsnorm = b.addRunArtifact(bench_rmsnorm);
+    const bench_rmsnorm_step = b.step("bench-rmsnorm", "Run RMSNorm benchmarks");
+    bench_rmsnorm_step.dependOn(&run_bench_rmsnorm.step);
+
+    // SiLU/SwiGLU benchmarks — compiled with ReleaseFast
+    const bench_silu = b.addExecutable(.{
+        .name = "bench_silu",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_silu.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    b.installArtifact(bench_silu);
+
+    const run_bench_silu = b.addRunArtifact(bench_silu);
+    const bench_silu_step = b.step("bench-silu", "Run SiLU/SwiGLU benchmarks");
+    bench_silu_step.dependOn(&run_bench_silu.step);
+
+    // INT8 Quantized GEMM benchmarks — compiled with ReleaseFast
+    const bench_qmatmul = b.addExecutable(.{
+        .name = "bench_qmatmul",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_qmatmul.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_qmatmul);
+
+    const run_bench_qmatmul = b.addRunArtifact(bench_qmatmul);
+    const bench_qmatmul_step = b.step("bench-qmatmul", "Run INT8 quantized GEMM benchmarks");
+    bench_qmatmul_step.dependOn(&run_bench_qmatmul.step);
+
+    // KV-Cache benchmarks — compiled with ReleaseFast
+    const bench_kvcache = b.addExecutable(.{
+        .name = "bench_kvcache",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_kvcache.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_kvcache);
+
+    const run_bench_kvcache = b.addRunArtifact(bench_kvcache);
+    const bench_kvcache_step = b.step("bench-kvcache", "Run KV-Cache benchmarks");
+    bench_kvcache_step.dependOn(&run_bench_kvcache.step);
 }
