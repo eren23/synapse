@@ -1,41 +1,27 @@
 {
   "task_id": "task-15",
-  "title": "E2E integration tests + benchmarks + examples",
-  "description": "Implement all end-to-end integration tests, performance benchmarks with hard thresholds, and example applications.\n\nIntegration tests:\n- tests/integration/inference_e2e.rs: Load Qwen3-0.6B from safetensors, generate 50 tokens greedy, verify coherent output (top-1 agreement >= 95% with HF reference)\n- tests/integration/quantization_accuracy.rs: INT8 vs f32 logits comparison, top-1 agreement >= 99%\n- tests/integration/kvcache_correctness.rs: cached vs uncached output bit-exact\n- tests/integration/config_driven_assembly.rs: Qwen3 + LLaMA configs build different architectures from same engine, assembly <= 2 sec\n\nBenchmarks (HARD thresholds):\n- tests/benchmarks/prefill_throughput.rs: >= 500 tok/s Qwen3 f32\n- tests/benchmarks/inference_throughput.rs: >= 20 tok/s decode f32, >= 35 tok/s INT8\n- tests/benchmarks/quantization_speedup.rs: INT8 vs f32 throughput\n- tests/benchmarks/memory_usage.rs: <= 3GB f32, <= 1.5GB INT8\nUse cfg!(debug_assertions) for ~5x lower debug thresholds.\n\nExamples:\n- examples/qwen3_chat.rs: Interactive chat with Qwen3-0.6B\n- examples/model_benchmark.rs: Benchmark any model via config\n\nVerify ALL existing Phase 1+2 tests still pass (no regressions).\n\nPass/fail:\n- All integration tests pass\n- All benchmark thresholds met\n- Examples compile and run\n- No Phase 1+2 regressions",
-  "status": "done",
-  "task_kind": "integrate",
-  "role_hint": "impl",
+  "title": "Phase 4 code review and optimization audit",
+  "description": "Review all Phase 4 changes for correctness, safety, and performance:\n\n1. **FFI Safety**: All `unsafe` blocks in decoder_layer.rs, quantized_linear.rs are correct \u2014 pointer arithmetic, buffer sizes, alignment\n2. **KV-cache correctness**: forward_one() and forward_prefill() produce mathematically equivalent results to forward()\n3. **Metal shader correctness**: Thread safety, bounds checking, shared memory races\n4. **No regressions**: All Phase 3 functionality preserved\n5. **Memory safety**: No leaks in KV-cache, Metal buffer pool, aligned weight buffers\n6. **Performance**: Benchmarks actually measure what they claim (no measurement artifacts)\n7. **Code quality**: No dead code, proper error handling, cfg(feature) gates correct\n\nProvide structured feedback on any issues found with severity ratings (critical/major/minor).",
+  "status": "pending",
+  "task_kind": "judge",
+  "role_hint": "judge",
   "deps": [
     "task-14"
   ],
   "target_files": [
-    "synapse/tests/integration/inference_e2e.rs",
-    "synapse/tests/integration/quantization_accuracy.rs",
-    "synapse/tests/integration/kvcache_correctness.rs",
-    "synapse/tests/integration/config_driven_assembly.rs",
-    "synapse/tests/benchmarks/inference_throughput.rs",
-    "synapse/tests/benchmarks/prefill_throughput.rs",
-    "synapse/tests/benchmarks/quantization_speedup.rs",
-    "synapse/tests/benchmarks/memory_usage.rs",
-    "synapse/examples/qwen3_chat.rs",
-    "synapse/examples/model_benchmark.rs"
+    "synapse/crates/synapse-inference/src/model/decoder_layer.rs",
+    "synapse/crates/synapse-inference/src/model/causal_lm.rs",
+    "synapse/crates/synapse-inference/src/generation/pipeline.rs",
+    "synapse/crates/synapse-inference/src/quantization/quantized_linear.rs",
+    "synapse/crates/synapse-inference/src/metal/dispatch.rs"
   ],
   "read_files": [],
   "files_modified": [],
-  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"ad6862c5-0a2b-4652-b221-964754f2ba61\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"81a8219b-62b3-465c-88cf-60fd917b2821\",\"session_id\":\"f5789fa3-93c8-458c-97e6-575db4034d8e\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"ad6862c5-0a2b-4652-b221-964754f2ba61\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "result_summary": "",
   "symbol_scope": [],
-  "tokens_used": 3937,
+  "tokens_used": 0,
   "cost_usd": 0.0,
-  "attempt_count": 1,
-  "attempt_history": [
-    {
-      "attempt": 1,
-      "error": "Task timed out after 1200.0s",
-      "timestamp": "2026-03-23T14:33:13.244821+00:00",
-      "duration_s": 1200.0090470314026,
-      "tokens_used": 0,
-      "failure_cause": "timeout"
-    }
-  ],
+  "attempt_count": 0,
+  "attempt_history": [],
   "has_diff": false
 }

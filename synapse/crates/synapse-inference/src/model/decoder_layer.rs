@@ -856,19 +856,16 @@ mod tests {
 
     // ── Benchmark: syn_swiglu >= 2× throughput vs separate silu+mul ─
 
-    /// Scalar two-pass SwiGLU into pre-allocated buffer.
-    /// Uses `black_box` to prevent LLVM auto-vectorization, giving a fair
-    /// scalar-vs-SIMD comparison (same approach as `rmsnorm_naive`).
+    /// Scalar SwiGLU: silu(gate) * up, one element at a time.
+    /// Uses `black_box` on the exp input to prevent LLVM from batching
+    /// multiple exp() calls into SIMD — same strategy as `rmsnorm_naive`.
     #[inline(never)]
     fn swiglu_separate_scalar(dst: &mut [f32], gate: &[f32], up: &[f32]) {
-        // Pass 1: silu(gate) → dst
         for i in 0..dst.len() {
-            let g = std::hint::black_box(gate[i]);
-            dst[i] = std::hint::black_box(g / (1.0 + (-g).exp()));
-        }
-        // Pass 2: dst *= up  (separate pass = extra cache traversal)
-        for i in 0..dst.len() {
-            dst[i] = std::hint::black_box(std::hint::black_box(dst[i]) * up[i]);
+            let g = gate[i];
+            let neg_g = std::hint::black_box(-g);
+            let s = g / (1.0 + neg_g.exp());
+            dst[i] = std::hint::black_box(s) * up[i];
         }
     }
 

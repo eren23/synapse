@@ -1,0 +1,8 @@
+{
+  "synapse/crates/synapse-inference/src/quantization/quantized_linear.rs": "f9beedbeb1266bb89e1307a253f9e7a95e5afec62e3a31c0f8c94dc9c392e91a",
+  "synapse/crates/synapse-inference/src/quantization/int8.rs": "68d192dd0ad94fb9ffe90553bc7101a3d4059fc5208dbdea4c77fdc03b91ad4b",
+  "synapse/crates/synapse-inference/src/weight_loading/safetensors.rs": "a836964d352ceb3a614f511916f9467bb8ed947fe1a5ac8cc815371caaa66821",
+  "synapse/crates/synapse-inference/src/weight_loading/mod.rs": "7d763feea4637e05a667cc43c27c2fb348e6322c0d2bbef7b06cb5ef3438ae99",
+  "synapse/crates/synapse-inference/src/lib.rs": "3088c9111c170654eb12d7066fa86e634a5169b80dc0002e47427d93dd37d6f5",
+  "synapse/crates/synapse-inference/Cargo.toml": "945ebb59919df540115c07382e5571bba91a3dcea3ba81869b28c878935570cc"
+}

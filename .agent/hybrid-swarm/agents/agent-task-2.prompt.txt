@@ -1,0 +1,16 @@
+# Task: Wire syn_rmsnorm_forward() into decoder layer
+
+Replace the naive scalar `rmsnorm()` function in `decoder_layer.rs` (lines 282-295) with an FFI call to `synapse_sys::syn_rmsnorm_forward()`. The FFI function takes `(out_ptr, input_ptr, weight_ptr, eps, batch_size, hidden_size)`. Also replace `apply_headwise_rmsnorm()` if applicable. Keep the old scalar implementation as `rmsnorm_naive()` for test comparison.
+
+**Tests (REQUIRED):**
+- Unit test: SIMD rmsnorm output matches naive within 1e-5 relative error for shapes [1, 1024], [4, 1024], [128, 1024]
+- Verify weight application is correct (weighted vs unweighted)
+- Edge case: hidden_size=1, batch_size=1
+
+**Benchmark (HARD threshold):**
+- `syn_rmsnorm_forward` ≥ 4× throughput vs scalar `rmsnorm_naive` on [1, 1024]
+
+Target files: synapse/crates/synapse-inference/src/model/decoder_layer.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

@@ -1,0 +1,16 @@
+# Task: Wire syn_sgemm() into matmul_t()
+
+Replace the naive triple-nested-loop `matmul_t()` function in `decoder_layer.rs` (lines 263-279) with an FFI call to `synapse_sys::syn_sgemm()`. This is a drop-in replacement — same function signature (`a: &[f32], b: &[f32], m: usize, k: usize, n: usize -> Vec<f32>`), same semantics (B is transposed), but calls the Zig SIMD tiled GEMM instead of scalar loops. The `syn_sgemm` function is already declared in `synapse-sys/src/lib.rs` and linked via `synapse.h`. Keep the old naive implementation as `matmul_t_naive()` for test comparison.
+
+**Tests (REQUIRED):**
+- Unit test: SIMD matmul output matches naive matmul_t_naive within 1e-5 relative error for various shapes ([1,512]×[512,1024], [4,1024]×[1024,3072], [128,1024]×[1024,1024])
+- Edge cases: m=1 (single token), k=1, non-power-of-2 dimensions
+- Full model forward pass: SIMD output matches naive output within 1e-4 (if model weights available, else synthetic weights)
+
+**Benchmark (HARD threshold):**
+- `syn_sgemm` ≥ 4× throughput vs `matmul_t_naive` on [1024, 1024] × [1024, 3072] in release mode
+
+Target files: synapse/crates/synapse-inference/src/model/decoder_layer.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

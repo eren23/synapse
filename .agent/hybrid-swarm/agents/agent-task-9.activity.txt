@@ -1,0 +1,1 @@
+All 3 Metal tests pass, and the crate compiles cleanly both 

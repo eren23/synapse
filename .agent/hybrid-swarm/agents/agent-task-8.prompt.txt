@@ -1,0 +1,25 @@
+# Task: Optimize safetensors weight loading with aligned buffers
+
+Optimize `load_safetensors()` in `safetensors.rs` to avoid the double-allocation pattern. Currently the loader mmaps the file, then copies ALL tensor data into new `Vec<f32>` allocations, doubling peak RSS.
+
+Implement Option A (minimal, aligned copy):
+1. For F32 safetensors: instead of `bytes_to_f32()` → `Vec<f32>`, allocate a 64-byte-aligned buffer using `std::alloc::alloc` with `Layout::from_size_align(size, 64)` and copy directly from mmap
+2. For BF16/F16: convert directly into the aligned buffer in one pass
+3. Wrap aligned buffers in a safe `AlignedBuffer` newtype that implements Drop
+4. Update `RawTensor` to use `AlignedBuffer` instead of `Vec<f32>`
+
+This ensures SIMD kernels get cache-line-aligned data without double-copying.
+
+**Tests (REQUIRED):**
+- Model loads correctly with new loading path (weights identical to old path within 1e-7)
+- Alignment check: all returned buffers are 64-byte aligned
+- BF16/F16 conversion produces correct values
+
+**Benchmark (HARD threshold):**
+- Model load time ≤ 80% of current for f32 safetensors
+- Peak RSS during loading ≤ 1.2× model file size
+
+Target files: synapse/crates/synapse-inference/src/weight_loading/safetensors.rs, synapse/crates/synapse-inference/src/weight_loading/mod.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

@@ -1,0 +1,21 @@
+# Task: Metal GPU backend: device, buffer pool, and shader compilation
+
+Create the Apple Metal GPU backend infrastructure in a new `metal/` module under `synapse-inference/src/`. This is feature-gated behind `#[cfg(feature = "metal")]`.
+
+Create these files:
+1. `metal/mod.rs` — Module root, re-exports
+2. `metal/device.rs` — `MetalBackend` struct wrapping `metal::Device`, `CommandQueue`, compiled `ComputePipelineState` for each shader. Methods: `new()` (detect GPU, compile shaders), `is_available()`
+3. `metal/buffer.rs` — `BufferPool` for GPU buffer reuse. Methods: `get_or_create(data: &[f32])`, `create_empty(size: usize)`, `release()`. Tracks allocated buffers, reuses by size.
+
+Add `metal` feature to `synapse-inference/Cargo.toml` with `metal = { version = "0.29" }` dependency.
+Update `lib.rs` to export the module behind `#[cfg(feature = "metal")]`.
+
+**Tests (REQUIRED):**
+- MetalBackend::new() succeeds on Apple Silicon (or gracefully errors on non-Apple)
+- BufferPool correctly reuses buffers of matching size
+- No GPU memory leaks after create/release cycle (100 iterations)
+
+Target files: synapse/crates/synapse-inference/src/metal/mod.rs, synapse/crates/synapse-inference/src/metal/device.rs, synapse/crates/synapse-inference/src/metal/buffer.rs, synapse/crates/synapse-inference/src/lib.rs, synapse/crates/synapse-inference/Cargo.toml
+
+## Context from Previous Runs
+No relevant learnings found for this project.

@@ -1,0 +1,31 @@
+# Task: Fix INT8 quantized linear with syn_qgemm_int8()
+
+Replace the naive i8→f32 dequantization loop in `QuantizedLinear::forward()` (quantized_linear.rs lines 72-94) with the Zig SIMD `syn_qgemm_int8()` FFI call. The current code casts every i8 weight to f32 in the inner loop, giving zero speedup over f32.
+
+The target is:
+rust
+unsafe {
+    synapse_sys::syn_qgemm_int8(
+        out.as_mut_ptr(), x_quantized.as_ptr(), self.weights_int8.as_ptr(),
+        scales_x.as_ptr(), self.scales.as_ptr(), m, n, k,
+    );
+}
+
+
+This requires quantizing the input activations (x) to INT8 on-the-fly before calling the kernel. Use `syn_quantize_per_channel_int8()` or implement a simple per-tensor quantize for x.
+
+Also update `QuantizedDecoderLayer::forward()` in `int8.rs` to use the new fast path.
+
+**Tests (REQUIRED):**
+- INT8 matmul output vs f32 matmul: max relative error < 0.1 for random matrices
+- Top-1 token agreement ≥ 99% over 100 generated tokens (full model)
+- Max absolute logit error ≤ 0.5
+
+**Benchmark (HARD threshold):**
+- INT8 decode throughput ≥ 1.5× vs f32 decode throughput
+- INT8 model memory ≤ 50% of f32 model memory
+
+Target files: synapse/crates/synapse-inference/src/quantization/quantized_linear.rs, synapse/crates/synapse-inference/src/quantization/int8.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

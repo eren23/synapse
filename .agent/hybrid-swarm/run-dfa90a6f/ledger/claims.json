@@ -1,0 +1,11 @@
+{
+  "synapse/crates/synapse-inference/src/model/decoder_layer.rs": {
+    "file_path": "synapse/crates/synapse-inference/src/model/decoder_layer.rs",
+    "agent_id": "agent-task-3",
+    "task_id": "task-3",
+    "base_version_hash": "",
+    "claim_type": "exclusive",
+    "timestamp": 1774292159.2950442,
+    "last_renewed": 1774292159.2950442
+  }
+}
