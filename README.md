@@ -10,7 +10,7 @@ Synapse is a modular inference engine with SIMD-vectorized kernels (Zig/ARM NEON
 
 Reference model: **Qwen3-0.6B** (596M params, loaded from HuggingFace safetensors).
 
-### Benchmark (Apple M4, 2026-03-23)
+### Benchmark (Apple M5, 2026-03-23)
 
 | Metric | Synapse (CPU+SIMD) | llama.cpp (Metal) |
 |--------|:------------------:|:-----------------:|

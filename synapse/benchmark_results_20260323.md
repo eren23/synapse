@@ -1,6 +1,6 @@
 # Synapse vs llama.cpp Benchmark Results
 **Date**: 2026-03-23
-**Hardware**: Apple M4, 19GB unified memory
+**Hardware**: Apple M5, 19GB unified memory
 **Model**: Qwen3-0.6B (596M params)
 
 ## Results
