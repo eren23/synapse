@@ -1,7 +1,7 @@
 {
   "run_id": "dfa90a6f",
   "goal": "# Swarm Goal\n\nSynapse Phase 4 \u2014 Performance Optimization: Wire SIMD Kernels, KV-Cache, Metal GPU\n\nClose the ~1000x performance gap between Synapse and llama.cpp on Qwen3-0.6B.\nCurrent state (2026-03-23 benchmarks on Apple M4):\n\n| Metric | Synapse (f32, CPU) | llama.cpp (BF16, Metal) | llama.cpp (Q4_K_M, Metal) |\n|--------|-------------------|------------------------|--------------------------|\n| Prefill tok/s (pp128) | **~5** | 5,368 | 5,518 |\n| Decode tok/s (tg64) | **~0.3** | 82 | 173 |\n| Model size | 1,938 MB | 1,138 MB | 373 MB |\n\nThe gap is caused by three compounding problems:\n1. **Zig SIMD kernels exist but are never called** \u2014 the inference hot path uses\n   naive triple-nested Rust loops (`matmul_t()`) instead of `syn_sgemm()` FFI\n2. **No KV-cache in generation** \u2014 the decode loop re-runs the full forward pass\n   on ALL tokens every step (quadratic complexity)\n3. **No GPU offload** \u2014 llama.cpp uses Metal on M4, Synapse is CPU-only\n\nPhase 4 wires up the existing SIMD kernels, implements proper KV-cache,\nadds Apple Metal GPU compute shaders, and makes INT8 quantization actually\nfast (currently zero speedup because dequantization happens in the inner loop).\n\n**Builds on top of Synapse Phase 3 (inference engine, component registry,\nweight loading, generation pipeline).** Modifies existing code \u2014 few new\nfiles, mostly rewiring hot paths.\n\n**CRITICAL RULE: Every task MUST include its own tests. No implementation\nwithout tests. Every benchmark MUST have a hard pass/fail threshold. If a\nbenchmark does not meet its threshold, the task FAILS.**\n\n---\n\n## 0) Phase 4 Overview\n\n### Root Cause Analysis: Why Synapse Is ~1000x Slower\n\nThe Phase 3 inference engine built correct abstractions but with placeholder\nimplementations in the hot path. Here is exactly what happens when you call\n`engine.generate()`:\n\n#### Current Hot Path (SLOW)\n\n```\nengine.generate(\"Hello\")\n  \u2192 pipeline.generate(tokens, config)\n    \u2192 LOOP for each new token:                    \u2190 No KV-cache: O(n\u00b2) total work\n        model.forward(ALL_TOKENS_SO_FAR)          \u2190 Reprocesses entire prefix\n          \u2192 for each layer:\n              norm (pure Rust scalar loop)         \u2190 Should call syn_rmsnorm_forward()\n              matmul_t(x, w_q) for Q projection   \u2190 NAIVE TRIPLE-NESTED RUST LOOP\n              matmul_t(x, w_k) for K projection   \u2190 Should call syn_sgemm()\n              matmul_t(x, w_v) for V projection   \u2190 Should call syn_sgemm()\n              attention scores (nested Rust loop)  \u2190 Should use fused attention kernel\n              matmul_t(attn, w_o) for output       \u2190 Should call syn_sgemm()\n              norm (pure Rust scalar loop)\n              matmul_t(x, w_gate) for FFN gate     \u2190 Should call syn_sgemm()\n              matmul_t(x, w_up) for FFN up         \u2190 Should call syn_sgemm()\n              silu activation (scalar)              \u2190 Should call syn_silu() / syn_swiglu()\n              matmul_t(hidden, w_down) for FFN down \u2190 Should call syn_sgemm()\n          \u2192 final_norm (scalar)\n          \u2192 matmul_t(hidden, lm_head)              \u2190 Should call syn_sgemm()\n        extract last logit\n        sample token\n        append to ALL_TOKENS\n```\n\n**9 matmuls per layer \u00d7 28 layers = 252 matmuls per forward pass, ALL using\nnaive Rust loops.** Plus no KV-cache means this entire forward pass runs on\nthe full sequence every decode step.\n\n#### Target Hot Path (FAST)\n\n```\nengine.generate(\"Hello\")\n  \u2192 pipeline.prefill(tokens)                       \u2190 Process prompt once\n      \u2192 for each layer:\n          syn_rmsnorm_forward() via FFI             \u2190 Zig SIMD\n          syn_sgemm() for Q/K/V projections         \u2190 Zig SIMD tiled GEMM\n          syn_attention_forward() via FFI            \u2190 Zig fused attention\n          syn_sgemm() for output projection          \u2190 Zig SIMD\n          syn_rmsnorm_forward() via FFI\n          syn_swiglu() for fused FFN                \u2190 Zig fused SwiGLU\n          syn_sgemm() for down projection            \u2190 Zig SIMD\n          kv_cache.append(k, v)                     \u2190 Store K/V for reuse\n  \u2192 LOOP for each new token:                        \u2190 KV-cache: O(n) per step\n      model.forward_one(new_token, kv_cache)       \u2190 Only process 1 token\n        \u2192 for each layer:\n            (same SIMD ops but on single token)\n            kv_cache.append(k, v)                   \u2190 Append 1 K/V entry\n            attention against full cached K/V        \u2190 Read from cache, not recompute\n```\n\n### What Already Exists (DO NOT REWRITE)\n\nPhase 4 builds on Phases 1\u20133. The following are already implemented:\n\n**Zig SIMD kernels (EXIST, need to be WIRED IN):**\n- `zig/src/ops/matmul.zig` \u2014 Tiled SGEMM with SIMD, cache-blocking\n- `zig/src/ops/rmsnorm.zig` \u2014 SIMD RMSNorm with 2x unrolled loops\n- `zig/src/ops/silu.zig` \u2014 SIMD SiLU + fused SwiGLU\n- `zig/src/ops/quantize.zig` \u2014 SIMD INT8 quantize/dequantize\n- `zig/src/ops/qmatmul.zig` \u2014 INT8 quantized GEMM\n- `zig/src/ops/kvcache.zig` \u2014 KV-Cache append/slice operations\n- `zig/src/ops/attention.zig` \u2014 Fused attention kernel (from Phase 2)\n\n**Zig FFI bindings (EXIST, need to be CALLED):**\n- `crates/synapse-sys/src/lib.rs` \u2014 C ABI declarations:\n  - `syn_sgemm()` \u2014 SIMD matrix multiply\n  - `syn_rmsnorm_forward()` \u2014 SIMD RMSNorm\n  - `syn_silu()` \u2014 SIMD SiLU activation\n  - `syn_swiglu()` \u2014 Fused SwiGLU kernel\n  - `syn_qgemm_int8()` \u2014 Quantized INT8 matmul\n  - `syn_kvcache_create/append/slice()` \u2014 KV-cache ops\n  - `syn_attention_forward()` \u2014 Fused attention\n\n**Rust inference engine (MODIFY, don't rewrite):**\n- `synapse-inference` crate \u2014 all config, registry, model, generation code\n- Component registry with trait-based dispatch\n- Weight loading (safetensors + GGUF)\n- Generation pipeline with sampling strategies\n\n### What's New in Phase 4\n\nPhase 4 does NOT add new architecture \u2014 it makes existing architecture fast:\n\n1. **Wire Zig SIMD kernels into the decoder layer hot path**\n2. **Implement KV-cache in the generation decode loop**\n3. **Fix INT8 quantization to use vectorized `syn_qgemm_int8()`**\n4. **Add Apple Metal GPU compute shaders** for matmul + attention\n5. **Memory-map weights** instead of copying into Vec\n\n---\n\n## 1) Architecture\n\n```\nPhase 4 changes (PERFORMANCE)\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\u2502                                                             \u2502\n\u2502  Inference Hot Path (REWIRE)                                \u2502\n\u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502\n\u2502  \u2502  DecoderLayer.forward()                              \u2502    \u2502\n\u2502  \u2502    BEFORE: matmul_t() (naive Rust)                   \u2502    \u2502\n\u2502  \u2502    AFTER:  syn_sgemm() (Zig SIMD FFI)               \u2502    \u2502\n\u2502  \u2502                                                       \u2502    \u2502\n\u2502  \u2502    BEFORE: scalar norm loops                          \u2502    \u2502\n\u2502  \u2502    AFTER:  syn_rmsnorm_forward() (Zig SIMD FFI)     \u2502    \u2502\n\u2502  \u2502                                                       \u2502    \u2502\n\u2502  \u2502    BEFORE: scalar activation                          \u2502    \u2502\n\u2502  \u2502    AFTER:  syn_swiglu() (Zig fused SIMD FFI)        \u2502    \u2502\n\u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502\n\u2502                                                             \u2502\n\u2502  Generation Pipeline (REWIRE)                               \u2502\n\u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502\n\u2502  \u2502  BEFORE: model.forward(ALL_TOKENS) every step        \u2502    \u2502\n\u2502  \u2502  AFTER:  prefill once \u2192 forward_one(token) + cache   \u2502    \u2502\n\u2502  \u2502                                                       \u2502    \u2502\n\u2502  \u2502  KV-Cache integration:                                \u2502    \u2502\n\u2502  \u2502    prefill: store all K/V in cache                   \u2502    \u2502\n\u2502  \u2502    decode:  append 1 K/V, attend against full cache  \u2502    \u2502\n\u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502\n\u2502                                                             \u2502\n\u2502  Metal GPU Backend (NEW)                                    \u2502\n\u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502\n\u2502  \u2502  metal/                                               \u2502    \u2502\n\u2502  \u2502    \u251c\u2500\u2500 device.rs     # MTLDevice, command queues      \u2502    \u2502\n\u2502  \u2502    \u251c\u2500\u2500 buffer.rs     # GPU buffer management          \u2502    \u2502\n\u2502  \u2502    \u251c\u2500\u2500 shaders/                                       \u2502    \u2502\n\u2502  \u2502    \u2502   \u251c\u2500\u2500 matmul.metal    # Tiled GEMM shader       \u2502    \u2502\n\u2502  \u2502    \u2502   \u251c\u2500\u2500 rmsnorm.metal   # RMSNorm shader          \u2502    \u2502\n\u2502  \u2502    \u2502   \u251c\u2500\u2500 attention.metal # Fused attention shader   \u2502    \u2502\n\u2502  \u2502    \u2502   \u2514\u2500\u2500 silu.metal      # SiLU/SwiGLU shader      \u2502    \u2502\n\u2502  \u2502    \u2514\u2500\u2500 dispatch.rs   # CPU\u2194GPU routing based on size  \u2502    \u2502\n\u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502\n\u2502                                                             \u2502\n\u2502  INT8 Quantized Inference (FIX)                             \u2502\n\u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502\n\u2502  \u2502  BEFORE: i8\u2192f32 cast in inner loop (zero speedup)    \u2502    \u2502\n\u2502  \u2502  AFTER:  syn_qgemm_int8() (Zig SIMD INT8 GEMM)     \u2502    \u2502\n\u2502  \u2502         + Metal INT8 shader path                     \u2502    \u2502\n\u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502\n\u2502                                                             \u2502\n\u2502  Weight Loading (OPTIMIZE)                                  \u2502\n\u2502  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510    \u2502\n\u2502  \u2502  BEFORE: mmap \u2192 copy ALL into Vec<f32>               \u2502    \u2502\n\u2502  \u2502  AFTER:  mmap \u2192 keep as &[u8] slice, convert lazily  \u2502    \u2502\n\u2502  \u2502         (or convert once into aligned buffer)         \u2502    \u2502\n\u2502  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518    \u2502\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n```\n\n---\n\n## 2) Files to Modify\n\n```\nsynapse/\n\u251c\u2500\u2500 crates/synapse-inference/src/\n\u2502   \u251c\u2500\u2500 model/\n\u2502   \u2502   \u251c\u2500\u2500 decoder_layer.rs     # REWIRE: replace matmul_t() with syn_sgemm() FFI\n\u2502   \u2502   \u2502                        # REWIRE: replace scalar norm with syn_rmsnorm_forward()\n\u2502   \u2502   \u2502                        # REWIRE: replace scalar activation with syn_swiglu()\n\u2502   \u2502   \u2502                        # ADD: forward_one() for single-token decode with KV-cache\n\u2502   \u2502   \u2514\u2500\u2500 causal_lm.rs        # ADD: forward_one() that delegates to layer.forward_one()\n\u2502   \u2502\n\u2502   \u251c\u2500\u2500 generation/\n\u2502   \u2502   \u2514\u2500\u2500 pipeline.rs          # REWIRE: decode loop to use KV-cache + forward_one()\n\u2502   \u2502                            # ADD: prefill() stores K/V in cache\n\u2502   \u2502                            # ADD: decode_step() processes single token\n\u2502   \u2502\n\u2502   \u251c\u2500\u2500 kv_cache/\n\u2502   \u2502   \u251c\u2500\u2500 cache.rs             # MODIFY: wire to syn_kvcache_append/slice FFI\n\u2502   \u2502   \u2514\u2500\u2500 strategy.rs          # ADD: CacheStrategy for sliding window eviction\n\u2502   \u2502\n\u2502   \u251c\u2500\u2500 quantization/\n\u2502   \u2502   \u2514\u2500\u2500 quantized_linear.rs  # REWIRE: replace scalar i8\u2192f32 loop with syn_qgemm_int8()\n\u2502   \u2502\n\u2502   \u251c\u2500\u2500 weight_loading/\n\u2502   \u2502   \u2514\u2500\u2500 safetensors.rs       # OPTIMIZE: keep mmap'd data, avoid Vec<f32> copy\n\u2502   \u2502\n\u2502   \u251c\u2500\u2500 metal/                   # NEW DIRECTORY\n\u2502   \u2502   \u251c\u2500\u2500 mod.rs               # Metal backend toggle, feature-gated\n\u2502   \u2502   \u251c\u2500\u2500 device.rs            # MTLDevice wrapper, command queue, pipeline state\n\u2502   \u2502   \u251c\u2500\u2500 buffer.rs            # GPU buffer pool, CPU\u2194GPU transfer\n\u2502   \u2502   \u251c\u2500\u2500 dispatch.rs          # Backend dispatcher: CPU (Zig SIMD) vs GPU (Metal)\n\u2502   \u2502   \u2502                        # Heuristic: matrices > threshold \u2192 GPU, else CPU\n\u2502   \u2502   \u2514\u2500\u2500 shaders/\n\u2502   \u2502       \u251c\u2500\u2500 matmul.metal     # Tiled GEMM (threadgroup shared memory)\n\u2502   \u2502       \u251c\u2500\u2500 rmsnorm.metal    # Parallel RMSNorm (reduction + normalize)\n\u2502   \u2502       \u251c\u2500\u2500 attention.metal  # Fused QKV attention + softmax\n\u2502   \u2502       \u2514\u2500\u2500 silu.metal       # SiLU + fused SwiGLU elementwise\n\u2502   \u2502\n\u2502   \u251c\u2500\u2500 engine.rs                # ADD: backend selection (CPU-SIMD vs Metal)\n\u2502   \u2514\u2500\u2500 lib.rs                   # EXPORT: metal module behind feature flag\n\u2502\n\u251c\u2500\u2500 tests/\n\u2502   \u251c\u2500\u2500 integration/\n\u2502   \u2502   \u251c\u2500\u2500 kvcache_decode.rs    # NEW: verify KV-cache decode matches full recompute\n\u2502   \u2502   \u2514\u2500\u2500 metal_correctness.rs # NEW: Metal vs CPU output comparison (max err < 1e-5)\n\u2502   \u2502\n\u2502   \u2514\u2500\u2500 benchmarks/\n\u2502       \u251c\u2500\u2500 simd_vs_naive.rs     # NEW: syn_sgemm vs matmul_t throughput comparison\n\u2502       \u251c\u2500\u2500 kvcache_speedup.rs   # NEW: cached decode vs recompute speedup\n\u2502       \u2514\u2500\u2500 metal_throughput.rs  # NEW: Metal GPU throughput on Qwen3-0.6B\n\u2502\n\u251c\u2500\u2500 Cargo.toml                   # ADD: metal-rs dependency (feature-gated)\n\u2502\n\u2514\u2500\u2500 bench_vs_llamacpp.sh         # UPDATE: include Synapse Phase 4 numbers\n```\n\n---\n\n## 3) Component Details\n\n### 3a) Wire Zig SIMD into Decoder Layer\n\nThe critical change: replace `matmul_t()` in `decoder_layer.rs` with FFI\ncalls to the existing Zig SIMD kernels.\n\n**Current code** (`decoder_layer.rs` lines 262-279):\n```rust\npub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {\n    let mut out = vec![0.0f32; m * n];\n    for i in 0..m {\n        let a_row = &a[i * k..(i + 1) * k];\n        for j in 0..n {\n            let b_row = &b[j * k..(j + 1) * k];\n            let mut sum = 0.0f32;\n            for d in 0..k {\n                sum += a_row[d] * b_row[d];  // NAIVE: no SIMD, no tiling, no cache blocking\n            }\n            out[i * n + j] = sum;\n        }\n    }\n    out\n}\n```\n\n**Target code**:\n```rust\npub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {\n    let mut out = vec![0.0f32; m * n];\n    unsafe {\n        synapse_sys::syn_sgemm(\n            out.as_mut_ptr(),\n            a.as_ptr(),\n            b.as_ptr(),\n            m, n, k,\n            false,  // a not transposed\n            true,   // b transposed (weights stored as [out_dim, in_dim])\n        );\n    }\n    out\n}\n```\n\nThis is a **drop-in replacement** \u2014 same function signature, same semantics,\nbut calls the Zig SIMD tiled GEMM instead of scalar loops.\n\nSimilarly for norm and activations:\n```rust\n// Replace scalar RMSNorm with:\nfn apply_rmsnorm(out: &mut [f32], input: &[f32], weight: &[f32], eps: f32, hidden_size: usize) {\n    unsafe {\n        synapse_sys::syn_rmsnorm_forward(\n            out.as_mut_ptr(), input.as_ptr(), weight.as_ptr(), eps,\n            input.len() / hidden_size, hidden_size,\n        );\n    }\n}\n\n// Replace scalar SwiGLU with:\nfn apply_swiglu(out: &mut [f32], gate: &[f32], up: &[f32], len: usize) {\n    unsafe {\n        synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len);\n    }\n}\n```\n\n**Tests:**\n- SIMD matmul output matches naive matmul_t within 1e-5 relative error\n- SIMD RMSNorm output matches scalar within 1e-5\n- SIMD SwiGLU output matches scalar within 1e-5\n- Full model forward pass: SIMD output matches naive output within 1e-4\n\n**Benchmark (HARD thresholds):**\n- `syn_sgemm` \u2265 4\u00d7 throughput vs `matmul_t` on [1024, 1024] \u00d7 [1024, 3072]\n- `syn_rmsnorm_forward` \u2265 4\u00d7 throughput vs scalar on [1, 1024]\n- `syn_swiglu` \u2265 2\u00d7 throughput vs separate silu + elementwise mul\n\n---\n\n### 3b) KV-Cache Integration in Generation Pipeline\n\nThe generation decode loop currently reprocesses ALL tokens every step.\nThis must be changed to: prefill once, then decode one token at a time\nwith KV-cache.\n\n**Current code** (`generation/pipeline.rs` lines ~115-146):\n```rust\nwhile !stop_checker.should_stop(...) {\n    let output = self.model.forward(&all_tokens);  // RE-RUNS FULL SEQUENCE\n    let last_logits = &output.logits[(seq_len - 1) * vocab_size..];\n    all_tokens.push(sampled_token);\n}\n```\n\n**Target code**:\n```rust\n// 1. Prefill: process entire prompt, populate KV-cache\nlet mut kv_cache = KVCache::new(config.max_seq_len, &model.config);\nlet logits = self.model.forward_prefill(&prompt_tokens, &mut kv_cache);\n\n// 2. Decode: one token at a time, read+append KV-cache\nlet mut next_token = sample(logits);\nwhile !stop_checker.should_stop(...) {\n    let logits = self.model.forward_one(next_token, &mut kv_cache);\n    next_token = sample(logits);\n    generated.push(next_token);\n}\n```\n\n**New methods needed:**\n- `CausalLM::forward_prefill(tokens: &[u32], cache: &mut KVCache) -> Logits`\n  - Processes full prompt, stores all K/V in cache\n- `CausalLM::forward_one(token: u32, cache: &mut KVCache) -> Logits`\n  - Processes single token, appends K/V to cache, attends against full cache\n- `DecoderLayer::forward_one(hidden: &[f32], cache: &mut KVCacheLayer, pos: usize) -> Vec<f32>`\n  - Same as forward but for seq_len=1, reads cached K/V for attention\n\n**KV-cache structure** (already exists in `kv_cache/cache.rs`, needs wiring):\n```rust\npub struct KVCache {\n    layers: Vec<KVCacheLayer>,  // One per decoder layer\n}\n\npub struct KVCacheLayer {\n    key: Vec<f32>,    // [max_seq, n_kv_heads, head_dim] pre-allocated\n    value: Vec<f32>,  // [max_seq, n_kv_heads, head_dim]\n    seq_len: usize,   // Current number of cached entries\n}\n```\n\n**Tests:**\n- Generate 20 tokens with KV-cache: output token IDs IDENTICAL to\n  full-recompute generation (bit-for-bit deterministic)\n- KV-cache values at each position match full forward pass K/V at same position\n- KV-cache memory: exactly `2 * num_layers * max_seq * n_kv_heads * head_dim * 4` bytes\n\n**Benchmark (HARD thresholds):**\n- Decode throughput with KV-cache \u2265 10\u00d7 vs without cache (at 64 generated tokens)\n- Prefill throughput unchanged (\u00b110%) vs current\n\n---\n\n### 3c) Fix INT8 Quantized Inference\n\nCurrent INT8 gives ZERO speedup because it dequantizes i8\u2192f32 in the\ninner loop. Replace with the Zig `syn_qgemm_int8()` which does true\nINT8 matmul with INT32 accumulation.\n\n**Current code** (`quantization/quantized_linear.rs` lines 72-94):\n```rust\nfor d in 0..k {\n    sum += x_row[d] * w_row[d] as f32;  // CASTS i8\u2192f32 EVERY ELEMENT\n}\nout[i * n + j] = sum * self.scales[j];\n```\n\n**Target code**:\n```rust\nunsafe {\n    synapse_sys::syn_qgemm_int8(\n        out.as_mut_ptr(),\n        x_quantized.as_ptr(),   // INT8 input (quantize x on the fly)\n        self.weights_int8.as_ptr(),\n        self.scales_x.as_ptr(),\n        self.scales_w.as_ptr(),\n        m, n, k,\n    );\n}\n```\n\n**Tests:**\n- INT8 matmul output vs f32 matmul: top-1 token agreement \u2265 99%\n- Max absolute error \u2264 0.5 for logits\n\n**Benchmark (HARD thresholds):**\n- INT8 decode throughput \u2265 1.5\u00d7 vs f32 decode throughput\n- INT8 memory \u2264 50% of f32 memory\n\n---\n\n### 3d) Apple Metal GPU Backend\n\nAdd Metal compute shader support for the heaviest operations. This is\nthe single biggest potential speedup (100x+) since llama.cpp's Metal\nbackend is what makes it fast.\n\n**Architecture:**\n- Feature-gated: `#[cfg(feature = \"metal\")]`\n- Dependency: `metal-rs` crate for MTLDevice/MTLBuffer/MTLComputePipeline\n- Dispatch heuristic: matrices larger than threshold \u2192 GPU, smaller \u2192 CPU (Zig SIMD)\n\n**Metal shaders needed (MSL \u2014 Metal Shading Language):**\n\n1. **matmul.metal** \u2014 Tiled GEMM using threadgroup shared memory\n   ```metal\n   kernel void matmul_tiled(\n       device const float* A [[buffer(0)]],\n       device const float* B [[buffer(1)]],\n       device float* C [[buffer(2)]],\n       constant uint& M [[buffer(3)]],\n       constant uint& N [[buffer(4)]],\n       constant uint& K [[buffer(5)]],\n       uint2 gid [[threadgroup_position_in_grid]],\n       uint2 tid [[thread_position_in_threadgroup]]\n   ) {\n       // Tile size 32x32, shared memory blocking\n       threadgroup float As[32][32];\n       threadgroup float Bs[32][32];\n       // ... tiled matmul with SIMD group operations\n   }\n   ```\n\n2. **rmsnorm.metal** \u2014 Parallel reduction + normalize\n3. **attention.metal** \u2014 Fused scaled dot-product attention\n4. **silu.metal** \u2014 Elementwise SiLU + fused SwiGLU\n\n**Rust integration:**\n```rust\npub struct MetalBackend {\n    device: metal::Device,\n    queue: metal::CommandQueue,\n    pipelines: HashMap<&'static str, metal::ComputePipelineState>,\n    buffer_pool: BufferPool,\n}\n\nimpl MetalBackend {\n    pub fn matmul(&self, a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {\n        let buf_a = self.buffer_pool.get_or_create(a);\n        let buf_b = self.buffer_pool.get_or_create(b);\n        let buf_c = self.buffer_pool.create_empty(m * n);\n\n        let encoder = self.queue.new_command_buffer().compute_encoder();\n        encoder.set_compute_pipeline_state(&self.pipelines[\"matmul_tiled\"]);\n        encoder.set_buffer(0, &buf_a);\n        encoder.set_buffer(1, &buf_b);\n        encoder.set_buffer(2, &buf_c);\n        // ... dispatch threadgroups\n        encoder.end_encoding();\n        // ...\n    }\n}\n```\n\n**Backend dispatcher:**\n```rust\npub enum ComputeBackend {\n    CpuSimd,         // Zig SIMD via FFI (default)\n    Metal(MetalBackend),  // Apple GPU (feature-gated)\n}\n\nimpl ComputeBackend {\n    pub fn matmul(&self, a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {\n        match self {\n            Self::CpuSimd => {\n                let mut out = vec![0.0f32; m * n];\n                unsafe { synapse_sys::syn_sgemm(out.as_mut_ptr(), a.as_ptr(), b.as_ptr(), m, n, k, false, true); }\n                out\n            }\n            Self::Metal(metal) => metal.matmul(a, b, m, k, n),\n        }\n    }\n}\n```\n\n**Tests:**\n- Metal matmul output matches CPU output within 1e-4 relative error\n- Full forward pass: Metal vs CPU max logit difference < 0.01\n- Buffer pool: no GPU memory leaks after 100 forward passes\n\n**Benchmark (HARD thresholds):**\n- Metal matmul \u2265 50\u00d7 throughput vs CPU matmul_t on [1024, 1024] \u00d7 [1024, 3072]\n- Metal full decode \u2265 20 tok/s on Qwen3-0.6B (from current 0.3)\n- Metal prefill \u2265 500 tok/s on Qwen3-0.6B pp128 (from current 5)\n\n---\n\n### 3e) Weight Loading Optimization\n\nCurrent safetensors loader mmaps the file then immediately copies ALL\ndata into `Vec<f32>`. For a 1.5GB model this wastes ~1.5GB of heap.\n\n**Options (choose based on complexity):**\n\n**Option A (minimal): Aligned copy, no double-alloc**\n- Mmap file \u2192 convert weights directly into SIMD-aligned buffers\n- Avoid the intermediate `bytes_to_f32()` \u2192 `Vec<f32>` copy chain\n- Use aligned allocation (`std::alloc::alloc` with 64-byte alignment) for\n  cache-line-friendly access in SIMD kernels\n\n**Option B (advanced): Keep weights mmap'd**\n- For f32 safetensors: keep the mmap, cast `&[u8]` \u2192 `&[f32]` directly\n- For bf16/f16: convert once into aligned buffer\n- Requires all weight consumers to accept `&[f32]` slices, not own `Vec<f32>`\n\n**Tests:**\n- Model loads correctly with new loading path\n- Weight values identical to current loading\n\n**Benchmark (HARD thresholds):**\n- Model load time \u2264 80% of current (for f32 safetensors)\n- Peak RSS during loading \u2264 1.2\u00d7 model size (currently ~2\u00d7 due to copy)\n\n---\n\n## 4) Optimization Targets\n\n**These are HARD pass/fail thresholds. If a benchmark does not meet its\ntarget, the task FAILS.**\n\n### CPU-SIMD Targets (Zig FFI wiring)\n\n| # | What | Metric | Threshold | How to Measure |\n|---|------|--------|-----------|----------------|\n| 1 | SGEMM | syn_sgemm vs matmul_t | **\u22654\u00d7** on [1024,1024]\u00d7[1024,3072] | `simd_vs_naive.rs` |\n| 2 | RMSNorm | syn_rmsnorm vs scalar | **\u22654\u00d7** on [1, 1024] | Same benchmark |\n| 3 | SwiGLU | syn_swiglu vs separate | **\u22652\u00d7** on [1, 3072] | Same benchmark |\n| 4 | Prefill | Synapse pp128 | **\u226550 tok/s** (from ~5) | `prefill_throughput.rs` |\n| 5 | Decode (f32) | Synapse tg64 with KV-cache | **\u22653 tok/s** (from ~0.3) | `inference_throughput.rs` |\n\n### KV-Cache Targets\n\n| # | What | Metric | Threshold | How to Measure |\n|---|------|--------|-----------|----------------|\n| 6 | Decode speedup | Cached vs recompute | **\u226510\u00d7** at 64 tokens generated | `kvcache_speedup.rs` |\n| 7 | Correctness | Cached vs full tokens | **Bit-exact** token IDs | `kvcache_decode.rs` |\n| 8 | Memory | Cache memory overhead | **\u2264 50 MB** for Qwen3-0.6B 2048 ctx | Same benchmark |\n\n### INT8 Targets\n\n| # | What | Metric | Threshold | How to Measure |\n|---|------|--------|-----------|----------------|\n| 9 | INT8 decode | INT8 vs f32 throughput | **\u22651.5\u00d7** speedup | `inference_throughput.rs` |\n| 10 | INT8 accuracy | Top-1 agreement with f32 | **\u226599%** on 100 tokens | `quantization_accuracy.rs` |\n\n### Metal GPU Targets\n\n| # | What | Metric | Threshold | How to Measure |\n|---|------|--------|-----------|----------------|\n| 11 | Metal matmul | GPU vs CPU throughput | **\u226550\u00d7** on [1024,1024]\u00d7[1024,3072] | `metal_throughput.rs` |\n| 12 | Metal decode | Qwen3-0.6B tok/s | **\u226520 tok/s** | Same benchmark |\n| 13 | Metal prefill | Qwen3-0.6B pp128 | **\u2265500 tok/s** | Same benchmark |\n| 14 | Metal correctness | GPU vs CPU max error | **\u22641e-4** relative | `metal_correctness.rs` |\n\n### Overall Target\n\n| # | What | Metric | Threshold |\n|---|------|--------|-----------|\n| 15 | Full pipeline (Metal) | Qwen3-0.6B decode | **\u226530 tok/s** |\n| 16 | Full pipeline (CPU-SIMD) | Qwen3-0.6B decode | **\u22655 tok/s** |\n| 17 | llama.cpp gap | Synapse/llama.cpp ratio (Metal) | **\u22645\u00d7** (from ~270\u00d7) |\n\nUse `cfg!(debug_assertions)` for debug-mode thresholds at ~5\u00d7 lower values.\n\n---\n\n## 5) Task Dependency Graph\n\n```\nTask A: Wire Zig SIMD into decoder layer  \u2500\u2500\u2500\u2500\u2500\u2510\nTask B: KV-cache in generation pipeline   \u2500\u2500\u2500\u2500\u2500\u2500\u253c\u2500\u2500 Task E: Integration + benchmarks\nTask C: Fix INT8 with syn_qgemm_int8     \u2500\u2500\u2500\u2500\u2500\u2500\u2524\nTask D: Apple Metal GPU backend           \u2500\u2500\u2500\u2500\u2500\u2500\u2518\nTask F: Weight loading optimization       \u2500\u2500\u2500\u2500\u2500\u2500\u2500 (independent, can run parallel)\n```\n\n**Parallel group 1** (no deps): Tasks A, B, C, D, F \u2014 all independent\n**Serial**: Task E depends on A + B + C + D\n\nEstimated task count when decomposed: ~10-12 tasks from these 5 deliverables.\n\n---\n\n## 6) Verification Plan\n\nAfter all tasks complete:\n\n1. `cargo test -p synapse-inference` \u2014 all tests pass\n2. `cargo test --test kvcache_decode` \u2014 cached output matches full recompute\n3. `cargo test --test metal_correctness` \u2014 Metal output matches CPU\n4. `cargo run --example model_benchmark --release -- --full-scale` \u2014 shows improved numbers\n5. `cargo run --example qwen3_chat --release -- --model-dir /tmp/qwen3-0.6b` \u2014 interactive chat works at usable speed\n6. `./bench_vs_llamacpp.sh` \u2014 Synapse within 5\u00d7 of llama.cpp (Metal path)\n7. All existing Phase 3 tests still pass (regression)\n\n---\n\n## 7) Risk Mitigation\n\n**Risk: Zig FFI function signatures don't match expected shapes**\n- Mitigation: Read `synapse-sys/src/lib.rs` and `synapse.h` carefully.\n  Write shim functions if signatures need adaptation.\n\n**Risk: Metal shaders are complex to debug**\n- Mitigation: Test each shader independently with known inputs before\n  integrating into the forward pass. Use Metal debugging tools.\n\n**Risk: KV-cache changes break existing generation**\n- Mitigation: Keep the old `forward()` method intact. Add `forward_one()`\n  as a new method. Pipeline can fallback to old path.\n\n**Risk: Mmap weight loading breaks on non-aligned data**\n- Mitigation: Always copy into aligned buffer for SIMD. Only skip copy\n  for f32 safetensors on aligned mmaps.",
-  "phase": "executing",
+  "phase": "decomposing",
   "shutdown_reason": "",
   "working_dir": "/Users/eren/Documents/AI/attocodepy_swarmtester_14",
   "lineage": {
@@ -18,22 +18,22 @@
     "started_via": "attocode",
     "command_family": "attocode swarm"
   },
-  "updated_at": "2026-03-23T18:55:59.293276+00:00",
+  "updated_at": "2026-03-23T18:17:54.286032+00:00",
   "dag": {
     "nodes": [
       {
         "task_id": "task-1",
         "title": "Wire syn_sgemm() into matmul_t()",
-        "status": "done",
+        "status": "pending",
         "description": "Replace the naive triple-nested-loop `matmul_t()` function in `decoder_layer.rs` (lines 263-279) with an FFI call to `synapse_sys::syn_sgemm()`. This is a drop-in replacement \u2014 same function signature",
         "task_kind": "implement",
         "role_hint": "impl",
-        "assigned_agent": "agent-task-1",
+        "assigned_agent": "",
         "target_files": [
           "synapse/crates/synapse-inference/src/model/decoder_layer.rs"
         ],
-        "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"f7d7f79c-aaa1-4490-a958-234114153ba5\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"99bb1b33-1b0a-4d7d-aa57-2960fae19279\",",
-        "tokens_used": 29576,
+        "result_summary": "",
+        "tokens_used": 0,
         "cost_usd": 0.0,
         "attempt_count": 0,
         "is_foundation": true,
@@ -47,16 +47,16 @@
       {
         "task_id": "task-2",
         "title": "Wire syn_rmsnorm_forward() into decoder layer",
-        "status": "done",
+        "status": "pending",
         "description": "Replace the naive scalar `rmsnorm()` function in `decoder_layer.rs` (lines 282-295) with an FFI call to `synapse_sys::syn_rmsnorm_forward()`. The FFI function takes `(out_ptr, input_ptr, weight_ptr, e",
         "task_kind": "implement",
         "role_hint": "impl",
-        "assigned_agent": "agent-task-2",
+        "assigned_agent": "",
         "target_files": [
           "synapse/crates/synapse-inference/src/model/decoder_layer.rs"
         ],
-        "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"6467c149-dd2f-4a20-bdaa-511e3d625de0\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"fa0311f7-e265-4cb7-a3cb-fd76993a27bf\",",
-        "tokens_used": 26594,
+        "result_summary": "",
+        "tokens_used": 0,
         "cost_usd": 0.0,
         "attempt_count": 0,
         "is_foundation": false,
@@ -69,7 +69,7 @@
       {
         "task_id": "task-3",
         "title": "Wire syn_swiglu() into FFN activation path",
-        "status": "running",
+        "status": "pending",
         "description": "Replace the manual SwiGLU computation in `apply_ffn()` (decoder_layer.rs lines 204-237) with the fused `synapse_sys::syn_swiglu()` FFI call. Currently the code does: gate = matmul_t(x, ffn_gate), up =",
         "task_kind": "implement",
         "role_hint": "impl",
@@ -157,17 +157,17 @@
       {
         "task_id": "task-7",
         "title": "Fix INT8 quantized linear with syn_qgemm_int8()",
-        "status": "done",
+        "status": "pending",
         "description": "Replace the naive i8\u2192f32 dequantization loop in `QuantizedLinear::forward()` (quantized_linear.rs lines 72-94) with the Zig SIMD `syn_qgemm_int8()` FFI call. The current code casts every i8 weight to ",
         "task_kind": "implement",
         "role_hint": "impl",
-        "assigned_agent": "agent-task-7",
+        "assigned_agent": "",
         "target_files": [
           "synapse/crates/synapse-inference/src/quantization/quantized_linear.rs",
           "synapse/crates/synapse-inference/src/quantization/int8.rs"
         ],
-        "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"29e8e594-5500-445f-9389-575a63010ec2\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"7de902f0-47f0-441d-b44f-bf943e9d77d6\",",
-        "tokens_used": 34892,
+        "result_summary": "",
+        "tokens_used": 0,
         "cost_usd": 0.0,
         "attempt_count": 0,
         "is_foundation": false,
@@ -179,17 +179,17 @@
       {
         "task_id": "task-8",
         "title": "Optimize safetensors weight loading with aligned buffers",
-        "status": "done",
+        "status": "pending",
         "description": "Optimize `load_safetensors()` in `safetensors.rs` to avoid the double-allocation pattern. Currently the loader mmaps the file, then copies ALL tensor data into new `Vec<f32>` allocations, doubling pea",
         "task_kind": "implement",
         "role_hint": "impl",
-        "assigned_agent": "agent-task-8",
+        "assigned_agent": "",
         "target_files": [
           "synapse/crates/synapse-inference/src/weight_loading/safetensors.rs",
           "synapse/crates/synapse-inference/src/weight_loading/mod.rs"
         ],
-        "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"11ddc3a8-45ad-4e1b-b10a-99da50785b9b\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"0cffc316-29f3-4a86-b427-dfd7788eecf0\",",
-        "tokens_used": 42105,
+        "result_summary": "",
+        "tokens_used": 0,
         "cost_usd": 0.0,
         "attempt_count": 0,
         "is_foundation": false,
@@ -201,11 +201,11 @@
       {
         "task_id": "task-9",
         "title": "Metal GPU backend: device, buffer pool, and shader compilation",
-        "status": "done",
+        "status": "pending",
         "description": "Create the Apple Metal GPU backend infrastructure in a new `metal/` module under `synapse-inference/src/`. This is feature-gated behind `#[cfg(feature = \"metal\")]`.\n\nCreate these files:\n1. `metal/mod.",
         "task_kind": "implement",
         "role_hint": "impl",
-        "assigned_agent": "agent-task-9",
+        "assigned_agent": "",
         "target_files": [
           "synapse/crates/synapse-inference/src/metal/mod.rs",
           "synapse/crates/synapse-inference/src/metal/device.rs",
@@ -213,8 +213,8 @@
           "synapse/crates/synapse-inference/src/lib.rs",
           "synapse/crates/synapse-inference/Cargo.toml"
         ],
-        "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"6a31fa1a-7987-4d28-86db-168bc87723f0\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"f1dacb71-fe3b-4f60-93f8-6e3e6e823e39\",",
-        "tokens_used": 16892,
+        "result_summary": "",
+        "tokens_used": 0,
         "cost_usd": 0.0,
         "attempt_count": 0,
         "is_foundation": false,
@@ -439,111 +439,18 @@
       ]
     ]
   },
-  "active_agents": [
-    {
-      "agent_id": "agent-task-7",
-      "task_id": "task-7",
-      "status": "done",
-      "tokens_used": 34892,
-      "started_at_epoch": 1774289874.446482,
-      "model": "",
-      "task_title": "Fix INT8 quantized linear with syn_qgemm_int8()",
-      "activity": "cost_delta",
-      "backend": "",
-      "cwd": "/Users/eren/Documents/AI/attocodepy_swarmtester_14",
-      "exit_code": null,
-      "restart_count": 0,
-      "tool_call_count": 0,
-      "current_tool": "",
-      "files_touched": [],
-      "llm_turns": 0
-    },
-    {
-      "agent_id": "agent-task-8",
-      "task_id": "task-8",
-      "status": "done",
-      "tokens_used": 42105,
-      "started_at_epoch": 1774289874.456104,
-      "model": "",
-      "task_title": "Optimize safetensors weight loading with aligned buffers",
-      "activity": "cost_delta",
-      "backend": "",
-      "cwd": "/Users/eren/Documents/AI/attocodepy_swarmtester_14",
-      "exit_code": null,
-      "restart_count": 0,
-      "tool_call_count": 0,
-      "current_tool": "",
-      "files_touched": [],
-      "llm_turns": 0
-    },
-    {
-      "agent_id": "agent-task-9",
-      "task_id": "task-9",
-      "status": "done",
-      "tokens_used": 16892,
-      "started_at_epoch": 1774289874.464638,
-      "model": "",
-      "task_title": "Metal GPU backend: device, buffer pool, and shader compilation",
-      "activity": "cost_delta",
-      "backend": "",
-      "cwd": "/Users/eren/Documents/AI/attocodepy_swarmtester_14",
-      "exit_code": null,
-      "restart_count": 0,
-      "tool_call_count": 0,
-      "current_tool": "",
-      "files_touched": [],
-      "llm_turns": 0
-    },
-    {
-      "agent_id": "agent-task-1",
-      "task_id": "task-1",
-      "status": "done",
-      "tokens_used": 29576,
-      "started_at_epoch": 1774290744.0414898,
-      "model": "",
-      "task_title": "Wire syn_sgemm() into matmul_t()",
-      "activity": "cost_delta",
-      "backend": "",
-      "cwd": "/Users/eren/Documents/AI/attocodepy_swarmtester_14",
-      "exit_code": null,
-      "restart_count": 0,
-      "tool_call_count": 0,
-      "current_tool": "",
-      "files_touched": [],
-      "llm_turns": 0
-    },
-    {
-      "agent_id": "agent-task-2",
-      "task_id": "task-2",
-      "status": "done",
-      "tokens_used": 26594,
-      "started_at_epoch": 1774291603.2579682,
-      "model": "",
-      "task_title": "Wire syn_rmsnorm_forward() into decoder layer",
-      "activity": "cost_delta",
-      "backend": "",
-      "cwd": "/Users/eren/Documents/AI/attocodepy_swarmtester_14",
-      "exit_code": null,
-      "restart_count": 0,
-      "tool_call_count": 0,
-      "current_tool": "",
-      "files_touched": [],
-      "llm_turns": 0
-    }
-  ],
+  "active_agents": [],
   "budget": {
-    "tokens_used": 150059,
+    "tokens_used": 0,
     "tokens_max": 5000000,
     "cost_used_usd": 0.0,
     "cost_max_usd": 50.0
   },
   "dag_summary": {
-    "done": 5,
-    "running": 1,
-    "pending": 9
+    "pending": 15
   },
-  "elapsed_s": 2531.1443231105804,
-  "state_seq": 10,
+  "elapsed_s": 246.13709688186646,
+  "state_seq": 3,
   "merge_queue": {},
   "attempts": {},
   "decisions": [
@@ -553,73 +460,22 @@
       "decision_type": "decomposition_complete",
       "decision": "Produced 15 tasks",
       "reasoning": "Goal complexity drove task count"
-    },
-    {
-      "timestamp": "2026-03-23T18:17:54.439828+00:00",
-      "phase": "executing",
-      "decision_type": "parallel_safety_split",
-      "decision": "Serialized 3 tasks due to AST conflicts",
-      "reasoning": "Parallel: ['task-7', 'task-8', 'task-9'], Serialized: ['task-1', 'task-2', 'task-3']"
     }
   ],
   "errors": [],
-  "task_transition_log": [
-    {
-      "timestamp": "2026-03-23T18:32:24.022175+00:00",
-      "task_id": "task-7",
-      "from_state": "running",
-      "to_state": "done",
-      "reason": "completed successfully",
-      "assigned_agent": "agent-task-7"
-    },
-    {
-      "timestamp": "2026-03-23T18:32:24.022492+00:00",
-      "task_id": "task-8",
-      "from_state": "running",
-      "to_state": "done",
-      "reason": "completed successfully",
-      "assigned_agent": "agent-task-8"
-    },
-    {
-      "timestamp": "2026-03-23T18:32:24.022634+00:00",
-      "task_id": "task-9",
-      "from_state": "running",
-      "to_state": "done",
-      "reason": "completed successfully",
-      "assigned_agent": "agent-task-9"
-    },
-    {
-      "timestamp": "2026-03-23T18:46:43.240961+00:00",
-      "task_id": "task-1",
-      "from_state": "running",
-      "to_state": "done",
-      "reason": "completed successfully",
-      "assigned_agent": "agent-task-1"
-    },
-    {
-      "timestamp": "2026-03-23T18:55:59.278603+00:00",
-      "task_id": "task-2",
-      "from_state": "running",
-      "to_state": "done",
-      "reason": "completed successfully",
-      "assigned_agent": "agent-task-2"
-    }
-  ],
-  "git_branch": "attoswarm/dfa90a6f",
+  "task_transition_log": [],
+  "git_branch": "",
   "timing": {
     "summary": {
-      "decompose_goal": 238.311,
-      "execute_batch": 869.575,
-      "process_batch_results": 0.001,
-      "handle_result": 0.001
+      "decompose_goal": 238.311
     },
-    "wall_clock_s": 2523.319,
-    "entry_count": 5
+    "wall_clock_s": 238.311,
+    "entry_count": 1
   },
   "health_monitor": {},
   "cache_stats": {
     "hits": 0,
-    "misses": 7,
+    "misses": 1,
     "evictions": 0,
     "hit_rate": 0.0
   },

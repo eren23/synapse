@@ -2,7 +2,7 @@
   "task_id": "task-3",
   "title": "Wire syn_swiglu() into FFN activation path",
   "description": "Replace the manual SwiGLU computation in `apply_ffn()` (decoder_layer.rs lines 204-237) with the fused `synapse_sys::syn_swiglu()` FFI call. Currently the code does: gate = matmul_t(x, ffn_gate), up = matmul_t(x, ffn_up), then element-wise silu(gate) * up. Replace the element-wise part with `syn_swiglu(out_ptr, gate_ptr, up_ptr, len)` which fuses silu+multiply. Keep the old path as fallback for non-SwiGLU variants (GeGLU, GELU). Also replace scalar `silu()` calls with `syn_silu()` where used independently.\n\n**Tests (REQUIRED):**\n- Unit test: fused SwiGLU output matches manual silu(gate)*up within 1e-5 for sizes [1024], [3072], [11008]\n- Verify GeGLU and GELU paths still work (not broken by SwiGLU change)\n\n**Benchmark (HARD threshold):**\n- `syn_swiglu` \u2265 2\u00d7 throughput vs separate silu + elementwise mul on [1, 3072]",
-  "status": "running",
+  "status": "pending",
   "task_kind": "implement",
   "role_hint": "impl",
   "deps": [],
