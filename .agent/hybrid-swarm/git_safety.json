@@ -1,12 +1,12 @@
 {
-  "is_git_repo": false,
-  "original_branch": "",
-  "swarm_branch": "",
-  "stash_ref": "",
-  "pre_run_head": "",
-  "base_ref": "",
-  "base_commit": "",
-  "result_ref": "",
-  "result_commit": "",
-  "finalization_mode": ""
+  "is_git_repo": true,
+  "original_branch": "main",
+  "swarm_branch": "attoswarm/2fa51ba7",
+  "stash_ref": "attoswarm-2fa51ba7-pre-run",
+  "pre_run_head": "2b5148102ad8e72857d04204034e94f5a8a7ff02",
+  "base_ref": "main",
+  "base_commit": "2b5148102ad8e72857d04204034e94f5a8a7ff02",
+  "result_ref": "attoswarm/2fa51ba7",
+  "result_commit": "1dca473e349bffec6b9bbb316125a3bc30371411",
+  "finalization_mode": "keep"
 }

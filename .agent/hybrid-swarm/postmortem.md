@@ -2,36 +2,28 @@
 
 ## Summary
 - **Outcome**: completed
-- **Tasks**: 18/18 completed
+- **Tasks**: 15/15 completed
 - **Success rate**: 100%
 - **Cost**: $0.0000
-- **Duration**: 13569.6s
+- **Duration**: 10224.5s
 
 ## Decomposition Quality
-- **Score**: 0.80/1.00
-- **Parallel efficiency**: 24%
-- **Issues**: 130
+- **Score**: 0.55/1.00
+- **Parallel efficiency**: 50%
+- **Issues**: 32
 
 ## Execution
-- **Critical path**: task-1 → task-5 → task-6 → task-9 → task-10 → task-11 → task-12 → task-13 → task-17 → task-18
+- **Critical path**: task-1 → task-4 → task-5 → task-7 → task-8 → task-9 → task-11 → task-13 → task-15
 
 ## Failures
 ### Root Causes
-- **task-3** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-4** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-8** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-6** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-9** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-10** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-13** (agent_error): blocked 1 tasks, wasted $0.0000
-- **task-16** (agent_error): blocked 1 tasks, wasted $0.0000
+- **task-1** (agent_error): blocked 1 tasks, wasted $0.0000
+- **task-2** (agent_error): blocked 1 tasks, wasted $0.0000
+- **task-15** (agent_error): blocked 1 tasks, wasted $0.0000
 
 **Total wasted cost**: $0.0000
 
 ## Robustness Events
 - Rate limits: 0
-- Concurrency adjustments: 26
+- Concurrency adjustments: 12
 - Budget warnings: 0
-
-## Recommendations
-- Low parallel efficiency — review dependency graph for unnecessary sequential constraints

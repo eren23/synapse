@@ -1,1 +1,0 @@
-All 38 FFI functions are exported with C ABI (`T` = text/cod

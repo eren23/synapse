@@ -1,3 +1,0 @@
-All done. Here's a summary:
-
-## synapse-nn crate — complete

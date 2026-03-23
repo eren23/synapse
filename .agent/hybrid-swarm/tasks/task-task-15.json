@@ -1,29 +1,53 @@
 {
   "task_id": "task-15",
-  "title": "Rust Data Pipeline (Dataset, DataLoader, Samplers, Transforms)",
-  "description": "Implement crates/synapse-data/: dataset.rs (Dataset trait, InMemoryDataset, TensorDataset wrapping features/labels pair), sampler.rs (SequentialSampler, RandomSampler with seed, WeightedRandomSampler), collate.rs (stack tensors along new batch dimension, pad sequences to max length), dataloader.rs (configurable batch_size/shuffle/drop_last, multi-threaded prefetching with double-buffering), transform.rs (Normalize(mean,std), RandomHorizontalFlip, ToTensor).\n\nTests: DataLoader iterates correct number of batches. Shuffle produces different order each epoch but all elements exactly once. Batch tensors have correct shape [batch,...]. Transforms modify data correctly. Benchmark: DataLoader throughput (batches/sec) with 4 prefetch threads.\n\nPass/fail: Correct batch count: ceil(N/batch_size) or floor if drop_last. Shuffle covers all elements exactly once per epoch. Prefetch: next batch ready before previous finishes.",
+  "title": "Integration tests and benchmark tests",
+  "description": "Create comprehensive integration tests and benchmark tests with hard pass/fail thresholds verifying the entire transformer stack works end-to-end.\n\nIntegration tests:\n\n1. `synapse/tests/integration/transformer_e2e.rs`: Train 4-layer transformer on synthetic sequence classification (1000 sequences, vocab=500, seq_len=32, d_model=64, 4 heads, d_ff=256). Must reach >85% accuracy in 5 epochs.\n\n2. `synapse/tests/integration/attention_correctness.rs`: grad_check for the full MultiHeadAttention module (not just the kernel \u2014 the whole module including Q/K/V/O projections). Verify gradients for all parameters.\n\n3. `synapse/tests/integration/transformer_graph_opt.rs`: Build transformer computation graph, apply FuseAttention and FuseLayerNormResidual passes, verify fused output matches unfused within 1e-4. Benchmark fused vs unfused execution.\n\nBenchmark tests:\n\n4. `synapse/tests/benchmarks/attention_bench.rs`: Fused vs naive attention throughput through Rust+FFI layer. Must achieve fused >= 2x vs naive.\n\n5. `synapse/tests/benchmarks/transformer_throughput.rs`: End-to-end transformer training throughput. Measure tokens/sec on 4-layer encoder, d=256, seq=128, batch=32. Must achieve >= 2000 tokens/sec (or >= 200 in debug mode via `cfg!(debug_assertions)`).\n\nAll benchmarks must use build-mode-aware thresholds following Phase 1 patterns.\n\nPass/fail thresholds (HARD \u2014 task fails if not met):\n- Transformer E2E: >85% accuracy in 5 epochs\n- Attention fusion >= 1.3x vs unfused graph\n- LayerNorm+residual fusion >= 1.2x vs unfused\n- Transformer throughput >= 2000 tokens/sec (release) / >= 200 tokens/sec (debug)\n- Attention bench: fused >= 2x vs naive through Rust FFI\n- grad_check passes for full MultiHeadAttention module\n- All existing Phase 1 tests still pass (no regressions)",
   "status": "done",
-  "task_kind": "implement",
+  "task_kind": "integrate",
   "role_hint": "impl",
   "deps": [
-    "task-11"
+    "task-13",
+    "task-14"
   ],
   "target_files": [
-    "synapse/crates/synapse-data/Cargo.toml",
-    "synapse/crates/synapse-data/src/lib.rs",
-    "synapse/crates/synapse-data/src/dataset.rs",
-    "synapse/crates/synapse-data/src/sampler.rs",
-    "synapse/crates/synapse-data/src/collate.rs",
-    "synapse/crates/synapse-data/src/dataloader.rs",
-    "synapse/crates/synapse-data/src/transform.rs"
+    "synapse/tests/integration/transformer_e2e.rs",
+    "synapse/tests/integration/attention_correctness.rs",
+    "synapse/tests/integration/transformer_graph_opt.rs",
+    "synapse/tests/benchmarks/attention_bench.rs",
+    "synapse/tests/benchmarks/transformer_throughput.rs"
   ],
   "read_files": [],
   "files_modified": [],
-  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"45f90822-9a9c-49cf-92d4-577b8c16dd25\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"30566905-8721-4a1c-99b3-7607db33800f\",\"session_id\":\"76d23789-1aa1-4cb9-9e70-debea11ca493\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"45f90822-9a9c-49cf-92d4-577b8c16dd25\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"cc506e86-8024-4305-9fb8-ad731bf7599e\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"af4b2d6d-9940-46a6-9e76-c1a6e0df0ded\",\"session_id\":\"5aab49a6-4aa9-4b3e-bc98-a3ff4fd1ce98\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"cc506e86-8024-4305-9fb8-ad731bf7599e\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
   "symbol_scope": [],
-  "tokens_used": 25640,
+  "tokens_used": 3800,
   "cost_usd": 0.0,
-  "attempt_count": 0,
-  "attempt_history": [],
+  "attempt_count": 3,
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "error": "Task timed out after 1200.0s",
+      "timestamp": "2026-03-23T10:40:25.632536+00:00",
+      "duration_s": 1200.0084490776062,
+      "tokens_used": 0,
+      "failure_cause": "timeout"
+    },
+    {
+      "attempt": 2,
+      "error": "Task timed out after 1200.0s",
+      "timestamp": "2026-03-23T11:00:25.750119+00:00",
+      "duration_s": 1200.0139241218567,
+      "tokens_used": 0,
+      "failure_cause": "timeout"
+    },
+    {
+      "attempt": 3,
+      "error": "Task timed out after 1200.0s",
+      "timestamp": "2026-03-23T11:20:25.865678+00:00",
+      "duration_s": 1200.0095617771149,
+      "tokens_used": 0,
+      "failure_cause": "timeout"
+    }
+  ],
   "has_diff": false
 }
