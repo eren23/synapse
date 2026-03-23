@@ -5,6 +5,7 @@
 //! - INT8: <= 1.5 GB
 
 use synapse_inference::config::*;
+use synapse_inference::weight_loading::AlignedBuffer;
 
 const QWEN3_JSON: &str = include_str!("../../configs/qwen3_0.6b.json");
 
@@ -171,18 +172,18 @@ fn memory_usage_analytical_matches_actual() {
     let kv_dim = cfg.attention.num_kv_heads() * cfg.attention.head_dim();
     let inter = cfg.ffn.intermediate_size();
 
-    model.embed_tokens = vec![0.0f32; vocab * h];
-    model.final_norm_weight = vec![1.0f32; h];
+    model.embed_tokens = AlignedBuffer::new_zeroed(vocab * h);
+    model.final_norm_weight = AlignedBuffer::from_vec(vec![1.0f32; h]);
     for layer in model.layers.iter_mut() {
-        layer.attn_norm_weight = vec![1.0f32; h];
-        layer.w_q = vec![0.0f32; q_dim * h];
-        layer.w_k = vec![0.0f32; kv_dim * h];
-        layer.w_v = vec![0.0f32; kv_dim * h];
-        layer.w_o = vec![0.0f32; h * q_dim];
-        layer.ffn_norm_weight = vec![1.0f32; h];
-        layer.ffn_gate = vec![0.0f32; inter * h];
-        layer.ffn_up = vec![0.0f32; inter * h];
-        layer.ffn_down = vec![0.0f32; h * inter];
+        layer.attn_norm_weight = AlignedBuffer::from_vec(vec![1.0f32; h]);
+        layer.w_q = AlignedBuffer::new_zeroed(q_dim * h);
+        layer.w_k = AlignedBuffer::new_zeroed(kv_dim * h);
+        layer.w_v = AlignedBuffer::new_zeroed(kv_dim * h);
+        layer.w_o = AlignedBuffer::new_zeroed(h * q_dim);
+        layer.ffn_norm_weight = AlignedBuffer::from_vec(vec![1.0f32; h]);
+        layer.ffn_gate = AlignedBuffer::new_zeroed(inter * h);
+        layer.ffn_up = AlignedBuffer::new_zeroed(inter * h);
+        layer.ffn_down = AlignedBuffer::new_zeroed(h * inter);
     }
 
     let actual = synapse_inference::quantization::f32_model_memory_bytes(&model);

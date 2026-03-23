@@ -24,55 +24,20 @@ impl std::fmt::Display for MetalError {
 
 impl std::error::Error for MetalError {}
 
-/// Metal shader source for inference compute kernels.
-const SHADER_SOURCE: &str = r#"
+/// Metal shader sources loaded from external .metal files and inline utilities.
+const SHADER_SOURCE: &str = concat!(
+    include_str!("shaders/matmul.metal"),
+    "\n",
+    include_str!("shaders/rmsnorm.metal"),
+    "\n",
+    include_str!("shaders/attention.metal"),
+    "\n",
+    include_str!("shaders/silu.metal"),
+    "\n",
+    // Simple utility kernels kept inline
+    r#"
 #include <metal_stdlib>
 using namespace metal;
-
-kernel void matmul(
-    device const float* a [[buffer(0)]],
-    device const float* b [[buffer(1)]],
-    device float* c [[buffer(2)]],
-    constant uint& M [[buffer(3)]],
-    constant uint& N [[buffer(4)]],
-    constant uint& K [[buffer(5)]],
-    uint2 gid [[thread_position_in_grid]])
-{
-    if (gid.x >= N || gid.y >= M) return;
-    float sum = 0.0;
-    for (uint k = 0; k < K; k++) {
-        sum += a[gid.y * K + k] * b[k * N + gid.x];
-    }
-    c[gid.y * N + gid.x] = sum;
-}
-
-kernel void rmsnorm(
-    device const float* x [[buffer(0)]],
-    device const float* weight [[buffer(1)]],
-    device float* out [[buffer(2)]],
-    constant uint& n [[buffer(3)]],
-    constant float& eps [[buffer(4)]],
-    uint tid [[thread_position_in_grid]])
-{
-    if (tid >= n) return;
-    float sum_sq = 0.0;
-    for (uint i = 0; i < n; i++) {
-        sum_sq += x[i] * x[i];
-    }
-    float rms = rsqrt(sum_sq / float(n) + eps);
-    out[tid] = x[tid] * rms * weight[tid];
-}
-
-kernel void silu(
-    device const float* x [[buffer(0)]],
-    device float* out [[buffer(1)]],
-    constant uint& n [[buffer(2)]],
-    uint tid [[thread_position_in_grid]])
-{
-    if (tid >= n) return;
-    float val = x[tid];
-    out[tid] = val / (1.0 + exp(-val));
-}
 
 kernel void elementwise_mul(
     device const float* a [[buffer(0)]],
@@ -113,17 +78,24 @@ kernel void softmax(
     }
     out[tid] = exp(x[tid] - max_val) / sum;
 }
-"#;
+"#,
+);
 
 /// Names of compiled compute kernels.
 pub(crate) const KERNEL_NAMES: &[&str] = &[
     "matmul",
     "rmsnorm",
     "silu",
+    "swiglu",
+    "attention",
     "elementwise_mul",
     "elementwise_add",
     "softmax",
 ];
+
+/// Optional kernels that require specific Metal feature support.
+/// These are registered if available but don't cause errors if missing.
+pub(crate) const OPTIONAL_KERNEL_NAMES: &[&str] = &["matmul_simd"];
 
 /// Apple Metal GPU backend for accelerated inference.
 ///
@@ -158,6 +130,17 @@ impl MetalBackend {
                 .new_compute_pipeline_state_with_function(&function)
                 .map_err(|e| MetalError::PipelineCreation(format!("'{name}': {e}")))?;
             pipelines.insert(name.to_string(), pipeline);
+        }
+
+        // Register optional kernels (e.g. simdgroup_matrix variants) if available
+        for &name in OPTIONAL_KERNEL_NAMES {
+            if let Ok(function) = library.get_function(name, None) {
+                if let Ok(pipeline) =
+                    device.new_compute_pipeline_state_with_function(&function)
+                {
+                    pipelines.insert(name.to_string(), pipeline);
+                }
+            }
         }
 
         Ok(Self {

@@ -2,9 +2,20 @@ use std::path::{Path, PathBuf};
 
 use crate::config::ModelConfig;
 use crate::generation::{GenerationConfig, GenerationOutput, GenerationPipeline};
+use crate::kv_cache::KVCache;
 use crate::model::{CausalLM, ModelBuilder, ModelOutput};
 use crate::tokenizer::{Tokenizer, TokenizerError};
 use crate::weight_loading::{load_gguf, load_safetensors, WeightError, WeightMapper};
+
+/// Which compute backend to use for dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendSelection {
+    /// Always use CPU SIMD (Zig FFI).
+    CpuSimd,
+    /// Use Metal GPU when available, CPU SIMD fallback.
+    #[cfg(feature = "metal")]
+    Auto,
+}
 
 /// High-level inference orchestrator.
 ///
@@ -14,6 +25,8 @@ pub struct InferenceEngine {
     pub model: CausalLM,
     pub config: ModelConfig,
     pub tokenizer: Option<Tokenizer>,
+    #[cfg(feature = "metal")]
+    pub backend: crate::metal::ComputeBackend,
 }
 
 impl InferenceEngine {
@@ -44,6 +57,8 @@ impl InferenceEngine {
             model,
             config,
             tokenizer: Some(tokenizer),
+            #[cfg(feature = "metal")]
+            backend: crate::metal::ComputeBackend::auto(),
         })
     }
 
@@ -54,12 +69,40 @@ impl InferenceEngine {
             model,
             config,
             tokenizer: None,
+            #[cfg(feature = "metal")]
+            backend: crate::metal::ComputeBackend::auto(),
+        }
+    }
+
+    /// Build an engine from a config with explicit backend selection.
+    #[cfg(feature = "metal")]
+    pub fn from_config_with_backend(config: ModelConfig, selection: BackendSelection) -> Self {
+        let model = ModelBuilder::from_config(&config);
+        let backend = match selection {
+            BackendSelection::CpuSimd => crate::metal::ComputeBackend::CpuSimd,
+            BackendSelection::Auto => crate::metal::ComputeBackend::auto(),
+        };
+        Self {
+            model,
+            config,
+            tokenizer: None,
+            backend,
         }
     }
 
     /// Run a forward pass on token ids, returning logits.
+    ///
+    /// When the `metal` feature is enabled, dispatches through the
+    /// `ComputeBackend` (GPU for large ops, CPU for small ones).
     pub fn forward(&self, token_ids: &[u32]) -> ModelOutput {
-        self.model.forward(token_ids)
+        #[cfg(feature = "metal")]
+        {
+            self.model.forward_with_backend(token_ids, &self.backend)
+        }
+        #[cfg(not(feature = "metal"))]
+        {
+            self.model.forward(token_ids)
+        }
     }
 
     /// Total parameter count of the underlying model.
@@ -87,14 +130,27 @@ impl InferenceEngine {
         self.tokenizer.as_ref()
     }
 
+    /// Create a KV cache sized for this model's architecture.
+    pub fn create_kv_cache(&self, max_seq_len: usize) -> Result<KVCache, Box<dyn std::error::Error>> {
+        let cache = KVCache::new(
+            self.config.architecture.num_layers,
+            max_seq_len,
+            self.config.attention.num_kv_heads(),
+            self.config.attention.head_dim(),
+        )?;
+        Ok(cache)
+    }
+
     pub fn generate_text(
         &self,
         prompt: &str,
         config: GenerationConfig,
     ) -> Result<GenerationOutput, Box<dyn std::error::Error>> {
         let prompt_tokens = self.encode(prompt)?;
+        let max_seq = prompt_tokens.len() + config.max_new_tokens;
+        let mut cache = self.create_kv_cache(max_seq)?;
         let pipeline = GenerationPipeline::new(&self.model);
-        let mut output = pipeline.generate(&prompt_tokens, config);
+        let mut output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
         let generated = &output.token_ids[output.num_prompt_tokens..];
         output.text = self.decode(generated)?;
         Ok(output)

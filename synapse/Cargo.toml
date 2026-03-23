@@ -16,6 +16,7 @@ synapse-graph = { path = "crates/synapse-graph" }
 synapse-train = { path = "crates/synapse-train" }
 synapse-core = { path = "crates/synapse-core" }
 synapse-inference = { path = "crates/synapse-inference" }
+synapse-sys = { path = "crates/synapse-sys" }
 rand = "0.8"
 rand_distr = "0.4"
 
@@ -110,6 +111,18 @@ path = "tests/benchmarks/quantization_speedup.rs"
 [[test]]
 name = "memory_usage"
 path = "tests/benchmarks/memory_usage.rs"
+
+[[test]]
+name = "simd_vs_naive"
+path = "tests/benchmarks/simd_vs_naive.rs"
+
+[[test]]
+name = "kvcache_decode"
+path = "tests/integration/kvcache_decode.rs"
+
+[[test]]
+name = "kvcache_speedup"
+path = "tests/benchmarks/kvcache_speedup.rs"
 
 [[example]]
 name = "qwen3_chat"

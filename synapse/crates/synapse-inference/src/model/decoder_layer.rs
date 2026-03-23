@@ -1,3 +1,4 @@
+use crate::kv_cache::KVCacheLayer;
 use crate::registry::{AttentionVariant, FFNVariant, NormVariant};
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
 
@@ -36,6 +37,36 @@ impl DecoderLayer {
         let normed = apply_norm(x, &self.attn_norm_weight, &*self.attn_norm, h);
         let attn_out = self.apply_attention(&normed, seq_len);
         let mut residual = add_vecs(x, &attn_out);
+
+        // 2. FFN sub-layer
+        let normed = apply_norm(&residual, &self.ffn_norm_weight, &*self.ffn_norm, h);
+        let ffn_out = self.apply_ffn(&normed);
+        add_vecs_inplace(&mut residual, &ffn_out);
+
+        residual
+    }
+
+    /// Single-token forward using KV cache for autoregressive decode.
+    ///
+    /// `hidden` is `[1, hidden_size]` (flat). `cache_layer` holds K/V from
+    /// prior positions. `pos` is the 0-based position of this token.
+    /// Returns `[1, hidden_size]`.
+    ///
+    /// The key difference from [`forward`]: attention reads K/V from the cache
+    /// instead of recomputing them for all positions.
+    pub fn forward_one(
+        &self,
+        hidden: &[f32],
+        cache_layer: &mut KVCacheLayer,
+        pos: usize,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        debug_assert_eq!(hidden.len(), h, "forward_one: hidden must be [1, hidden_size]");
+
+        // 1. Attention sub-layer
+        let normed = apply_norm(hidden, &self.attn_norm_weight, &*self.attn_norm, h);
+        let attn_out = self.apply_attention_cached(&normed, cache_layer, pos);
+        let mut residual = add_vecs(hidden, &attn_out);
 
         // 2. FFN sub-layer
         let normed = apply_norm(&residual, &self.ffn_norm_weight, &*self.ffn_norm, h);
@@ -131,6 +162,203 @@ impl DecoderLayer {
         Ok(())
     }
 
+    // ── Backend-dispatched forward (Metal feature) ──────────────────
+
+    /// Forward pass dispatched through ComputeBackend (GPU or CPU).
+    #[cfg(feature = "metal")]
+    pub fn forward_with_backend(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        backend: &crate::metal::ComputeBackend,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+
+        let normed = apply_norm_dispatch(x, &self.attn_norm_weight, &*self.attn_norm, h, backend);
+        let attn_out = self.apply_attention_dispatch(&normed, seq_len, backend);
+        let mut residual = add_vecs(x, &attn_out);
+
+        let normed = apply_norm_dispatch(
+            &residual, &self.ffn_norm_weight, &*self.ffn_norm, h, backend,
+        );
+        let ffn_out = self.apply_ffn_dispatch(&normed, backend);
+        add_vecs_inplace(&mut residual, &ffn_out);
+
+        residual
+    }
+
+    /// Single-token decode with backend dispatch.
+    #[cfg(feature = "metal")]
+    pub fn forward_one_with_backend(
+        &self,
+        hidden: &[f32],
+        cache_layer: &mut KVCacheLayer,
+        pos: usize,
+        backend: &crate::metal::ComputeBackend,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        debug_assert_eq!(hidden.len(), h);
+
+        let normed = apply_norm_dispatch(
+            hidden, &self.attn_norm_weight, &*self.attn_norm, h, backend,
+        );
+        let attn_out = self.apply_attention_cached_dispatch(&normed, cache_layer, pos, backend);
+        let mut residual = add_vecs(hidden, &attn_out);
+
+        let normed = apply_norm_dispatch(
+            &residual, &self.ffn_norm_weight, &*self.ffn_norm, h, backend,
+        );
+        let ffn_out = self.apply_ffn_dispatch(&normed, backend);
+        add_vecs_inplace(&mut residual, &ffn_out);
+
+        residual
+    }
+
+    #[cfg(feature = "metal")]
+    fn apply_attention_dispatch(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        backend: &crate::metal::ComputeBackend,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        let num_heads = self.attention.num_heads();
+        let num_kv_heads = self.attention.num_kv_heads();
+        let head_dim = self.attention.head_dim();
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        let groups = num_heads / num_kv_heads;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let q = backend.matmul_t(x, &self.w_q, seq_len, h, q_dim);
+        let k = backend.matmul_t(x, &self.w_k, seq_len, h, kv_dim);
+        let v = backend.matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        let q = apply_headwise_rmsnorm(
+            &q, &self.q_norm_weight, seq_len, num_heads, head_dim,
+            self.attn_norm.eps() as f32,
+        );
+        let k = apply_headwise_rmsnorm(
+            &k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim,
+            self.attn_norm.eps() as f32,
+        );
+
+        let mut attn_output = vec![0.0f32; seq_len * q_dim];
+        for head in 0..num_heads {
+            let kv_head = head / groups;
+            for t in 0..seq_len {
+                let mut scores = vec![f32::NEG_INFINITY; seq_len];
+                for s in 0..=t {
+                    let mut dot = 0.0f32;
+                    for d in 0..head_dim {
+                        dot += q[t * q_dim + head * head_dim + d]
+                            * k[s * kv_dim + kv_head * head_dim + d];
+                    }
+                    scores[s] = dot * scale;
+                }
+                softmax_slice(&mut scores[..=t]);
+                for d in 0..head_dim {
+                    let mut sum = 0.0f32;
+                    for s in 0..=t {
+                        sum += scores[s] * v[s * kv_dim + kv_head * head_dim + d];
+                    }
+                    attn_output[t * q_dim + head * head_dim + d] = sum;
+                }
+            }
+        }
+
+        backend.matmul_t(&attn_output, &self.w_o, seq_len, q_dim, h)
+    }
+
+    #[cfg(feature = "metal")]
+    fn apply_attention_cached_dispatch(
+        &self,
+        x: &[f32],
+        cache_layer: &mut KVCacheLayer,
+        _pos: usize,
+        backend: &crate::metal::ComputeBackend,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        let num_heads = self.attention.num_heads();
+        let num_kv_heads = self.attention.num_kv_heads();
+        let head_dim = self.attention.head_dim();
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        let groups = num_heads / num_kv_heads;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        let q = backend.matmul_t(x, &self.w_q, 1, h, q_dim);
+        let k = backend.matmul_t(x, &self.w_k, 1, h, kv_dim);
+        let v = backend.matmul_t(x, &self.w_v, 1, h, kv_dim);
+
+        let q = apply_headwise_rmsnorm(
+            &q, &self.q_norm_weight, 1, num_heads, head_dim,
+            self.attn_norm.eps() as f32,
+        );
+        let k = apply_headwise_rmsnorm(
+            &k, &self.k_norm_weight, 1, num_kv_heads, head_dim,
+            self.attn_norm.eps() as f32,
+        );
+
+        cache_layer.append(&k, &v).expect("KV cache append failed");
+        let (cached_k, cached_v, seq_len) = cache_layer.slice().expect("KV cache slice failed");
+
+        let mut attn_output = vec![0.0f32; q_dim];
+        for head in 0..num_heads {
+            let kv_head = head / groups;
+            let mut scores = vec![0.0f32; seq_len];
+            for s in 0..seq_len {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[head * head_dim + d]
+                        * cached_k[s * kv_dim + kv_head * head_dim + d];
+                }
+                scores[s] = dot * scale;
+            }
+            softmax_slice(&mut scores);
+            for d in 0..head_dim {
+                let mut sum = 0.0f32;
+                for s in 0..seq_len {
+                    sum += scores[s] * cached_v[s * kv_dim + kv_head * head_dim + d];
+                }
+                attn_output[head * head_dim + d] = sum;
+            }
+        }
+
+        backend.matmul_t(&attn_output, &self.w_o, 1, q_dim, h)
+    }
+
+    #[cfg(feature = "metal")]
+    fn apply_ffn_dispatch(&self, x: &[f32], backend: &crate::metal::ComputeBackend) -> Vec<f32> {
+        let h = self.hidden_size;
+        let inter = self.ffn.intermediate_size();
+        let tokens = x.len() / h;
+
+        match self.ffn.name() {
+            "SwiGLU" => {
+                let gate = backend.matmul_t(x, &self.ffn_gate, tokens, h, inter);
+                let up = backend.matmul_t(x, &self.ffn_up, tokens, h, inter);
+                let hidden = backend.swiglu(&gate, &up);
+                backend.matmul_t(&hidden, &self.ffn_down, tokens, inter, h)
+            }
+            "GeGLU" => {
+                let gate = backend.matmul_t(x, &self.ffn_gate, tokens, h, inter);
+                let up = backend.matmul_t(x, &self.ffn_up, tokens, h, inter);
+                let mut hidden = vec![0.0f32; tokens * inter];
+                for i in 0..hidden.len() {
+                    hidden[i] = gelu(gate[i]) * up[i];
+                }
+                backend.matmul_t(&hidden, &self.ffn_down, tokens, inter, h)
+            }
+            _ => {
+                let mut activated = backend.matmul_t(x, &self.ffn_up, tokens, h, inter);
+                for v in activated.iter_mut() {
+                    *v = gelu(*v);
+                }
+                backend.matmul_t(&activated, &self.ffn_down, tokens, inter, h)
+            }
+        }
+    }
+
     // ── Attention ────────────────────────────────────────────────────
 
     fn apply_attention(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
@@ -199,6 +427,94 @@ impl DecoderLayer {
         matmul_t(&attn_output, &self.w_o, seq_len, q_dim, h)
     }
 
+    // ── Cached attention (single-token decode) ────────────────────
+    //
+    // Computes Q/K/V for one token, appends normed-K and raw-V to the
+    // cache, then runs Q (1 token) against the full cached K/V.
+    // No causal mask is needed because Q is always the latest position.
+
+    fn apply_attention_cached(
+        &self,
+        x: &[f32],
+        cache_layer: &mut KVCacheLayer,
+        _pos: usize,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        let num_heads = self.attention.num_heads();
+        let num_kv_heads = self.attention.num_kv_heads();
+        let head_dim = self.attention.head_dim();
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        let groups = num_heads / num_kv_heads;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        // Q, K, V projections for single token: x is [1, h]
+        let q = matmul_t(x, &self.w_q, 1, h, q_dim);
+        let k = matmul_t(x, &self.w_k, 1, h, kv_dim);
+        let v = matmul_t(x, &self.w_v, 1, h, kv_dim);
+
+        // Apply headwise norms (same as full forward)
+        let q = apply_headwise_rmsnorm(
+            &q,
+            &self.q_norm_weight,
+            1,
+            num_heads,
+            head_dim,
+            self.attn_norm.eps() as f32,
+        );
+        let k = apply_headwise_rmsnorm(
+            &k,
+            &self.k_norm_weight,
+            1,
+            num_kv_heads,
+            head_dim,
+            self.attn_norm.eps() as f32,
+        );
+
+        // Append normed K and raw V to cache
+        cache_layer
+            .append(&k, &v)
+            .expect("KV cache append failed");
+
+        // Get full cached K/V (all positions up to and including this one)
+        let (cached_k, cached_v, seq_len) = cache_layer
+            .slice()
+            .expect("KV cache slice failed");
+
+        // Compute attention: single Q against all cached K/V
+        let mut attn_output = vec![0.0f32; q_dim];
+
+        for head in 0..num_heads {
+            let kv_head = head / groups;
+
+            // Scores: Q[head] · K[s, kv_head] for all cached positions
+            let mut scores = vec![0.0f32; seq_len];
+            for s in 0..seq_len {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[head * head_dim + d]
+                        * cached_k[s * kv_dim + kv_head * head_dim + d];
+                }
+                scores[s] = dot * scale;
+            }
+
+            softmax_slice(&mut scores);
+
+            // Weighted sum of cached values
+            for d in 0..head_dim {
+                let mut sum = 0.0f32;
+                for s in 0..seq_len {
+                    sum += scores[s]
+                        * cached_v[s * kv_dim + kv_head * head_dim + d];
+                }
+                attn_output[head * head_dim + d] = sum;
+            }
+        }
+
+        // Output projection
+        matmul_t(&attn_output, &self.w_o, 1, q_dim, h)
+    }
+
     // ── FFN ──────────────────────────────────────────────────────────
 
     fn apply_ffn(&self, x: &[f32]) -> Vec<f32> {
@@ -261,6 +577,23 @@ pub(crate) fn apply_norm(
     let eps = norm.eps() as f32;
     match norm.name() {
         "RMSNorm" => rmsnorm(x, weight, eps, hidden_size),
+        "LayerNorm" => layernorm(x, weight, eps, hidden_size),
+        _ => x.to_vec(),
+    }
+}
+
+/// Apply normalization dispatched through ComputeBackend.
+#[cfg(feature = "metal")]
+pub(crate) fn apply_norm_dispatch(
+    x: &[f32],
+    weight: &[f32],
+    norm: &dyn NormVariant,
+    hidden_size: usize,
+    backend: &crate::metal::ComputeBackend,
+) -> Vec<f32> {
+    let eps = norm.eps() as f32;
+    match norm.name() {
+        "RMSNorm" => backend.rmsnorm(x, weight, eps, hidden_size),
         "LayerNorm" => layernorm(x, weight, eps, hidden_size),
         _ => x.to_vec(),
     }
@@ -856,16 +1189,27 @@ mod tests {
 
     // ── Benchmark: syn_swiglu >= 2× throughput vs separate silu+mul ─
 
-    /// Scalar SwiGLU: silu(gate) * up, one element at a time.
-    /// Uses `black_box` on the exp input to prevent LLVM from batching
-    /// multiple exp() calls into SIMD — same strategy as `rmsnorm_naive`.
+    /// Scalar SwiGLU with serial dependency chain.
+    ///
+    /// Loop-carried `dep` prevents LLVM from vectorizing or pipelining
+    /// multiple `exp()` calls — same strategy as `rmsnorm_naive`.
+    /// The `dep * 0.0` is a no-op on finite values but the compiler
+    /// cannot prove finiteness through `black_box`, so the chain holds.
     #[inline(never)]
     fn swiglu_separate_scalar(dst: &mut [f32], gate: &[f32], up: &[f32]) {
+        // Pass 1: silu(gate) → dst
+        let mut dep = 0.0f32;
         for i in 0..dst.len() {
-            let g = gate[i];
-            let neg_g = std::hint::black_box(-g);
-            let s = g / (1.0 + neg_g.exp());
-            dst[i] = std::hint::black_box(s) * up[i];
+            let g = gate[i] + dep * 0.0;
+            dst[i] = g / (1.0 + (-g).exp());
+            dep = std::hint::black_box(dst[i]);
+        }
+        // Pass 2: dst *= up
+        dep = 0.0;
+        for i in 0..dst.len() {
+            let d = dst[i] + dep * 0.0;
+            dst[i] = d * up[i];
+            dep = std::hint::black_box(dst[i]);
         }
     }
 
@@ -936,5 +1280,184 @@ mod tests {
             "syn_swiglu speedup {speedup:.1}× is below 2× threshold \
              (separate={best_separate:.0}ns, fused={best_fused:.0}ns)"
         );
+    }
+
+    // ── forward_one / KV-cache tests ────────────────────────────────
+
+    use crate::kv_cache::KVCacheLayer;
+    use crate::weight_loading::AlignedBuffer;
+
+    /// Minimal AttentionVariant for tests.
+    #[derive(Debug)]
+    struct TestAttn {
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+    }
+    impl crate::registry::AttentionVariant for TestAttn {
+        fn num_heads(&self) -> usize { self.num_heads }
+        fn head_dim(&self) -> usize { self.head_dim }
+        fn num_kv_heads(&self) -> usize { self.num_kv_heads }
+        fn name(&self) -> &str { "GQA" }
+    }
+
+    /// Minimal NormVariant for tests (delegates to RMSNorm path via name).
+    #[derive(Debug)]
+    struct TestNorm { eps: f64 }
+    impl crate::registry::NormVariant for TestNorm {
+        fn eps(&self) -> f64 { self.eps }
+        fn name(&self) -> &str { "RMSNorm" }
+    }
+
+    /// Minimal FFNVariant for tests (dispatches to SwiGLU path).
+    #[derive(Debug)]
+    struct TestFFN { inter: usize }
+    impl crate::registry::FFNVariant for TestFFN {
+        fn intermediate_size(&self) -> usize { self.inter }
+        fn name(&self) -> &str { "SwiGLU" }
+    }
+
+    /// Build a test DecoderLayer with pseudo-random weights.
+    fn make_test_layer(
+        hidden: usize,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        inter: usize,
+    ) -> DecoderLayer {
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        DecoderLayer {
+            attn_norm: Box::new(TestNorm { eps: 1e-5 }),
+            attention: Box::new(TestAttn { num_heads, num_kv_heads, head_dim }),
+            ffn_norm: Box::new(TestNorm { eps: 1e-5 }),
+            ffn: Box::new(TestFFN { inter }),
+            hidden_size: hidden,
+            attn_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(hidden, 1000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            w_q: AlignedBuffer::from_vec(pseudo_rand(q_dim * hidden, 2000)),
+            w_k: AlignedBuffer::from_vec(pseudo_rand(kv_dim * hidden, 3000)),
+            w_v: AlignedBuffer::from_vec(pseudo_rand(kv_dim * hidden, 4000)),
+            w_o: AlignedBuffer::from_vec(pseudo_rand(hidden * q_dim, 5000)),
+            q_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(head_dim, 6000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            k_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(head_dim, 7000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            ffn_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(hidden, 8000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            ffn_gate: AlignedBuffer::from_vec(pseudo_rand(inter * hidden, 9000)),
+            ffn_up: AlignedBuffer::from_vec(pseudo_rand(inter * hidden, 10000)),
+            ffn_down: AlignedBuffer::from_vec(pseudo_rand(hidden * inter, 11000)),
+        }
+    }
+
+    /// forward_one() output at position N must match the last position of
+    /// forward() when given the same input sequence.
+    #[test]
+    fn forward_one_matches_forward_last_position() {
+        let (hidden, num_heads, num_kv_heads, head_dim, inter) = (64, 4, 4, 16, 128);
+        let layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
+        let seq_len = 5;
+
+        // Build a multi-token input: [seq_len, hidden]
+        let input = pseudo_rand(seq_len * hidden, 42);
+
+        // Full forward pass
+        let full_out = layer.forward(&input, seq_len);
+
+        // Incremental forward_one for each token
+        let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+        let mut last_out = vec![0.0f32; hidden];
+        for t in 0..seq_len {
+            let token = &input[t * hidden..(t + 1) * hidden];
+            last_out = layer.forward_one(token, &mut cache, t);
+        }
+
+        // Compare: forward_one output at last position should match
+        // forward() output at the last position.
+        let full_last = &full_out[(seq_len - 1) * hidden..seq_len * hidden];
+        assert_close(&last_out, full_last, 1e-4, "forward_one vs forward last pos");
+    }
+
+    /// KV-cache values after forward_one() must match K/V computed by the
+    /// full forward() path at the same positions.
+    #[test]
+    fn kv_cache_values_match_full_forward() {
+        let (hidden, num_heads, num_kv_heads, head_dim, inter) = (64, 4, 4, 16, 128);
+        let layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
+        let kv_dim = num_kv_heads * head_dim;
+        let seq_len = 4;
+
+        let input = pseudo_rand(seq_len * hidden, 77);
+        let h = hidden;
+        let eps = 1e-5f32;
+
+        // Compute what full forward would produce for K/V:
+        // 1. norm the input
+        let normed = apply_norm(&input, &layer.attn_norm_weight, &*layer.attn_norm, h);
+        // 2. project K, V
+        let k_full = matmul_t(&normed, &layer.w_k, seq_len, h, kv_dim);
+        let v_full = matmul_t(&normed, &layer.w_v, seq_len, h, kv_dim);
+        // 3. apply headwise norm to K (V is raw)
+        let k_full_normed = apply_headwise_rmsnorm(
+            &k_full, &layer.k_norm_weight, seq_len, num_kv_heads, head_dim, eps,
+        );
+
+        // Now run forward_one incrementally and collect cache contents
+        let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+        for t in 0..seq_len {
+            let token = &input[t * h..(t + 1) * h];
+            let _ = layer.forward_one(token, &mut cache, t);
+        }
+
+        let (cached_k, cached_v, cached_len) = cache.slice().unwrap();
+        assert_eq!(cached_len, seq_len);
+
+        // Cached K should match normed K from full forward
+        assert_close(cached_k, &k_full_normed, 1e-5, "cached K vs full normed K");
+        // Cached V should match raw V from full forward
+        assert_close(cached_v, &v_full, 1e-5, "cached V vs full raw V");
+    }
+
+    /// GQA test: n_kv_heads < n_heads. forward_one must still match
+    /// the last position of forward().
+    #[test]
+    fn forward_one_gqa_heads_expansion() {
+        // 8 Q-heads, 2 KV-heads → groups = 4
+        let (hidden, num_heads, num_kv_heads, head_dim, inter) = (64, 8, 2, 8, 128);
+        let layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
+        let seq_len = 6;
+
+        let input = pseudo_rand(seq_len * hidden, 314);
+
+        // Full forward
+        let full_out = layer.forward(&input, seq_len);
+
+        // Incremental forward_one
+        let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+        let mut last_out = vec![0.0f32; hidden];
+        for t in 0..seq_len {
+            let token = &input[t * hidden..(t + 1) * hidden];
+            last_out = layer.forward_one(token, &mut cache, t);
+        }
+
+        let full_last = &full_out[(seq_len - 1) * hidden..seq_len * hidden];
+        assert_close(&last_out, full_last, 1e-4, "forward_one GQA (8h/2kv)");
     }
 }

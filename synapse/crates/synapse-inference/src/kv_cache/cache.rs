@@ -32,7 +32,7 @@ pub struct KVCacheLayer {
 unsafe impl Send for KVCacheLayer {}
 
 impl KVCacheLayer {
-    fn new(
+    pub fn new(
         max_seq_len: usize,
         n_kv_heads: usize,
         head_dim: usize,
@@ -192,6 +192,11 @@ impl KVCache {
     /// Current sequence length (same across all layers after uniform appends).
     pub fn current_len(&self) -> Result<usize, SynapseError> {
         self.layers[0].current_len()
+    }
+
+    /// Get a mutable reference to a specific layer's cache.
+    pub fn layer_mut(&mut self, layer: usize) -> &mut KVCacheLayer {
+        &mut self.layers[layer]
     }
 
     pub fn num_layers(&self) -> usize {

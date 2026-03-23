@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use synapse_inference::config::*;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
 use synapse_inference::model::ModelBuilder;
-use synapse_inference::weight_loading::{RawTensor, WeightMapper};
+use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
 fn test_config() -> ModelConfig {
     ModelConfig {
@@ -60,7 +60,7 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     let fake = |shape: Vec<usize>, seed: u32| -> RawTensor {
         let n: usize = shape.iter().product();
         RawTensor {
-            data: gen_weights(n, seed),
+            data: AlignedBuffer::from_vec(gen_weights(n, seed)),
             shape,
         }
     };
@@ -218,7 +218,7 @@ fn kvcache_manual_decode_matches_pipeline() {
         max_new_tokens: num_new_tokens,
         ..Default::default()
     };
-    let pipeline_output = pipeline.generate(&prompt, config);
+    let pipeline_output = pipeline.generate(&prompt, config, None);
     let pipeline_generated = &pipeline_output.token_ids[prompt.len()..];
 
     // Manual decode loop (greedy)

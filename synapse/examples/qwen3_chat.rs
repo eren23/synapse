@@ -34,7 +34,8 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     let fake = |shape: Vec<usize>, seed: u32| -> RawTensor {
         let n: usize = shape.iter().product();
         RawTensor {
-            data: gen_weights(n, seed),
+            // MANUAL FIX: RawTensor.data changed from Vec<f32> to AlignedBuffer in swarm output
+            data: synapse_inference::weight_loading::AlignedBuffer::from_vec(gen_weights(n, seed)),
             shape,
         }
     };
@@ -191,7 +192,7 @@ fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Err
             ..Default::default()
         };
 
-        let output = pipeline.generate(&prompt_tokens, config);
+        let output = pipeline.generate(&prompt_tokens, config, None);
         println!();
         println!(
             "Generated {} tokens in {:.3}s ({:.1} tok/s)",
@@ -265,7 +266,7 @@ fn run_demo_chat() {
             ..Default::default()
         };
 
-        let output = pipeline.generate(&prompt_tokens, config);
+        let output = pipeline.generate(&prompt_tokens, config, None);
 
         println!();
         println!(

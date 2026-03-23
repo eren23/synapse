@@ -10,6 +10,7 @@ use synapse_inference::config::*;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
 use synapse_inference::model::ModelBuilder;
 use synapse_inference::quantization::quantize_model;
+use synapse_inference::weight_loading::AlignedBuffer;
 
 fn bench_config() -> ModelConfig {
     ModelConfig {
@@ -55,20 +56,20 @@ fn fill_model_weights(model: &mut synapse_inference::model::CausalLM) {
     let kv_dim = cfg.attention.num_kv_heads() * cfg.attention.head_dim();
     let inter = cfg.ffn.intermediate_size();
 
-    model.embed_tokens = gen_weights(vocab * h, 1);
-    model.final_norm_weight = vec![1.0f32; h];
+    model.embed_tokens = AlignedBuffer::from_vec(gen_weights(vocab * h, 1));
+    model.final_norm_weight = AlignedBuffer::from_vec(vec![1.0f32; h]);
 
     for (i, layer) in model.layers.iter_mut().enumerate() {
         let s = (i as u32 + 1) * 100;
-        layer.attn_norm_weight = vec![1.0f32; h];
-        layer.w_q = gen_weights(q_dim * h, s + 1);
-        layer.w_k = gen_weights(kv_dim * h, s + 2);
-        layer.w_v = gen_weights(kv_dim * h, s + 3);
-        layer.w_o = gen_weights(h * q_dim, s + 4);
-        layer.ffn_norm_weight = vec![1.0f32; h];
-        layer.ffn_gate = gen_weights(inter * h, s + 5);
-        layer.ffn_up = gen_weights(inter * h, s + 6);
-        layer.ffn_down = gen_weights(h * inter, s + 7);
+        layer.attn_norm_weight = AlignedBuffer::from_vec(vec![1.0f32; h]);
+        layer.w_q = AlignedBuffer::from_vec(gen_weights(q_dim * h, s + 1));
+        layer.w_k = AlignedBuffer::from_vec(gen_weights(kv_dim * h, s + 2));
+        layer.w_v = AlignedBuffer::from_vec(gen_weights(kv_dim * h, s + 3));
+        layer.w_o = AlignedBuffer::from_vec(gen_weights(h * q_dim, s + 4));
+        layer.ffn_norm_weight = AlignedBuffer::from_vec(vec![1.0f32; h]);
+        layer.ffn_gate = AlignedBuffer::from_vec(gen_weights(inter * h, s + 5));
+        layer.ffn_up = AlignedBuffer::from_vec(gen_weights(inter * h, s + 6));
+        layer.ffn_down = AlignedBuffer::from_vec(gen_weights(h * inter, s + 7));
     }
 }
 
@@ -88,7 +89,7 @@ fn inference_throughput_f32_decode_20_tok_per_sec() {
         max_new_tokens: 3,
         ..Default::default()
     };
-    let _ = pipeline.generate(&prompt, warmup_config);
+    let _ = pipeline.generate(&prompt, warmup_config, None);
 
     // Benchmark
     let config = GenerationConfig {
@@ -96,7 +97,7 @@ fn inference_throughput_f32_decode_20_tok_per_sec() {
         ..Default::default()
     };
     let start = Instant::now();
-    let output = pipeline.generate(&prompt, config);
+    let output = pipeline.generate(&prompt, config, None);
     let elapsed = start.elapsed();
 
     let tps = output.num_generated_tokens as f64 / elapsed.as_secs_f64();

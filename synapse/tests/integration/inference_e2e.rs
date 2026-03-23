@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use synapse_inference::config::*;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
 use synapse_inference::model::ModelBuilder;
-use synapse_inference::weight_loading::{RawTensor, WeightMapper};
+use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
 /// Qwen3-architecture config with reduced dimensions for fast testing.
 /// Same architecture choices (GQA, RMSNorm, SwiGLU, RoPE) as Qwen3-0.6B.
@@ -59,7 +59,7 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     let fake = |shape: Vec<usize>, seed: u32| -> RawTensor {
         let n: usize = shape.iter().product();
         RawTensor {
-            data: gen_weights(n, seed),
+            data: AlignedBuffer::from_vec(gen_weights(n, seed)),
             shape,
         }
     };
@@ -106,7 +106,7 @@ fn inference_e2e_generate_50_tokens_greedy() {
         max_new_tokens: 50,
         ..Default::default()
     };
-    let output = pipeline.generate(&prompt, config);
+    let output = pipeline.generate(&prompt, config, None);
 
     // Verify correct token counts
     assert_eq!(output.num_generated_tokens, 50);
@@ -140,7 +140,7 @@ fn inference_e2e_greedy_deterministic() {
             max_new_tokens: 50,
             ..Default::default()
         };
-        let output = pipeline.generate(&prompt, config);
+        let output = pipeline.generate(&prompt, config, None);
         runs.push(output.token_ids.clone());
     }
 
@@ -176,8 +176,8 @@ fn inference_e2e_top1_self_agreement() {
             ..Default::default()
         };
 
-        let out1 = pipeline.generate(prompt, config1);
-        let out2 = pipeline.generate(prompt, config2);
+        let out1 = pipeline.generate(prompt, config1, None);
+        let out2 = pipeline.generate(prompt, config2, None);
 
         let total = out1.token_ids.len();
         let agree = out1
@@ -221,7 +221,7 @@ fn inference_e2e_timing_positive() {
         max_new_tokens: 10,
         ..Default::default()
     };
-    let output = pipeline.generate(&prompt, config);
+    let output = pipeline.generate(&prompt, config, None);
 
     assert!(output.elapsed.as_nanos() > 0, "Elapsed time should be positive");
     assert!(output.tokens_per_sec > 0.0, "Tokens/sec should be positive");

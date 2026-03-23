@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Synapse vs llama.cpp Benchmark Script
+# Synapse vs llama.cpp Benchmark Script (Phase 4)
 # Model: Qwen3-0.6B
-# Compares: Synapse (f32) vs llama.cpp (F16) vs llama.cpp (Q4_K_M)
+# Compares: Synapse (f32, SIMD + KV-cache) vs llama.cpp (F16) vs llama.cpp (Q4_K_M)
+#
+# Phase 4 targets:
+#   CPU-SIMD decode >= 5 tok/s on Qwen3-0.6B (from 0.3)
+#   CPU-SIMD prefill >= 50 tok/s on Qwen3-0.6B pp128 (from 5)
+#   Metal decode >= 30 tok/s (if Metal feature enabled)
+#   llama.cpp gap <= 5x (from ~270x)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODEL_DIR="/tmp/qwen3-0.6b"
@@ -15,10 +21,15 @@ TG=64    # generated tokens (decode)
 THREADS=1
 
 echo "============================================" | tee "$RESULTS_FILE"
-echo " Synapse vs llama.cpp Benchmark" | tee -a "$RESULTS_FILE"
+echo " Synapse vs llama.cpp Benchmark (Phase 4)" | tee -a "$RESULTS_FILE"
 echo " Model: Qwen3-0.6B" | tee -a "$RESULTS_FILE"
 echo " Date: $(date)" | tee -a "$RESULTS_FILE"
 echo " PP=$PP TG=$TG Threads=$THREADS" | tee -a "$RESULTS_FILE"
+echo "" | tee -a "$RESULTS_FILE"
+echo " Phase 4 targets:" | tee -a "$RESULTS_FILE"
+echo "   SIMD decode >= 5 tok/s" | tee -a "$RESULTS_FILE"
+echo "   SIMD prefill >= 50 tok/s (pp128)" | tee -a "$RESULTS_FILE"
+echo "   llama.cpp gap <= 5x" | tee -a "$RESULTS_FILE"
 echo "============================================" | tee -a "$RESULTS_FILE"
 echo "" | tee -a "$RESULTS_FILE"
 
@@ -80,18 +91,23 @@ bench_llamacpp() {
 
 # --- Synapse benchmark ---
 bench_synapse() {
-    echo "--- Synapse (f32) ---" | tee -a "$RESULTS_FILE"
+    echo "--- Synapse Phase 4 (f32, SIMD + KV-cache) ---" | tee -a "$RESULTS_FILE"
 
     cd "$SCRIPT_DIR"
 
-    # Run model_benchmark example
-    echo "Running model_benchmark..." | tee -a "$RESULTS_FILE"
+    # Run model_benchmark example (reports SIMD prefill, KV-cache decode, memory)
+    echo "Running model_benchmark (Phase 4 metrics)..." | tee -a "$RESULTS_FILE"
     /usr/bin/time -l cargo run --example model_benchmark --release 2>&1 | tee -a "$RESULTS_FILE"
 
     echo "" | tee -a "$RESULTS_FILE"
 
-    # Run qwen3_chat with real model (non-interactive, just measure load + first gen)
+    # Run with full-scale Qwen3-0.6B if model is available
     if [ -d "$MODEL_DIR" ]; then
+        echo "Running model_benchmark --full-scale with real model..." | tee -a "$RESULTS_FILE"
+        /usr/bin/time -l cargo run --example model_benchmark --release -- --full-scale 2>&1 | tee -a "$RESULTS_FILE" || true
+
+        echo "" | tee -a "$RESULTS_FILE"
+
         echo "Running qwen3_chat with real model..." | tee -a "$RESULTS_FILE"
         echo "Hello" | timeout 30 cargo run --example qwen3_chat --release -- --model-dir "$MODEL_DIR" 2>&1 | tee -a "$RESULTS_FILE" || true
     fi
@@ -112,6 +128,58 @@ bench_llamacpp "Q4_K_M" "$GGUF_DIR/qwen3-0.6b-q4_k_m.gguf"
 echo "=== SYNAPSE ===" | tee -a "$RESULTS_FILE"
 bench_synapse
 
+# --- Phase 4 Summary ---
+echo "" | tee -a "$RESULTS_FILE"
+echo "============================================" | tee -a "$RESULTS_FILE"
+echo " Phase 4 Target Verification" | tee -a "$RESULTS_FILE"
+echo "============================================" | tee -a "$RESULTS_FILE"
+echo "" | tee -a "$RESULTS_FILE"
+echo " Target                      Status" | tee -a "$RESULTS_FILE"
+echo " ─────────────────────────── ──────" | tee -a "$RESULTS_FILE"
+echo " SIMD decode >= 5 tok/s      [check model_benchmark output above]" | tee -a "$RESULTS_FILE"
+echo " SIMD prefill >= 50 tok/s    [check model_benchmark output above]" | tee -a "$RESULTS_FILE"
+echo " Metal decode >= 30 tok/s    [requires --features metal]" | tee -a "$RESULTS_FILE"
+echo " llama.cpp gap <= 5x         [compare numbers above]" | tee -a "$RESULTS_FILE"
+echo "" | tee -a "$RESULTS_FILE"
+echo " Phase 4 optimizations included:" | tee -a "$RESULTS_FILE"
+echo "   - SIMD-accelerated matmul, RMSNorm, SwiGLU (Zig FFI)" | tee -a "$RESULTS_FILE"
+echo "   - KV-cache with zero-alloc append/slice" | tee -a "$RESULTS_FILE"
+echo "   - INT8 weight quantization (~25% f32 size)" | tee -a "$RESULTS_FILE"
+echo "   - Metal GPU backend (optional, --features metal)" | tee -a "$RESULTS_FILE"
+echo "" | tee -a "$RESULTS_FILE"
+
+# Run regression tests as part of benchmark verification
+echo "--- Regression Test Suite ---" | tee -a "$RESULTS_FILE"
+cd "$SCRIPT_DIR"
+echo "Running: cargo test -p synapse-inference" | tee -a "$RESULTS_FILE"
+if cargo test -p synapse-inference 2>&1 | tail -5 | tee -a "$RESULTS_FILE"; then
+    echo "  PASS: synapse-inference unit tests" | tee -a "$RESULTS_FILE"
+else
+    echo "  FAIL: synapse-inference unit tests" | tee -a "$RESULTS_FILE"
+fi
+
+echo "Running: cargo test --test inference_e2e" | tee -a "$RESULTS_FILE"
+if cargo test --test inference_e2e 2>&1 | tail -3 | tee -a "$RESULTS_FILE"; then
+    echo "  PASS: inference_e2e" | tee -a "$RESULTS_FILE"
+else
+    echo "  FAIL: inference_e2e" | tee -a "$RESULTS_FILE"
+fi
+
+echo "Running: cargo test --test kvcache_correctness" | tee -a "$RESULTS_FILE"
+if cargo test --test kvcache_correctness 2>&1 | tail -3 | tee -a "$RESULTS_FILE"; then
+    echo "  PASS: kvcache_correctness" | tee -a "$RESULTS_FILE"
+else
+    echo "  FAIL: kvcache_correctness" | tee -a "$RESULTS_FILE"
+fi
+
+echo "Running: cargo test --test prefill_throughput" | tee -a "$RESULTS_FILE"
+if cargo test --test prefill_throughput 2>&1 | tail -3 | tee -a "$RESULTS_FILE"; then
+    echo "  PASS: prefill_throughput" | tee -a "$RESULTS_FILE"
+else
+    echo "  FAIL: prefill_throughput" | tee -a "$RESULTS_FILE"
+fi
+
+echo "" | tee -a "$RESULTS_FILE"
 echo "============================================" | tee -a "$RESULTS_FILE"
 echo "Results saved to: $RESULTS_FILE" | tee -a "$RESULTS_FILE"
 echo "============================================" | tee -a "$RESULTS_FILE"
