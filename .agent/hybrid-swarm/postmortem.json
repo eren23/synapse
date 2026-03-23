@@ -1,0 +1,1029 @@
+{
+  "summary": {
+    "outcome": "completed",
+    "total_tasks": 18,
+    "completed_tasks": 18,
+    "failed_tasks": 0,
+    "skipped_tasks": 0,
+    "success_rate": 1.0,
+    "total_cost_usd": 0.0,
+    "total_duration_s": 13569.6
+  },
+  "decomposition": {
+    "score": 0.8,
+    "issues": [
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-1",
+        "message": "Target file 'synapse/zig/src/tensor/storage.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-1",
+        "message": "Target file 'synapse/zig/src/tensor/shape.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-1",
+        "message": "Target file 'synapse/zig/src/root.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-1",
+        "message": "Target file 'synapse/zig/build.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-1",
+        "message": "Target file 'synapse/zig/tests/test_tensor.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-2",
+        "message": "Target file 'synapse/zig/src/alloc/arena.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-2",
+        "message": "Target file 'synapse/zig/src/alloc/pool.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-2",
+        "message": "Target file 'synapse/zig/src/alloc/aligned.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-2",
+        "message": "Target file 'synapse/zig/src/alloc/tracking.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-2",
+        "message": "Target file 'synapse/zig/tests/test_alloc.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-2",
+        "message": "Target file 'synapse/zig/tests/bench_alloc.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/src/simd/neon.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/src/simd/reduce.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/tests/test_simd.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-3",
+        "message": "Target file 'synapse/zig/tests/bench_simd.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-4",
+        "message": "Target file 'synapse/zig/src/simd/avx2.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-4",
+        "message": "Target file 'synapse/zig/src/simd/dispatch.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-4",
+        "message": "Target file 'synapse/zig/src/simd/vec_ops.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-5",
+        "message": "Target file 'synapse/zig/src/tensor/tensor.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-5",
+        "message": "Target file 'synapse/zig/src/tensor/view.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-5",
+        "message": "Target file 'synapse/zig/src/tensor/iterator.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/zig/src/ops/matmul.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/zig/tests/test_matmul.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-6",
+        "message": "Target file 'synapse/zig/tests/bench_matmul.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-7",
+        "message": "Target file 'synapse/zig/src/ops/elementwise.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-7",
+        "message": "Target file 'synapse/zig/tests/test_elementwise.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/src/ops/reduce.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/src/ops/softmax.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/src/ops/batchnorm.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/tests/test_reduce.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/tests/test_softmax.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/tests/test_batchnorm.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-8",
+        "message": "Target file 'synapse/zig/tests/bench_reduce.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/zig/src/ops/conv.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/zig/src/ops/pool.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/zig/src/ops/transpose.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/zig/tests/test_conv.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/zig/tests/test_pool.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-9",
+        "message": "Target file 'synapse/zig/tests/bench_conv.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-10",
+        "message": "Target file 'synapse/zig/src/ffi/exports.zig' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-10",
+        "message": "Target file 'synapse/synapse.h' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-sys/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-sys/build.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-sys/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/src/tensor.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/src/dtype.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/src/device.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/src/error.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/crates/synapse-core/src/shape.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-11",
+        "message": "Target file 'synapse/tests/integration/ffi_roundtrip.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/variable.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/graph.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/backward.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/function.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/no_grad.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-12",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/grad_check.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/mod.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/arithmetic.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/matmul.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/reduce.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/activation.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/reshape.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/conv.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/pool.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/batchnorm.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/softmax.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/crates/synapse-autograd/src/ops/loss.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-13",
+        "message": "Target file 'synapse/tests/integration/autograd_correctness.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/optimizer.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/sgd.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/adam.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/rmsprop.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/lr_scheduler.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-14",
+        "message": "Target file 'synapse/crates/synapse-optim/src/grad_clip.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/src/dataset.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/src/sampler.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/src/collate.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/src/dataloader.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-15",
+        "message": "Target file 'synapse/crates/synapse-data/src/transform.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/ir.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/pass.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/fusion.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/dead_code.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/constant_fold.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/crates/synapse-graph/src/scheduler.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-16",
+        "message": "Target file 'synapse/tests/integration/graph_optimization.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/module.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/sequential.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/linear.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/conv.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/batchnorm.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/dropout.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/activation.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/pool.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/flatten.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/embedding.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/rnn.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-17",
+        "message": "Target file 'synapse/crates/synapse-nn/src/init.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/Cargo.toml' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/src/lib.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/src/trainer.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/src/metrics.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/src/checkpoint.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/src/progress.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/crates/synapse-train/src/callback.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/examples/xor.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/examples/mnist.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/examples/cifar10.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/tests/integration/mnist_e2e.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/tests/benchmarks/training_throughput.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/tests/benchmarks/memory_bench.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "file_existence",
+        "task_id": "task-18",
+        "message": "Target file 'synapse/tests/benchmarks/matmul_bench.rs' does not exist (will be created)",
+        "suggestion": ""
+      },
+      {
+        "severity": "info",
+        "category": "orphan",
+        "task_id": "task-2",
+        "message": "Task 'task-2' is disconnected (no deps and no dependents)",
+        "suggestion": "Consider adding dependencies or this may be intentionally independent"
+      },
+      {
+        "severity": "warning",
+        "category": "granularity",
+        "task_id": "task-11",
+        "message": "Task targets 12 files (may be too broad)",
+        "suggestion": "Consider splitting into smaller tasks"
+      },
+      {
+        "severity": "warning",
+        "category": "granularity",
+        "task_id": "task-13",
+        "message": "Task targets 12 files (may be too broad)",
+        "suggestion": "Consider splitting into smaller tasks"
+      },
+      {
+        "severity": "warning",
+        "category": "granularity",
+        "task_id": "task-17",
+        "message": "Task targets 14 files (may be too broad)",
+        "suggestion": "Consider splitting into smaller tasks"
+      },
+      {
+        "severity": "warning",
+        "category": "granularity",
+        "task_id": "task-18",
+        "message": "Task targets 14 files (may be too broad)",
+        "suggestion": "Consider splitting into smaller tasks"
+      }
+    ]
+  },
+  "execution": {
+    "critical_path": [
+      "task-1",
+      "task-5",
+      "task-6",
+      "task-9",
+      "task-10",
+      "task-11",
+      "task-12",
+      "task-13",
+      "task-17",
+      "task-18"
+    ],
+    "critical_path_duration_s": 0.0,
+    "parallel_efficiency": 0.243
+  },
+  "failures": {
+    "root_causes": [
+      {
+        "task_id": "task-3",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-3"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-4",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-4"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-8",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-8"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-6",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-6"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-9",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-9"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-10",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-10"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-13",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-13"
+        ],
+        "wasted_cost": 0
+      },
+      {
+        "task_id": "task-16",
+        "cause": "agent_error",
+        "confidence": 0.5,
+        "affected_tasks": [
+          "task-16"
+        ],
+        "wasted_cost": 0
+      }
+    ],
+    "poison_tasks": [],
+    "total_wasted_cost": 0
+  },
+  "robustness": {
+    "rate_limit_events": 0,
+    "concurrency_adjustments": 26,
+    "budget_warnings": 0
+  },
+  "recommendations": [
+    "Low parallel efficiency \u2014 review dependency graph for unnecessary sequential constraints"
+  ]
+}

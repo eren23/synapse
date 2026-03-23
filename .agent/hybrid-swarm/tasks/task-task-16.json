@@ -1,0 +1,40 @@
+{
+  "task_id": "task-16",
+  "title": "Rust Graph Optimization + Operator Fusion",
+  "description": "Implement crates/synapse-graph/: ir.rs (Graph IR: nodes for Op/Constant/Parameter/Input, edges, node metadata with shape/dtype), pass.rs (OptimizationPass trait), fusion.rs (fuse matmul+bias+relu, fuse conv+batchnorm by folding BN weights into conv, fuse sequential element-wise ops), dead_code.rs (remove unreachable nodes), constant_fold.rs (constant subgraph computation), scheduler.rs (memory-optimal execution order via liveness analysis).\n\nTests: Fusion correctly merges nodes (graph node count decreases). Dead code elimination removes unused branches. Constant folding computes correctly. Scheduler respects data dependencies. Benchmark in tests/integration/graph_optimization.rs: Fused matmul+bias+relu vs unfused on 256x256.\n\nPass/fail: Fused matmul+bias+relu >=1.3x vs unfused. Conv+BN fusion numerically identical (within 1e-5). Dead code elimination preserves semantics. Scheduler produces valid topological order.",
+  "status": "done",
+  "task_kind": "implement",
+  "role_hint": "impl",
+  "deps": [
+    "task-12"
+  ],
+  "target_files": [
+    "synapse/crates/synapse-graph/Cargo.toml",
+    "synapse/crates/synapse-graph/src/lib.rs",
+    "synapse/crates/synapse-graph/src/ir.rs",
+    "synapse/crates/synapse-graph/src/pass.rs",
+    "synapse/crates/synapse-graph/src/fusion.rs",
+    "synapse/crates/synapse-graph/src/dead_code.rs",
+    "synapse/crates/synapse-graph/src/constant_fold.rs",
+    "synapse/crates/synapse-graph/src/scheduler.rs",
+    "synapse/tests/integration/graph_optimization.rs"
+  ],
+  "read_files": [],
+  "files_modified": [],
+  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"a45967b2-15a3-45ba-9c46-17ec39b66242\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"dea7d0ff-b4bf-4c77-be7a-38c538c28a50\",\"session_id\":\"7fa6fc27-671b-4d05-a2d8-244e1befaa60\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"a45967b2-15a3-45ba-9c46-17ec39b66242\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "symbol_scope": [],
+  "tokens_used": 1619,
+  "cost_usd": 0.0,
+  "attempt_count": 1,
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "error": "Task timed out after 1200.0s",
+      "timestamp": "2026-03-22T23:32:21.341363+00:00",
+      "duration_s": 1200.0092589855194,
+      "tokens_used": 0,
+      "failure_cause": "timeout"
+    }
+  ],
+  "has_diff": false
+}

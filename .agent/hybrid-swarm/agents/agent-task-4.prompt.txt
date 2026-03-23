@@ -1,0 +1,12 @@
+# Task: Zig SIMD Intrinsics — AVX2 + Runtime Dispatch
+
+Implement zig/src/simd/avx2.zig: AVX2 implementations (f32x8) of add, mul, FMA, exp, tanh, sigmoid, horizontal sum/max. Implement zig/src/simd/dispatch.zig: Runtime CPU feature detection, function pointer table dispatching to NEON, AVX2, or scalar fallback. Implement zig/src/simd/vec_ops.zig: Public API that calls through dispatch table.
+
+Tests in zig/tests/test_simd.zig (extended): Same correctness suite as NEON but for AVX2. Dispatch correctly selects backend. Scalar fallback produces correct results.
+
+Pass/fail: All correctness tests pass. Dispatch correctly detects CPU on current platform. AVX2 path >=4x vs scalar (when on x86). Scalar fallback always correct.
+
+Target files: synapse/zig/src/simd/avx2.zig, synapse/zig/src/simd/dispatch.zig, synapse/zig/src/simd/vec_ops.zig
+
+## Context from Previous Runs
+No relevant learnings found for this project.

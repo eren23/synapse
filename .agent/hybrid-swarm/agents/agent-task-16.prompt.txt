@@ -1,0 +1,12 @@
+# Task: Rust Graph Optimization + Operator Fusion
+
+Implement crates/synapse-graph/: ir.rs (Graph IR: nodes for Op/Constant/Parameter/Input, edges, node metadata with shape/dtype), pass.rs (OptimizationPass trait), fusion.rs (fuse matmul+bias+relu, fuse conv+batchnorm by folding BN weights into conv, fuse sequential element-wise ops), dead_code.rs (remove unreachable nodes), constant_fold.rs (constant subgraph computation), scheduler.rs (memory-optimal execution order via liveness analysis).
+
+Tests: Fusion correctly merges nodes (graph node count decreases). Dead code elimination removes unused branches. Constant folding computes correctly. Scheduler respects data dependencies. Benchmark in tests/integration/graph_optimization.rs: Fused matmul+bias+relu vs unfused on 256x256.
+
+Pass/fail: Fused matmul+bias+relu >=1.3x vs unfused. Conv+BN fusion numerically identical (within 1e-5). Dead code elimination preserves semantics. Scheduler produces valid topological order.
+
+Target files: synapse/crates/synapse-graph/Cargo.toml, synapse/crates/synapse-graph/src/lib.rs, synapse/crates/synapse-graph/src/ir.rs, synapse/crates/synapse-graph/src/pass.rs, synapse/crates/synapse-graph/src/fusion.rs, synapse/crates/synapse-graph/src/dead_code.rs, synapse/crates/synapse-graph/src/constant_fold.rs, synapse/crates/synapse-graph/src/scheduler.rs, synapse/tests/integration/graph_optimization.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

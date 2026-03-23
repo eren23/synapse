@@ -1,0 +1,32 @@
+{
+  "task_id": "task-4",
+  "title": "Zig SIMD Intrinsics \u2014 AVX2 + Runtime Dispatch",
+  "description": "Implement zig/src/simd/avx2.zig: AVX2 implementations (f32x8) of add, mul, FMA, exp, tanh, sigmoid, horizontal sum/max. Implement zig/src/simd/dispatch.zig: Runtime CPU feature detection, function pointer table dispatching to NEON, AVX2, or scalar fallback. Implement zig/src/simd/vec_ops.zig: Public API that calls through dispatch table.\n\nTests in zig/tests/test_simd.zig (extended): Same correctness suite as NEON but for AVX2. Dispatch correctly selects backend. Scalar fallback produces correct results.\n\nPass/fail: All correctness tests pass. Dispatch correctly detects CPU on current platform. AVX2 path >=4x vs scalar (when on x86). Scalar fallback always correct.",
+  "status": "done",
+  "task_kind": "implement",
+  "role_hint": "impl",
+  "deps": [],
+  "target_files": [
+    "synapse/zig/src/simd/avx2.zig",
+    "synapse/zig/src/simd/dispatch.zig",
+    "synapse/zig/src/simd/vec_ops.zig"
+  ],
+  "read_files": [],
+  "files_modified": [],
+  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"b5916699-6837-4eaa-a776-e2558db981cd\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"0ba7f3f3-8eaa-4211-8139-a82cf5341c35\",\"session_id\":\"716074bd-ed2e-4108-9fa1-dadf8b43c619\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"b5916699-6837-4eaa-a776-e2558db981cd\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "symbol_scope": [],
+  "tokens_used": 4467,
+  "cost_usd": 0.0,
+  "attempt_count": 1,
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "error": "Task timed out after 1200.0s",
+      "timestamp": "2026-03-22T20:43:13.631183+00:00",
+      "duration_s": 1200.0154211521149,
+      "tokens_used": 0,
+      "failure_cause": "timeout"
+    }
+  ],
+  "has_diff": false
+}

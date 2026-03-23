@@ -1,0 +1,39 @@
+{
+  "task_id": "task-18",
+  "title": "Rust Training Loop + Serialization + Examples",
+  "description": "Implement crates/synapse-train/: trainer.rs (epoch/batch loop: forward->loss->backward->step, validation loop with no_grad, hooks), metrics.rs (RunningMean, Accuracy top-1/top-5, ConfusionMatrix), checkpoint.rs (save/load model state_dict as parameter name->tensor bytes, version header), progress.rs (epoch/batch progress with ETA), callback.rs (EarlyStopping, ModelCheckpoint).\n\nImplement examples/: xor.rs (2-layer MLP solving XOR), mnist.rs (MLP or CNN on MNIST), cifar10.rs (simple CNN on CIFAR-10).\n\nTests: Trainer runs 1 epoch without error. Checkpoint save/load roundtrip produces identical parameters. EarlyStopping triggers after patience exceeded. Metrics track correctly. tests/integration/mnist_e2e.rs: Train MNIST 3 epochs, verify accuracy. tests/benchmarks/training_throughput.rs: Measure samples/sec.\n\nPass/fail: XOR converges to loss < 0.01 in 1000 steps. MNIST reaches >90% accuracy in 3 epochs. Checkpoint roundtrip is bit-exact. Training throughput >=5000 samples/sec on MLP (256-128-10), batch 64. EarlyStopping and callbacks work correctly.",
+  "status": "done",
+  "task_kind": "implement",
+  "role_hint": "impl",
+  "deps": [
+    "task-14",
+    "task-15",
+    "task-16",
+    "task-17"
+  ],
+  "target_files": [
+    "synapse/crates/synapse-train/Cargo.toml",
+    "synapse/crates/synapse-train/src/lib.rs",
+    "synapse/crates/synapse-train/src/trainer.rs",
+    "synapse/crates/synapse-train/src/metrics.rs",
+    "synapse/crates/synapse-train/src/checkpoint.rs",
+    "synapse/crates/synapse-train/src/progress.rs",
+    "synapse/crates/synapse-train/src/callback.rs",
+    "synapse/examples/xor.rs",
+    "synapse/examples/mnist.rs",
+    "synapse/examples/cifar10.rs",
+    "synapse/tests/integration/mnist_e2e.rs",
+    "synapse/tests/benchmarks/training_throughput.rs",
+    "synapse/tests/benchmarks/memory_bench.rs",
+    "synapse/tests/benchmarks/matmul_bench.rs"
+  ],
+  "read_files": [],
+  "files_modified": [],
+  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"ea5d0421-d0f8-4312-871c-a25fd6877d3c\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"7dc9ba90-e821-4d7b-b8c3-26a0d3c8feb2\",\"session_id\":\"97a81155-dab9-4e27-8874-9a11bf902d26\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"ea5d0421-d0f8-4312-871c-a25fd6877d3c\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "symbol_scope": [],
+  "tokens_used": 67022,
+  "cost_usd": 0.0,
+  "attempt_count": 0,
+  "attempt_history": [],
+  "has_diff": false
+}

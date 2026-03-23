@@ -1,0 +1,11 @@
+[package]
+name = "synapse-data"
+version = "0.1.0"
+edition = "2021"
+description = "Data pipeline for Synapse: datasets, data loaders, samplers, and transforms"
+
+[dependencies]
+rand = "0.8"
+
+[dev-dependencies]
+rand = { version = "0.8", features = ["small_rng"] }

@@ -1,0 +1,14 @@
+# Task: Rust Training Loop + Serialization + Examples
+
+Implement crates/synapse-train/: trainer.rs (epoch/batch loop: forward->loss->backward->step, validation loop with no_grad, hooks), metrics.rs (RunningMean, Accuracy top-1/top-5, ConfusionMatrix), checkpoint.rs (save/load model state_dict as parameter name->tensor bytes, version header), progress.rs (epoch/batch progress with ETA), callback.rs (EarlyStopping, ModelCheckpoint).
+
+Implement examples/: xor.rs (2-layer MLP solving XOR), mnist.rs (MLP or CNN on MNIST), cifar10.rs (simple CNN on CIFAR-10).
+
+Tests: Trainer runs 1 epoch without error. Checkpoint save/load roundtrip produces identical parameters. EarlyStopping triggers after patience exceeded. Metrics track correctly. tests/integration/mnist_e2e.rs: Train MNIST 3 epochs, verify accuracy. tests/benchmarks/training_throughput.rs: Measure samples/sec.
+
+Pass/fail: XOR converges to loss < 0.01 in 1000 steps. MNIST reaches >90% accuracy in 3 epochs. Checkpoint roundtrip is bit-exact. Training throughput >=5000 samples/sec on MLP (256-128-10), batch 64. EarlyStopping and callbacks work correctly.
+
+Target files: synapse/crates/synapse-train/Cargo.toml, synapse/crates/synapse-train/src/lib.rs, synapse/crates/synapse-train/src/trainer.rs, synapse/crates/synapse-train/src/metrics.rs, synapse/crates/synapse-train/src/checkpoint.rs, synapse/crates/synapse-train/src/progress.rs, synapse/crates/synapse-train/src/callback.rs, synapse/examples/xor.rs, synapse/examples/mnist.rs, synapse/examples/cifar10.rs, synapse/tests/integration/mnist_e2e.rs, synapse/tests/benchmarks/training_throughput.rs, synapse/tests/benchmarks/memory_bench.rs, synapse/tests/benchmarks/matmul_bench.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

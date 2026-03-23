@@ -1,0 +1,8 @@
+[package]
+name = "synapse-optim"
+version = "0.1.0"
+edition = "2021"
+description = "Optimizers for Synapse: SGD, Adam, RMSProp, LR schedulers, and gradient clipping"
+
+[dev-dependencies]
+rand = "0.8"

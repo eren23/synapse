@@ -1,0 +1,12 @@
+# Task: Zig Tensor Storage + Shape
+
+Implement zig/src/tensor/storage.zig: Dense contiguous byte buffer with 64-byte alignment, atomic reference counting (retain/release), typed data accessors via comptime generics. Implement zig/src/tensor/shape.zig: Comptime shape validation, broadcasting rule computation (broadcast_shapes), stride calculation from shape (contiguous_strides), numel, compatibility checks. Also create zig/src/root.zig as library entry point and zig/build.zig for initial build config.
+
+Tests in zig/tests/test_tensor.zig (partial): storage create/retain/release cycle, ref count reaches 0 and frees. Shape broadcast rules: [3,1]+[1,4]=[3,4], [5,3,1]+[1,4]=[5,3,4]. Invalid broadcast detection. Contiguous stride calc. At least 10 NumPy-compatible broadcast test cases.
+
+Pass/fail: All unit tests pass. Storage correctly frees when ref count hits 0 (no leaks via tracking allocator). Broadcast rules match NumPy semantics for at least 10 test cases.
+
+Target files: synapse/zig/src/tensor/storage.zig, synapse/zig/src/tensor/shape.zig, synapse/zig/src/root.zig, synapse/zig/build.zig, synapse/zig/tests/test_tensor.zig
+
+## Context from Previous Runs
+No relevant learnings found for this project.

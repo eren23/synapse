@@ -1,0 +1,17 @@
+# Task: Zig Conv2d + Pooling + Transpose Ops
+
+Implement zig/src/ops/conv.zig: im2col transformation + GEMM-based conv2d forward. Padding, strides. Direct fallback for 1x1 kernels. MUST include naive 4-loop implementation for benchmark comparison. Implement zig/src/ops/pool.zig: MaxPool2d (with argmax indices for backward), AvgPool2d. Stride and kernel size parameters. Implement zig/src/ops/transpose.zig: Cache-oblivious matrix transpose.
+
+Tests: test_conv.zig (correctness vs naive 4-loop on 3x3, 5x5, 1x1 kernels, various padding/stride combos), test_pool.zig (pooling correctness + argmax indices). bench_conv.zig: 3x3 conv on 64x64x3, 32 filters, naive vs im2col+GEMM.
+
+Pass/fail: Correctness within 1e-4. im2col+GEMM conv >=8x vs naive 4-loop. Pooling argmax indices correct for backward pass.
+
+Target files: synapse/zig/src/ops/conv.zig, synapse/zig/src/ops/pool.zig, synapse/zig/src/ops/transpose.zig, synapse/zig/tests/test_conv.zig, synapse/zig/tests/test_pool.zig, synapse/zig/tests/bench_conv.zig
+
+## Related Tests
+These test files cover your target files — run them to verify:
+- synapse/zig/tests/test_conv.zig
+- synapse/zig/tests/test_pool.zig
+
+## Context from Previous Runs
+No relevant learnings found for this project.

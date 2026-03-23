@@ -1,0 +1,13 @@
+[package]
+name = "synapse-train"
+version = "0.1.0"
+edition = "2021"
+description = "Training loop, metrics, checkpoints, and callbacks for Synapse"
+
+[dependencies]
+synapse-autograd = { path = "../synapse-autograd" }
+synapse-nn = { path = "../synapse-nn" }
+synapse-optim = { path = "../synapse-optim" }
+
+[dev-dependencies]
+rand = "0.8"

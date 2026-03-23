@@ -1,0 +1,34 @@
+{
+  "task_id": "task-11",
+  "title": "Rust FFI Bridge (synapse-sys) + Core Tensor (synapse-core)",
+  "description": "Implement crates/synapse-sys/build.rs: Invokes zig build -Doptimize=ReleaseFast, links static library. Implement crates/synapse-sys/src/lib.rs: Raw extern \"C\" block matching synapse.h with all syn_* function declarations.\n\nImplement crates/synapse-core/: Safe Tensor wrapper with Arc<RawStorage> that calls syn_storage_release on Drop. Files: lib.rs, tensor.rs (safe Tensor wrapping Zig storage with zeros/ones/randn/from_slice/matmul/add/reshape/transpose/contiguous), dtype.rs (DType enum: F32, F64, I32, I64, Bool), device.rs (CPU device), error.rs (SynapseError hierarchy mapping from syn_status_t), shape.rs (dynamic Shape + broadcasting).\n\nAlso create workspace Cargo.toml.\n\nTests in tests/integration/ffi_roundtrip.rs: Create tensors from Rust, verify shape/data. MatMul through FFI matches reference within 1e-4. Drop releases Zig storage. Error propagation. Memory leak test: create/destroy 10K tensors.\n\nPass/fail: No memory leaks. MatMul through FFI correct within 1e-4. All Zig error codes correctly map to Rust Result::Err.",
+  "status": "done",
+  "task_kind": "implement",
+  "role_hint": "impl",
+  "deps": [
+    "task-10"
+  ],
+  "target_files": [
+    "synapse/Cargo.toml",
+    "synapse/crates/synapse-sys/Cargo.toml",
+    "synapse/crates/synapse-sys/build.rs",
+    "synapse/crates/synapse-sys/src/lib.rs",
+    "synapse/crates/synapse-core/Cargo.toml",
+    "synapse/crates/synapse-core/src/lib.rs",
+    "synapse/crates/synapse-core/src/tensor.rs",
+    "synapse/crates/synapse-core/src/dtype.rs",
+    "synapse/crates/synapse-core/src/device.rs",
+    "synapse/crates/synapse-core/src/error.rs",
+    "synapse/crates/synapse-core/src/shape.rs",
+    "synapse/tests/integration/ffi_roundtrip.rs"
+  ],
+  "read_files": [],
+  "files_modified": [],
+  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"f61b3fb0-5db6-48a8-ad6a-8dbcf02c68fa\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"7e556447-f62b-4030-9e30-b929b09696ee\",\"session_id\":\"63e29de8-7682-4aae-b19a-54d4fac1f192\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"f61b3fb0-5db6-48a8-ad6a-8dbcf02c68fa\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "symbol_scope": [],
+  "tokens_used": 1311,
+  "cost_usd": 0.0,
+  "attempt_count": 0,
+  "attempt_history": [],
+  "has_diff": false
+}

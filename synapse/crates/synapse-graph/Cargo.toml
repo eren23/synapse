@@ -1,0 +1,9 @@
+[package]
+name = "synapse-graph"
+version = "0.1.0"
+edition = "2021"
+description = "Graph IR and optimization passes for Synapse"
+
+[dependencies]
+
+[dev-dependencies]

@@ -1,0 +1,8 @@
+.{
+    .name = .synapse,
+    .version = "0.1.0",
+    .fingerprint = 0xa462c73972944dfa,
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{},
+    .paths = .{""},
+}

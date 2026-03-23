@@ -1,0 +1,12 @@
+{
+  "is_git_repo": false,
+  "original_branch": "",
+  "swarm_branch": "",
+  "stash_ref": "",
+  "pre_run_head": "",
+  "base_ref": "",
+  "base_commit": "",
+  "result_ref": "",
+  "result_commit": "",
+  "finalization_mode": ""
+}

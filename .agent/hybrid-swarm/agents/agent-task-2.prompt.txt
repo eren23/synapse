@@ -1,0 +1,14 @@
+# Task: Zig Memory Allocators (Arena, Pool, Aligned, Tracking)
+
+Implement zig/src/alloc/arena.zig: Region-based arena with O(1) reset, bump allocation, configurable backing capacity. Implement zig/src/alloc/pool.zig: Fixed-size slab allocator, free-list based acquire/release, pre-allocates slots. Implement zig/src/alloc/aligned.zig: Wrapper ensuring 64-byte alignment for SIMD. Implement zig/src/alloc/tracking.zig: Debug allocator wrapper that counts allocs/frees and detects leaks.
+
+Tests in zig/tests/test_alloc.zig: Arena alloc, reset, re-alloc. Pool acquire/release/reacquire. Alignment verification (assert ptr % 64 == 0). Tracking allocator leak detection.
+
+Benchmarks in zig/tests/bench_alloc.zig: Arena vs std.heap.page_allocator (10K mixed-size), Pool vs malloc/free (10K fixed-size). MUST include both naive baseline AND optimized implementation.
+
+Pass/fail: Arena >=3x throughput vs page_allocator. Pool >=5x throughput vs malloc/free. No leaks detected by tracking allocator. All unit tests pass.
+
+Target files: synapse/zig/src/alloc/arena.zig, synapse/zig/src/alloc/pool.zig, synapse/zig/src/alloc/aligned.zig, synapse/zig/src/alloc/tracking.zig, synapse/zig/tests/test_alloc.zig, synapse/zig/tests/bench_alloc.zig
+
+## Context from Previous Runs
+No relevant learnings found for this project.

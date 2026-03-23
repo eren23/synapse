@@ -1,0 +1,43 @@
+{
+  "task_id": "task-13",
+  "title": "Rust Autograd Ops (All Forward+Backward Implementations)",
+  "description": "Implement crates/synapse-autograd/src/ops/: mod.rs, arithmetic.rs (Add/Sub/Mul/Div forward+backward with broadcasting gradient reduction), matmul.rs (dA = dOut @ B^T, dB = A^T @ dOut), reduce.rs (Sum backward expand, Mean backward), activation.rs (ReLU/Sigmoid/Tanh/GELU backward), reshape.rs (Reshape/Transpose backward), conv.rs (Conv2d backward: im2col grad, weight grad, input grad via col2im), pool.rs (MaxPool backward scatter via saved indices, AvgPool backward), batchnorm.rs (input/gamma/beta gradients), softmax.rs (Softmax/LogSoftmax backward), loss.rs (MSELoss/CrossEntropyLoss).\n\nTests: For EVERY op: grad_check (numerical vs analytical, non-negotiable). MatMul gradient shapes correct for non-square. Broadcasting gradient reduction correct. Benchmark: Forward+backward on 10-layer MLP, batch 64.\n\nPass/fail: grad_check passes for ALL ops (relative error < 1e-3). No gradient shape mismatches. Forward+backward overhead <=5% vs forward-only.",
+  "status": "done",
+  "task_kind": "implement",
+  "role_hint": "impl",
+  "deps": [
+    "task-12"
+  ],
+  "target_files": [
+    "synapse/crates/synapse-autograd/src/ops/mod.rs",
+    "synapse/crates/synapse-autograd/src/ops/arithmetic.rs",
+    "synapse/crates/synapse-autograd/src/ops/matmul.rs",
+    "synapse/crates/synapse-autograd/src/ops/reduce.rs",
+    "synapse/crates/synapse-autograd/src/ops/activation.rs",
+    "synapse/crates/synapse-autograd/src/ops/reshape.rs",
+    "synapse/crates/synapse-autograd/src/ops/conv.rs",
+    "synapse/crates/synapse-autograd/src/ops/pool.rs",
+    "synapse/crates/synapse-autograd/src/ops/batchnorm.rs",
+    "synapse/crates/synapse-autograd/src/ops/softmax.rs",
+    "synapse/crates/synapse-autograd/src/ops/loss.rs",
+    "synapse/tests/integration/autograd_correctness.rs"
+  ],
+  "read_files": [],
+  "files_modified": [],
+  "result_summary": "{\"type\":\"system\",\"subtype\":\"hook_started\",\"hook_id\":\"4fa5372a-2c0c-4ed8-a925-8a2be7401ab5\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"uuid\":\"9ec09a24-d527-481b-b59d-37b567834208\",\"session_id\":\"9a16bb17-b7a8-4328-978a-f8d81bfd1854\"}\n{\"type\":\"system\",\"subtype\":\"hook_response\",\"hook_id\":\"4fa5372a-2c0c-4ed8-a925-8a2be7401ab5\",\"hook_name\":\"SessionStart:startup\",\"hook_event\":\"SessionStart\",\"output\":\"{\\n  \\\"hookSpecificOutput\\\": {\\n    \\\"hookEventName\\\": \\\"SessionStart\\\",\\n    \\\"additionalContext\\\": \\\"<EXTREMELY_IMPORTANT>\\\\nYou have superpowers.\\\\n\\\\n**Below is the full content of your 'superpowers:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\\\\n\\\\n---\\\\nname: using-superpowers\\\\ndescription: Use when starting any conversation - establishes how to find and use skills, requiring Skill tool invocation before ANY response including clarifying questions\\\\n---\\\\n\\\\n<SUBAGENT-STOP>\\\\nIf you were dispatched as a subagent to execute a specific task, skip this skill.\\\\n</SUBAGENT-STOP>\\\\n\\\\n<EXTREMELY-IMPORTANT>\\\\nIf you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.\\\\n\\\\nIF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.\\\\n\\\\nThis is not negotiable. This is not optional. You cannot rationalize your way out of this.\\\\n</EXTREMELY-IMPORTANT>\\\\n\\\\n## Instruction Priority\\\\n\\\\nSuperpowers skills override default system prompt behavior, but **user instructions always take precedence**:\\\\n\\\\n1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) \u2014 highest priority\\\\n2. **Superpowers skills** \u2014 override default system behavior where they conflict\\\\n3. **Default system prompt** \u2014 lowest priority\\\\n\\\\nIf CLAUDE.md, GEMINI.md, or AGENTS.md says \\\\\\\"don't use TDD\\\\\\\" and a skill says \\\\\\\"always use TDD,\\\\\\\" follow the user's instructions. The user is in control.\\\\n\\\\n## How to Access Skills\\\\n\\\\n**In Claude Code:** Use the `Skill` tool. When you invoke a skill, its content is loaded and presented to you\u2014follow it directly. Never use the Read tool on skill files.\\\\n\\\\n**In Gemini CLI:** Skills activate via the `activate_skill` tool. Gemini loads skill metadata at session start and activates the full content on demand.\\\\n\\\\n**In other environments:** Check your platform's documentation for how skills are loaded.\\\\n\\\\n## Platform Adaptation\\\\n\\\\nSkills use Claude Code tool names. Non-CC platforms: see `references/codex-tools.md` (Codex) for tool equivalents. Gemini CLI users get the tool mapping loaded automatically via GEMINI.md.\\\\n\\\\n# Using Skills\\\\n\\\\n## The Rule\\\\n\\\\n**Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.\\\\n\\\\n```dot\\\\ndigraph skill_flow {\\\\n    \\\\\\\"User message received\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" [shape=doublecircle];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" [shape=box];\\\\n    \\\\\\\"Might any skill apply?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Invoke Skill tool\\\\\\\" [shape=box];\\\\n    \\\\\\\"Announce: 'Using [skill] to [purpose]'\\\\\\\" [shape=box];\\\\n    \\\\\\\"Has checklist?\\\\\\\" [shape=diamond];\\\\n    \\\\\\\"Create TodoWrite todo per item\\\\\\\" [shape=box];\\\\n    \\\\\\\"Follow skill exactly\\\\\\\" [shape=box];\\\\n    \\\\\\\"Respond (including clarifications)\\\\\\\" [shape=doublecircle];\\\\n\\\\n    \\\\\\\"About to EnterPlanMode?\\\\\\\" -> \\\\\\\"Already brainstormed?\\\\\\\";\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Invoke brainstorming skill\\\\\\\" [label=\\\\\\\"no\\\\\\\"];\\\\n    \\\\\\\"Already brainstormed?\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\" [label=\\\\\\\"yes\\\\\\\"];\\\\n    \\\\\\\"Invoke brainstorming skill\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n\\\\n    \\\\\\\"User message received\\\\\\\" -> \\\\\\\"Might any skill apply?\\\\\\\";\\\\n ",
+  "symbol_scope": [],
+  "tokens_used": 5868,
+  "cost_usd": 0.0,
+  "attempt_count": 1,
+  "attempt_history": [
+    {
+      "attempt": 1,
+      "error": "Task timed out after 1200.0s",
+      "timestamp": "2026-03-22T23:32:21.340411+00:00",
+      "duration_s": 1200.0100901126862,
+      "tokens_used": 0,
+      "failure_cause": "timeout"
+    }
+  ],
+  "has_diff": false
+}

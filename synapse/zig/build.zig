@@ -1,0 +1,473 @@
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // Static library
+    const lib_mod = b.addModule("synapse", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const lib = b.addLibrary(.{
+        .name = "synapse",
+        .root_module = lib_mod,
+    });
+    b.installArtifact(lib);
+
+    // Allocator modules
+    const arena_mod = b.addModule("arena", .{
+        .root_source_file = b.path("src/alloc/arena.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const pool_mod = b.addModule("pool", .{
+        .root_source_file = b.path("src/alloc/pool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const aligned_mod = b.addModule("aligned", .{
+        .root_source_file = b.path("src/alloc/aligned.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const tracking_mod = b.addModule("tracking", .{
+        .root_source_file = b.path("src/alloc/tracking.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // SIMD modules
+    const avx2_mod = b.addModule("avx2", .{
+        .root_source_file = b.path("src/simd/avx2.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const neon_mod = b.addModule("neon", .{
+        .root_source_file = b.path("src/simd/neon.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const dispatch_mod = b.addModule("dispatch", .{
+        .root_source_file = b.path("src/simd/dispatch.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "avx2", .module = avx2_mod },
+            .{ .name = "neon", .module = neon_mod },
+        },
+    });
+
+    const vec_ops_mod = b.addModule("vec_ops", .{
+        .root_source_file = b.path("src/simd/vec_ops.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "dispatch", .module = dispatch_mod },
+        },
+    });
+
+    const reduce_mod = b.addModule("reduce", .{
+        .root_source_file = b.path("src/simd/reduce.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Tensor shape module (standalone for ops)
+    const shape_mod = b.addModule("shape", .{
+        .root_source_file = b.path("src/tensor/shape.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Elementwise ops module
+    const elementwise_mod = b.addModule("elementwise", .{
+        .root_source_file = b.path("src/ops/elementwise.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "shape", .module = shape_mod },
+        },
+    });
+
+    // ================================================================
+    // FFI module & libsynapse_zig.a static library
+    // Cross-compile: zig build -Dtarget=aarch64-linux-gnu
+    //                zig build -Dtarget=x86_64-linux-gnu
+    // ================================================================
+
+    const ffi_mod = b.addModule("ffi", .{
+        .root_source_file = b.path("src/ffi/exports.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "synapse", .module = lib_mod },
+            .{ .name = "arena", .module = arena_mod },
+            .{ .name = "pool", .module = pool_mod },
+        },
+    });
+
+    const ffi_lib = b.addLibrary(.{
+        .name = "synapse_zig",
+        .root_module = ffi_mod,
+    });
+    b.installArtifact(ffi_lib);
+
+    // Tensor unit tests
+    const tensor_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_tensor.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_tensor_tests = b.addRunArtifact(tensor_tests);
+
+    // Allocator unit tests
+    const alloc_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_alloc.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "arena", .module = arena_mod },
+                .{ .name = "pool", .module = pool_mod },
+                .{ .name = "aligned", .module = aligned_mod },
+                .{ .name = "tracking", .module = tracking_mod },
+            },
+        }),
+    });
+    const run_alloc_tests = b.addRunArtifact(alloc_tests);
+
+    // SIMD unit tests
+    const simd_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_simd.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "vec_ops", .module = vec_ops_mod },
+                .{ .name = "dispatch", .module = dispatch_mod },
+                .{ .name = "avx2", .module = avx2_mod },
+                .{ .name = "neon", .module = neon_mod },
+                .{ .name = "reduce", .module = reduce_mod },
+            },
+        }),
+    });
+    const run_simd_tests = b.addRunArtifact(simd_tests);
+
+    // Elementwise unit tests
+    const elementwise_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_elementwise.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "elementwise", .module = elementwise_mod },
+                .{ .name = "shape", .module = shape_mod },
+            },
+        }),
+    });
+    const run_elementwise_tests = b.addRunArtifact(elementwise_tests);
+
+    // Reduce ops unit tests
+    const reduce_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_reduce.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_reduce_ops_tests = b.addRunArtifact(reduce_ops_tests);
+
+    // Softmax ops unit tests
+    const softmax_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_softmax.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_softmax_ops_tests = b.addRunArtifact(softmax_ops_tests);
+
+    // Batchnorm ops unit tests
+    const batchnorm_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_batchnorm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_batchnorm_ops_tests = b.addRunArtifact(batchnorm_ops_tests);
+
+    const test_step = b.step("test", "Run all unit tests");
+    test_step.dependOn(&run_tensor_tests.step);
+    test_step.dependOn(&run_alloc_tests.step);
+    test_step.dependOn(&run_simd_tests.step);
+    test_step.dependOn(&run_elementwise_tests.step);
+    test_step.dependOn(&run_reduce_ops_tests.step);
+    test_step.dependOn(&run_softmax_ops_tests.step);
+    test_step.dependOn(&run_batchnorm_ops_tests.step);
+
+    // Allocator tests only (separate step)
+    const alloc_test_step = b.step("test-alloc", "Run allocator unit tests only");
+    alloc_test_step.dependOn(&run_alloc_tests.step);
+
+    // SIMD tests only (separate step)
+    const simd_test_step = b.step("test-simd", "Run SIMD unit tests only");
+    simd_test_step.dependOn(&run_simd_tests.step);
+
+    // Elementwise tests only (separate step)
+    const elementwise_test_step = b.step("test-elementwise", "Run elementwise unit tests only");
+    elementwise_test_step.dependOn(&run_elementwise_tests.step);
+
+    // Ops tests only (separate steps)
+    const reduce_ops_test_step = b.step("test-reduce", "Run reduce ops unit tests only");
+    reduce_ops_test_step.dependOn(&run_reduce_ops_tests.step);
+
+    const softmax_ops_test_step = b.step("test-softmax", "Run softmax ops unit tests only");
+    softmax_ops_test_step.dependOn(&run_softmax_ops_tests.step);
+
+    const batchnorm_ops_test_step = b.step("test-batchnorm", "Run batchnorm ops unit tests only");
+    batchnorm_ops_test_step.dependOn(&run_batchnorm_ops_tests.step);
+
+    // Matmul ops unit tests
+    const matmul_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_matmul.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_matmul_ops_tests = b.addRunArtifact(matmul_ops_tests);
+    test_step.dependOn(&run_matmul_ops_tests.step);
+
+    const matmul_ops_test_step = b.step("test-matmul", "Run matmul ops unit tests only");
+    matmul_ops_test_step.dependOn(&run_matmul_ops_tests.step);
+
+    // Conv2d unit tests
+    const conv_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_conv.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_conv_ops_tests = b.addRunArtifact(conv_ops_tests);
+    test_step.dependOn(&run_conv_ops_tests.step);
+
+    const conv_ops_test_step = b.step("test-conv", "Run conv2d ops unit tests only");
+    conv_ops_test_step.dependOn(&run_conv_ops_tests.step);
+
+    // Pool unit tests
+    const pool_ops_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_pool.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    const run_pool_ops_tests = b.addRunArtifact(pool_ops_tests);
+    test_step.dependOn(&run_pool_ops_tests.step);
+
+    const pool_ops_test_step = b.step("test-pool", "Run pooling ops unit tests only");
+    pool_ops_test_step.dependOn(&run_pool_ops_tests.step);
+
+    // Tensor unit tests (standalone)
+    const tensor_test_step = b.step("test-tensor", "Run tensor unit tests only");
+    tensor_test_step.dependOn(&run_tensor_tests.step);
+
+    // FFI round-trip tests
+    const ffi_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_ffi.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "ffi", .module = ffi_mod },
+            },
+        }),
+    });
+    const run_ffi_tests = b.addRunArtifact(ffi_tests);
+    test_step.dependOn(&run_ffi_tests.step);
+
+    const ffi_test_step = b.step("test-ffi", "Run FFI round-trip tests only");
+    ffi_test_step.dependOn(&run_ffi_tests.step);
+
+    // Allocator benchmarks
+    const bench = b.addExecutable(.{
+        .name = "bench_alloc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_alloc.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "arena", .module = arena_mod },
+                .{ .name = "pool", .module = pool_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench);
+
+    const run_bench = b.addRunArtifact(bench);
+    const bench_step = b.step("bench", "Run allocator benchmarks");
+    bench_step.dependOn(&run_bench.step);
+
+    // SIMD benchmarks — all modules compiled with ReleaseFast
+    const bench_avx2_mod = b.addModule("bench_avx2", .{
+        .root_source_file = b.path("src/simd/avx2.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_neon_mod = b.addModule("bench_neon", .{
+        .root_source_file = b.path("src/simd/neon.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_dispatch_mod = b.addModule("bench_dispatch", .{
+        .root_source_file = b.path("src/simd/dispatch.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "avx2", .module = bench_avx2_mod },
+            .{ .name = "neon", .module = bench_neon_mod },
+        },
+    });
+    const bench_simd = b.addExecutable(.{
+        .name = "bench_simd",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_simd.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "dispatch", .module = bench_dispatch_mod },
+                .{ .name = "neon", .module = bench_neon_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_simd);
+
+    const run_bench_simd = b.addRunArtifact(bench_simd);
+    const bench_simd_step = b.step("bench-simd", "Run SIMD benchmarks");
+    bench_simd_step.dependOn(&run_bench_simd.step);
+
+    // Elementwise benchmarks — compiled with ReleaseFast
+    const bench_shape_mod = b.createModule(.{
+        .root_source_file = b.path("src/tensor/shape.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_elementwise_mod = b.createModule(.{
+        .root_source_file = b.path("src/ops/elementwise.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+        .imports = &.{
+            .{ .name = "shape", .module = bench_shape_mod },
+        },
+    });
+    const bench_elementwise = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_elementwise.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "elementwise", .module = bench_elementwise_mod },
+                .{ .name = "shape", .module = bench_shape_mod },
+            },
+        }),
+    });
+    const run_bench_elementwise = b.addRunArtifact(bench_elementwise);
+    const bench_elementwise_step = b.step("bench-elementwise", "Run elementwise benchmarks (ReleaseFast)");
+    bench_elementwise_step.dependOn(&run_bench_elementwise.step);
+
+    // Reduce benchmarks (SIMD reduce_sum + Welford vs two-pass)
+    const bench_reduce = b.addExecutable(.{
+        .name = "bench_reduce",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_reduce.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    b.installArtifact(bench_reduce);
+
+    const run_bench_reduce = b.addRunArtifact(bench_reduce);
+    const bench_reduce_step = b.step("bench-reduce", "Run reduce + batchnorm benchmarks");
+    bench_reduce_step.dependOn(&run_bench_reduce.step);
+
+    // Matmul benchmarks — compiled with ReleaseFast
+    const bench_synapse_mod = b.createModule(.{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_matmul = b.addExecutable(.{
+        .name = "bench_matmul",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_matmul.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_matmul);
+
+    const run_bench_matmul = b.addRunArtifact(bench_matmul);
+    const bench_matmul_step = b.step("bench-matmul", "Run SGEMM benchmarks");
+    bench_matmul_step.dependOn(&run_bench_matmul.step);
+
+    // Conv2d benchmarks — compiled with ReleaseFast
+    // Naive conv compiled at Debug to prevent auto-vectorization (true scalar baseline)
+    const naive_conv_mod = b.createModule(.{
+        .root_source_file = b.path("src/ops/naive_conv.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    const bench_conv = b.addExecutable(.{
+        .name = "bench_conv",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_conv.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+                .{ .name = "naive_conv", .module = naive_conv_mod },
+            },
+        }),
+    });
+    b.installArtifact(bench_conv);
+
+    const run_bench_conv = b.addRunArtifact(bench_conv);
+    const bench_conv_step = b.step("bench-conv", "Run Conv2d benchmarks");
+    bench_conv_step.dependOn(&run_bench_conv.step);
+}

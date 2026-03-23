@@ -1,0 +1,38 @@
+# Rust
+**/target/
+
+# Compiled objects / libs
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Python build / cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Node (if present)
+node_modules/
+
+# CMake / generic out dirs
+**/cmake-build-*/
+out/
+
+# Zig
+.zig-cache/
+zig-cache/
+zig-out/

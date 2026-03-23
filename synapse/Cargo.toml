@@ -1,0 +1,50 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[package]
+name = "synapse"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+synapse-autograd = { path = "crates/synapse-autograd" }
+synapse-nn = { path = "crates/synapse-nn" }
+synapse-optim = { path = "crates/synapse-optim" }
+synapse-data = { path = "crates/synapse-data" }
+synapse-graph = { path = "crates/synapse-graph" }
+synapse-train = { path = "crates/synapse-train" }
+rand = "0.8"
+rand_distr = "0.4"
+
+[[example]]
+name = "xor"
+path = "examples/xor.rs"
+
+[[example]]
+name = "mnist"
+path = "examples/mnist.rs"
+
+[[example]]
+name = "cifar10"
+path = "examples/cifar10.rs"
+
+[[test]]
+name = "graph_optimization"
+path = "tests/integration/graph_optimization.rs"
+
+[[test]]
+name = "mnist_e2e"
+path = "tests/integration/mnist_e2e.rs"
+
+[[test]]
+name = "training_throughput"
+path = "tests/benchmarks/training_throughput.rs"
+
+[[test]]
+name = "memory_bench"
+path = "tests/benchmarks/memory_bench.rs"
+
+[[test]]
+name = "matmul_bench"
+path = "tests/benchmarks/matmul_bench.rs"

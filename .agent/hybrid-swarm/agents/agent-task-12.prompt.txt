@@ -1,0 +1,12 @@
+# Task: Rust Autograd Engine — Core (Variable, Graph, Backward)
+
+Implement crates/synapse-autograd/: variable.rs (Variable wrapping Tensor + optional gradient, unique ID via AtomicUsize, requires_grad flag), graph.rs (computation graph as Vec of nodes, each stores GradFn + parent indices, topological sort for backward), backward.rs (reverse-mode AD, walk graph in reverse topo order, accumulate gradients handling fan-out by summing), function.rs (GradFn trait: backward returns Vec<Option<Tensor>>, inputs returns &[VariableId]), no_grad.rs (thread-local flag to disable tracking), grad_check.rs (numerical gradient checking via finite differences).
+
+Tests: Simple graph y = a*b + c backward produces correct da, db, dc. Fan-out: y = x + x, dy/dx = 2. Diamond: z = (x+y)*(x-y), correct dz/dx and dz/dy. no_grad context prevents graph construction. grad_check numerical vs analytical within 1e-4.
+
+Pass/fail: Correct gradients for linear, fan-out, and diamond graphs. grad_check passes. no_grad properly disables graph tracking.
+
+Target files: synapse/crates/synapse-autograd/Cargo.toml, synapse/crates/synapse-autograd/src/lib.rs, synapse/crates/synapse-autograd/src/variable.rs, synapse/crates/synapse-autograd/src/graph.rs, synapse/crates/synapse-autograd/src/backward.rs, synapse/crates/synapse-autograd/src/function.rs, synapse/crates/synapse-autograd/src/no_grad.rs, synapse/crates/synapse-autograd/src/grad_check.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

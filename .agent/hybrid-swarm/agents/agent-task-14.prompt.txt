@@ -1,0 +1,12 @@
+# Task: Rust Optimizers (SGD, Adam, RMSProp, Schedulers, GradClip)
+
+Implement crates/synapse-optim/: optimizer.rs (Optimizer trait: step/zero_grad/add_param_group/state_dict/load_state_dict), sgd.rs (SGD + momentum + Nesterov + weight decay), adam.rs (Adam with bias correction, AdamW variant), rmsprop.rs (RMSProp with centered variant), lr_scheduler.rs (StepLR, CosineAnnealingLR, LinearWarmup, ReduceLROnPlateau), grad_clip.rs (clip_grad_norm_, clip_grad_value_).
+
+Tests: SGD step on known gradient produces expected parameter update. Adam state (m,v) correctly maintained across steps, bias correction correct for first 10 steps. LR schedulers produce correct learning rates at each step. Gradient clipping respects max norm. Benchmark: optimizer.step() time for 1M parameters.
+
+Pass/fail: SGD update matches PyTorch reference for 5-step sequence within 1e-6. Adam matches PyTorch reference for 10-step sequence within 1e-6. Gradient clipping correctly bounds norm. All schedulers produce correct LR values.
+
+Target files: synapse/crates/synapse-optim/Cargo.toml, synapse/crates/synapse-optim/src/lib.rs, synapse/crates/synapse-optim/src/optimizer.rs, synapse/crates/synapse-optim/src/sgd.rs, synapse/crates/synapse-optim/src/adam.rs, synapse/crates/synapse-optim/src/rmsprop.rs, synapse/crates/synapse-optim/src/lr_scheduler.rs, synapse/crates/synapse-optim/src/grad_clip.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

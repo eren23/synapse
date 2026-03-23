@@ -1,0 +1,16 @@
+[package]
+name = "synapse-nn"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+synapse-autograd = { path = "../synapse-autograd" }
+rand = "0.8"
+rand_distr = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "cnn_forward"
+harness = false

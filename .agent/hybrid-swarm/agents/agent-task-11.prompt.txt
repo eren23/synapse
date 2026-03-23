@@ -1,0 +1,16 @@
+# Task: Rust FFI Bridge (synapse-sys) + Core Tensor (synapse-core)
+
+Implement crates/synapse-sys/build.rs: Invokes zig build -Doptimize=ReleaseFast, links static library. Implement crates/synapse-sys/src/lib.rs: Raw extern "C" block matching synapse.h with all syn_* function declarations.
+
+Implement crates/synapse-core/: Safe Tensor wrapper with Arc<RawStorage> that calls syn_storage_release on Drop. Files: lib.rs, tensor.rs (safe Tensor wrapping Zig storage with zeros/ones/randn/from_slice/matmul/add/reshape/transpose/contiguous), dtype.rs (DType enum: F32, F64, I32, I64, Bool), device.rs (CPU device), error.rs (SynapseError hierarchy mapping from syn_status_t), shape.rs (dynamic Shape + broadcasting).
+
+Also create workspace Cargo.toml.
+
+Tests in tests/integration/ffi_roundtrip.rs: Create tensors from Rust, verify shape/data. MatMul through FFI matches reference within 1e-4. Drop releases Zig storage. Error propagation. Memory leak test: create/destroy 10K tensors.
+
+Pass/fail: No memory leaks. MatMul through FFI correct within 1e-4. All Zig error codes correctly map to Rust Result::Err.
+
+Target files: synapse/Cargo.toml, synapse/crates/synapse-sys/Cargo.toml, synapse/crates/synapse-sys/build.rs, synapse/crates/synapse-sys/src/lib.rs, synapse/crates/synapse-core/Cargo.toml, synapse/crates/synapse-core/src/lib.rs, synapse/crates/synapse-core/src/tensor.rs, synapse/crates/synapse-core/src/dtype.rs, synapse/crates/synapse-core/src/device.rs, synapse/crates/synapse-core/src/error.rs, synapse/crates/synapse-core/src/shape.rs, synapse/tests/integration/ffi_roundtrip.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.

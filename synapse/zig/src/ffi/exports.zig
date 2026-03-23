@@ -1,0 +1,773 @@
+//! C ABI FFI exports for the Synapse tensor library.
+//! All functions use C calling convention (via `export`) and return syn_status_t error codes.
+//! No panics escape across the FFI boundary: all Zig errors are mapped to integer status codes.
+//!
+//! Module design: this file uses only file-path imports (no named modules) so that
+//! every source file belongs to exactly one module. Element-wise ops and SIMD vec ops
+//! are implemented inline using portable @Vector to avoid importing elementwise.zig
+//! and vec_ops.zig which depend on named modules.
+
+const std = @import("std");
+const synapse = @import("synapse");
+
+// --- Internal type aliases (from synapse module) ---
+const Storage = synapse.tensor.storage.Storage;
+const Shape = synapse.tensor.shape.Shape;
+const MAX_RANK = synapse.tensor.shape.MAX_RANK;
+const TensorF32 = synapse.tensor.core.Tensor(f32);
+
+// --- Ops (accessed through synapse module) ---
+const reduce_ops = synapse.ops.reduce;
+const softmax_ops = synapse.ops.softmax;
+const batchnorm_ops = synapse.ops.batchnorm;
+const matmul_ops = synapse.ops.matmul;
+const conv_ops = synapse.ops.conv;
+const pool_ops = synapse.ops.pool;
+const transpose_ops = synapse.ops.transpose;
+
+// --- Allocator modules (separate named modules, no file overlap with synapse) ---
+const ArenaAllocator = @import("arena").ArenaAllocator;
+const PoolAllocator = @import("pool").PoolAllocator;
+
+// FFI pool uses 128-byte fixed slots.
+const FfiPool = PoolAllocator(128);
+
+// All FFI allocations go through the page allocator (no libc dependency).
+const ffi_allocator = std.heap.page_allocator;
+
+// ============================================================
+// Status codes
+// ============================================================
+
+pub const SYN_OK: c_int = 0;
+pub const SYN_ERR_NULL_PTR: c_int = 1;
+pub const SYN_ERR_INVALID_ARG: c_int = 2;
+pub const SYN_ERR_OUT_OF_MEMORY: c_int = 3;
+pub const SYN_ERR_SHAPE_MISMATCH: c_int = 4;
+pub const SYN_ERR_NOT_CONTIGUOUS: c_int = 5;
+pub const SYN_ERR_INVALID_AXIS: c_int = 6;
+pub const SYN_ERR_INVALID_DIMENSIONS: c_int = 7;
+pub const SYN_ERR_INTERNAL: c_int = 8;
+
+// ============================================================
+// Internal wrapper (Tensor is a value type in Zig; we heap-box it)
+// ============================================================
+
+const TensorWrapper = struct {
+    tensor: TensorF32,
+};
+
+// ============================================================
+// Error mapping
+// ============================================================
+
+fn mapError(err: anyerror) c_int {
+    return switch (err) {
+        error.OutOfMemory => SYN_ERR_OUT_OF_MEMORY,
+        error.ShapeMismatch => SYN_ERR_SHAPE_MISMATCH,
+        error.NotContiguous => SYN_ERR_NOT_CONTIGUOUS,
+        error.InvalidAxis => SYN_ERR_INVALID_AXIS,
+        error.InvalidDimensions => SYN_ERR_INVALID_DIMENSIONS,
+        error.InvalidStride => SYN_ERR_INVALID_ARG,
+        error.IncompatibleShapes => SYN_ERR_SHAPE_MISMATCH,
+        error.RankTooHigh => SYN_ERR_INVALID_DIMENSIONS,
+        else => SYN_ERR_INTERNAL,
+    };
+}
+
+// ============================================================
+// Pointer conversion helpers
+// ============================================================
+
+inline fn ptrToStorage(p: ?*anyopaque) ?*Storage {
+    return @ptrCast(@alignCast(p orelse return null));
+}
+
+inline fn ptrToTensor(p: ?*anyopaque) ?*TensorWrapper {
+    return @ptrCast(@alignCast(p orelse return null));
+}
+
+inline fn ptrToArena(p: ?*anyopaque) ?*ArenaAllocator {
+    return @ptrCast(@alignCast(p orelse return null));
+}
+
+inline fn ptrToPool(p: ?*anyopaque) ?*FfiPool {
+    return @ptrCast(@alignCast(p orelse return null));
+}
+
+/// Wrap a returned Tensor(f32) value in a heap-allocated TensorWrapper.
+/// On allocation failure the tensor is released to avoid leaking storage.
+fn wrapTensor(t: TensorF32, out_ptr: *?*anyopaque) c_int {
+    const tw = ffi_allocator.create(TensorWrapper) catch {
+        t.release();
+        return SYN_ERR_OUT_OF_MEMORY;
+    };
+    tw.tensor = t;
+    out_ptr.* = @ptrCast(tw);
+    return SYN_OK;
+}
+
+// ============================================================
+// Portable @Vector SIMD helpers (inline, no external deps)
+// ============================================================
+
+const VEC_LEN = 4;
+const F32x4 = @Vector(VEC_LEN, f32);
+
+inline fn vecAdd(dst: []f32, a: []const f32, b: []const f32) void {
+    const len = dst.len;
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const va: F32x4 = a[i..][0..VEC_LEN].*;
+        const vb: F32x4 = b[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = va + vb;
+    }
+    while (i < len) : (i += 1) dst[i] = a[i] + b[i];
+}
+
+inline fn vecSub(dst: []f32, a: []const f32, b: []const f32) void {
+    const len = dst.len;
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const va: F32x4 = a[i..][0..VEC_LEN].*;
+        const vb: F32x4 = b[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = va - vb;
+    }
+    while (i < len) : (i += 1) dst[i] = a[i] - b[i];
+}
+
+inline fn vecMul(dst: []f32, a: []const f32, b: []const f32) void {
+    const len = dst.len;
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const va: F32x4 = a[i..][0..VEC_LEN].*;
+        const vb: F32x4 = b[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = va * vb;
+    }
+    while (i < len) : (i += 1) dst[i] = a[i] * b[i];
+}
+
+inline fn vecDiv(dst: []f32, a: []const f32, b: []const f32) void {
+    const len = dst.len;
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const va: F32x4 = a[i..][0..VEC_LEN].*;
+        const vb: F32x4 = b[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = va / vb;
+    }
+    while (i < len) : (i += 1) dst[i] = a[i] / b[i];
+}
+
+inline fn vecFma(dst: []f32, a: []const f32, b: []const f32, c: []const f32) void {
+    const len = dst.len;
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const va: F32x4 = a[i..][0..VEC_LEN].*;
+        const vb: F32x4 = b[i..][0..VEC_LEN].*;
+        const vc: F32x4 = c[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = @mulAdd(F32x4, va, vb, vc);
+    }
+    while (i < len) : (i += 1) dst[i] = @mulAdd(f32, a[i], b[i], c[i]);
+}
+
+inline fn vecRelu(dst: []f32, src: []const f32) void {
+    const len = dst.len;
+    const zero: F32x4 = @splat(0.0);
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const v: F32x4 = src[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = @max(v, zero);
+    }
+    while (i < len) : (i += 1) dst[i] = @max(src[i], 0.0);
+}
+
+inline fn scalarExp(x: f32) f32 {
+    const clamped = @max(@min(x, @as(f32, 88.0)), @as(f32, -88.0));
+    const ln2: f32 = 0.6931471805599453;
+    const ln2_inv: f32 = 1.4426950408889634;
+    const n_float = @round(clamped * ln2_inv);
+    const r = clamped - n_float * ln2;
+    var p: f32 = 1.0 / 120.0;
+    p = @mulAdd(f32, p, r, 1.0 / 24.0);
+    p = @mulAdd(f32, p, r, 1.0 / 6.0);
+    p = @mulAdd(f32, p, r, 0.5);
+    p = @mulAdd(f32, p, r, 1.0);
+    p = @mulAdd(f32, p, r, 1.0);
+    const n_int: i32 = @intFromFloat(n_float);
+    const biased: u32 = @bitCast(n_int + @as(i32, 127));
+    const pow2: f32 = @bitCast(biased << 23);
+    return p * pow2;
+}
+
+inline fn expVec(x: F32x4) F32x4 {
+    const ln2: F32x4 = @splat(0.6931471805599453);
+    const ln2_inv: F32x4 = @splat(1.4426950408889634);
+    const one: F32x4 = @splat(1.0);
+    const clamped = @max(@min(x, @as(F32x4, @splat(88.0))), @as(F32x4, @splat(-88.0)));
+    const n_float: F32x4 = @round(clamped * ln2_inv);
+    const r: F32x4 = clamped - n_float * ln2;
+    var p: F32x4 = @splat(@as(f32, 1.0 / 120.0));
+    p = @mulAdd(F32x4, p, r, @as(F32x4, @splat(@as(f32, 1.0 / 24.0))));
+    p = @mulAdd(F32x4, p, r, @as(F32x4, @splat(@as(f32, 1.0 / 6.0))));
+    p = @mulAdd(F32x4, p, r, @as(F32x4, @splat(@as(f32, 0.5))));
+    p = @mulAdd(F32x4, p, r, one);
+    p = @mulAdd(F32x4, p, r, one);
+    const n_int: @Vector(VEC_LEN, i32) = @intFromFloat(n_float);
+    const biased: @Vector(VEC_LEN, i32) = n_int + @as(@Vector(VEC_LEN, i32), @splat(@as(i32, 127)));
+    const biased_u: @Vector(VEC_LEN, u32) = @bitCast(biased);
+    const pow2: F32x4 = @bitCast(biased_u << @as(@Vector(VEC_LEN, u5), @splat(23)));
+    return p * pow2;
+}
+
+inline fn tanhVec(x: F32x4) F32x4 {
+    const one: F32x4 = @splat(1.0);
+    const clamped = @max(@min(x, @as(F32x4, @splat(10.0))), @as(F32x4, @splat(-10.0)));
+    const exp2x = expVec(clamped + clamped);
+    return (exp2x - one) / (exp2x + one);
+}
+
+inline fn scalarTanh(x: f32) f32 {
+    const clamped = @max(@min(x, @as(f32, 10.0)), @as(f32, -10.0));
+    const exp2x = scalarExp(clamped + clamped);
+    return (exp2x - 1.0) / (exp2x + 1.0);
+}
+
+inline fn vecSigmoid(dst: []f32, src: []const f32) void {
+    const len = dst.len;
+    const one: F32x4 = @splat(1.0);
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const v: F32x4 = src[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = one / (one + expVec(-v));
+    }
+    while (i < len) : (i += 1) dst[i] = 1.0 / (1.0 + scalarExp(-src[i]));
+}
+
+inline fn vecTanh(dst: []f32, src: []const f32) void {
+    const len = dst.len;
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const v: F32x4 = src[i..][0..VEC_LEN].*;
+        (dst.ptr + i)[0..VEC_LEN].* = tanhVec(v);
+    }
+    while (i < len) : (i += 1) dst[i] = scalarTanh(src[i]);
+}
+
+inline fn vecGelu(dst: []f32, src: []const f32) void {
+    const len = dst.len;
+    const half: F32x4 = @splat(0.5);
+    const one: F32x4 = @splat(1.0);
+    const sqrt_2_over_pi: F32x4 = @splat(0.7978845608028654);
+    const coeff: F32x4 = @splat(0.044715);
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const x: F32x4 = src[i..][0..VEC_LEN].*;
+        const x3 = x * x * x;
+        const inner = sqrt_2_over_pi * (x + coeff * x3);
+        (dst.ptr + i)[0..VEC_LEN].* = half * x * (one + tanhVec(inner));
+    }
+    while (i < len) : (i += 1) {
+        const x = src[i];
+        const inner = 0.7978845608028654 * (x + 0.044715 * x * x * x);
+        dst[i] = 0.5 * x * (1.0 + scalarTanh(inner));
+    }
+}
+
+inline fn vecHsum(src: []const f32) f32 {
+    const len = src.len;
+    var acc: F32x4 = @splat(0.0);
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const v: F32x4 = src[i..][0..VEC_LEN].*;
+        acc += v;
+    }
+    var s: f32 = @reduce(.Add, acc);
+    while (i < len) : (i += 1) s += src[i];
+    return s;
+}
+
+inline fn vecHmax(src: []const f32) f32 {
+    const len = src.len;
+    var acc: F32x4 = @splat(-std.math.inf(f32));
+    var i: usize = 0;
+    while (i + VEC_LEN <= len) : (i += VEC_LEN) {
+        const v: F32x4 = src[i..][0..VEC_LEN].*;
+        acc = @max(acc, v);
+    }
+    var m: f32 = @reduce(.Max, acc);
+    while (i < len) : (i += 1) m = @max(m, src[i]);
+    return m;
+}
+
+// ============================================================
+// Storage FFI
+// ============================================================
+
+pub export fn syn_storage_create(count: usize, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const storage = Storage.create(ffi_allocator, f32, count) catch return SYN_ERR_OUT_OF_MEMORY;
+    out_ptr.* = @ptrCast(storage);
+    return SYN_OK;
+}
+
+pub export fn syn_storage_retain(s: ?*anyopaque) c_int {
+    const storage = ptrToStorage(s) orelse return SYN_ERR_NULL_PTR;
+    _ = storage.retain();
+    return SYN_OK;
+}
+
+pub export fn syn_storage_release(s: ?*anyopaque) c_int {
+    const storage = ptrToStorage(s) orelse return SYN_ERR_NULL_PTR;
+    storage.release();
+    return SYN_OK;
+}
+
+pub export fn syn_storage_data(s: ?*anyopaque, out: ?*[*]f32) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const storage = ptrToStorage(s) orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = storage.dataAs(f32).ptr;
+    return SYN_OK;
+}
+
+pub export fn syn_storage_len(s: ?*anyopaque, out: ?*usize) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const storage = ptrToStorage(s) orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = storage.byteLen() / @sizeOf(f32);
+    return SYN_OK;
+}
+
+// ============================================================
+// Tensor FFI
+// ============================================================
+
+pub export fn syn_tensor_create(
+    storage_ptr: ?*anyopaque,
+    dims_ptr: ?[*]const usize,
+    ndim: usize,
+    out: ?*?*anyopaque,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const storage = ptrToStorage(storage_ptr) orelse return SYN_ERR_NULL_PTR;
+    const dims = dims_ptr orelse return SYN_ERR_NULL_PTR;
+    if (ndim > MAX_RANK) return SYN_ERR_INVALID_DIMENSIONS;
+
+    const shape = Shape.init(dims[0..ndim]);
+    if (shape.numel() * @sizeOf(f32) > storage.byteLen()) return SYN_ERR_INVALID_ARG;
+
+    const tw = ffi_allocator.create(TensorWrapper) catch return SYN_ERR_OUT_OF_MEMORY;
+    tw.tensor = TensorF32.init(storage, shape);
+    out_ptr.* = @ptrCast(tw);
+    return SYN_OK;
+}
+
+pub export fn syn_tensor_destroy(t: ?*anyopaque) c_int {
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    tw.tensor.release();
+    ffi_allocator.destroy(tw);
+    return SYN_OK;
+}
+
+pub export fn syn_tensor_shape(
+    t: ?*anyopaque,
+    out_dims: ?[*]usize,
+    out_ndim: ?*usize,
+) c_int {
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    if (out_ndim) |p| p.* = tw.tensor.shape.ndim;
+    if (out_dims) |d| {
+        for (0..tw.tensor.shape.ndim) |i| d[i] = tw.tensor.shape.dims[i];
+    }
+    return SYN_OK;
+}
+
+pub export fn syn_tensor_ndim(t: ?*anyopaque, out: ?*usize) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = tw.tensor.shape.ndim;
+    return SYN_OK;
+}
+
+pub export fn syn_tensor_data_ptr(t: ?*anyopaque, out: ?*[*]f32) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = tw.tensor.dataPtr();
+    return SYN_OK;
+}
+
+pub export fn syn_tensor_is_contiguous(t: ?*anyopaque, out: ?*c_int) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = if (tw.tensor.isContiguous()) 1 else 0;
+    return SYN_OK;
+}
+
+pub export fn syn_tensor_contiguous(t: ?*anyopaque, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+
+    if (tw.tensor.isContiguous()) {
+        const new_tw = ffi_allocator.create(TensorWrapper) catch return SYN_ERR_OUT_OF_MEMORY;
+        new_tw.tensor = TensorF32.init(tw.tensor.storage, tw.tensor.shape);
+        out_ptr.* = @ptrCast(new_tw);
+        return SYN_OK;
+    }
+
+    const numel = tw.tensor.numel();
+    const new_storage = Storage.create(ffi_allocator, f32, numel) catch return SYN_ERR_OUT_OF_MEMORY;
+    const dst = new_storage.dataAs(f32);
+    const src = tw.tensor.storage.dataAs(f32);
+    const ndim = tw.tensor.shape.ndim;
+    var indices = [_]usize{0} ** MAX_RANK;
+
+    for (0..numel) |i| {
+        var off: usize = tw.tensor.offset;
+        for (0..ndim) |d| off += indices[d] * tw.tensor.strides[d];
+        dst[i] = src[off];
+        var d: usize = ndim;
+        while (d > 0) {
+            d -= 1;
+            indices[d] += 1;
+            if (indices[d] < tw.tensor.shape.dims[d]) break;
+            indices[d] = 0;
+        }
+    }
+
+    const new_tw = ffi_allocator.create(TensorWrapper) catch {
+        new_storage.release();
+        return SYN_ERR_OUT_OF_MEMORY;
+    };
+    new_tw.tensor = TensorF32.init(new_storage, tw.tensor.shape);
+    new_storage.release();
+    out_ptr.* = @ptrCast(new_tw);
+    return SYN_OK;
+}
+
+// ============================================================
+// Arena allocator FFI
+// ============================================================
+
+pub export fn syn_arena_create(region_capacity: usize, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (region_capacity == 0) return SYN_ERR_INVALID_ARG;
+    const arena = ffi_allocator.create(ArenaAllocator) catch return SYN_ERR_OUT_OF_MEMORY;
+    arena.* = ArenaAllocator.init(ffi_allocator, region_capacity);
+    out_ptr.* = @ptrCast(arena);
+    return SYN_OK;
+}
+
+pub export fn syn_arena_reset(a: ?*anyopaque) c_int {
+    const arena = ptrToArena(a) orelse return SYN_ERR_NULL_PTR;
+    arena.reset();
+    return SYN_OK;
+}
+
+pub export fn syn_arena_destroy(a: ?*anyopaque) c_int {
+    const arena = ptrToArena(a) orelse return SYN_ERR_NULL_PTR;
+    arena.deinit();
+    ffi_allocator.destroy(arena);
+    return SYN_OK;
+}
+
+// ============================================================
+// Pool allocator FFI (128-byte fixed slots)
+// ============================================================
+
+pub export fn syn_pool_create(count: usize, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (count == 0) return SYN_ERR_INVALID_ARG;
+    const pool = ffi_allocator.create(FfiPool) catch return SYN_ERR_OUT_OF_MEMORY;
+    pool.* = FfiPool.init(ffi_allocator, count) catch {
+        ffi_allocator.destroy(pool);
+        return SYN_ERR_OUT_OF_MEMORY;
+    };
+    out_ptr.* = @ptrCast(pool);
+    return SYN_OK;
+}
+
+pub export fn syn_pool_destroy(p: ?*anyopaque) c_int {
+    const pool = ptrToPool(p) orelse return SYN_ERR_NULL_PTR;
+    pool.deinit();
+    ffi_allocator.destroy(pool);
+    return SYN_OK;
+}
+
+// ============================================================
+// SGEMM FFI
+// ============================================================
+
+pub export fn syn_sgemm(
+    m: usize,
+    n: usize,
+    k: usize,
+    a: ?[*]const f32,
+    lda: usize,
+    trans_a: c_int,
+    b: ?[*]const f32,
+    ldb: usize,
+    trans_b: c_int,
+    c: ?[*]f32,
+    ldc: usize,
+) c_int {
+    const a_ptr = a orelse return SYN_ERR_NULL_PTR;
+    const b_ptr = b orelse return SYN_ERR_NULL_PTR;
+    const c_ptr = c orelse return SYN_ERR_NULL_PTR;
+    if (m == 0 or n == 0 or k == 0) return SYN_OK;
+
+    const eff_kc = @min(matmul_ops.KC, k);
+    const eff_mc = ((@min(matmul_ops.MC, m) + matmul_ops.MR - 1) / matmul_ops.MR) * matmul_ops.MR;
+    const eff_nc = ((@min(matmul_ops.NC, n) + matmul_ops.NR - 1) / matmul_ops.NR) * matmul_ops.NR;
+
+    const pa = ffi_allocator.alloc(f32, eff_mc * eff_kc) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(pa);
+    const pb = ffi_allocator.alloc(f32, eff_nc * eff_kc) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(pb);
+
+    matmul_ops.sgemmTiled(m, n, k, a_ptr, lda, trans_a != 0, b_ptr, ldb, trans_b != 0, c_ptr, ldc, pa.ptr, pb.ptr);
+    return SYN_OK;
+}
+
+// ============================================================
+// Element-wise operations (flat f32 arrays, portable @Vector SIMD)
+// ============================================================
+
+pub export fn syn_add(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecAdd(d[0..len], ap[0..len], bp[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_sub(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecSub(d[0..len], ap[0..len], bp[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_mul(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecMul(d[0..len], ap[0..len], bp[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_div(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecDiv(d[0..len], ap[0..len], bp[0..len]);
+    return SYN_OK;
+}
+
+// ============================================================
+// Activation functions (flat f32 arrays, portable @Vector SIMD)
+// ============================================================
+
+pub export fn syn_relu(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecRelu(d[0..len], s[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_sigmoid(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecSigmoid(d[0..len], s[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_tanh_act(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecTanh(d[0..len], s[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_gelu(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecGelu(d[0..len], s[0..len]);
+    return SYN_OK;
+}
+
+// ============================================================
+// Tensor reductions
+// ============================================================
+
+pub export fn syn_reduce_sum(t: ?*anyopaque, axis: usize, keepdim: c_int, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    const result = reduce_ops.reduceSum(ffi_allocator, tw.tensor, axis, keepdim != 0) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+pub export fn syn_reduce_max(t: ?*anyopaque, axis: usize, keepdim: c_int, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    const result = reduce_ops.reduceMax(ffi_allocator, tw.tensor, axis, keepdim != 0) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+pub export fn syn_reduce_mean(t: ?*anyopaque, axis: usize, keepdim: c_int, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(t) orelse return SYN_ERR_NULL_PTR;
+    const result = reduce_ops.reduceMean(ffi_allocator, tw.tensor, axis, keepdim != 0) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Softmax
+// ============================================================
+
+pub export fn syn_softmax(input: ?*anyopaque, axis: usize, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const result = softmax_ops.softmax(ffi_allocator, tw.tensor, axis) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Batch normalization (inference mode, default gamma=1 beta=0)
+// ============================================================
+
+pub export fn syn_batchnorm(input: ?*anyopaque, num_features: usize, eps: f32, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    if (tw.tensor.shape.ndim != 2) return SYN_ERR_INVALID_DIMENSIONS;
+    if (tw.tensor.shape.dims[1] != num_features) return SYN_ERR_INVALID_ARG;
+
+    var bn = batchnorm_ops.BatchNorm.init(ffi_allocator, num_features, eps, 0.1) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer bn.deinit();
+    const result = bn.forward(ffi_allocator, tw.tensor, false) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Conv2d (NCHW layout)
+// ============================================================
+
+pub export fn syn_conv2d(
+    input: ?*anyopaque,
+    kernel: ?*anyopaque,
+    stride_h: usize,
+    stride_w: usize,
+    pad_h: usize,
+    pad_w: usize,
+    out: ?*?*anyopaque,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const k_tw = ptrToTensor(kernel) orelse return SYN_ERR_NULL_PTR;
+    const result = conv_ops.conv2d(ffi_allocator, in_tw.tensor, k_tw.tensor, stride_h, stride_w, pad_h, pad_w) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Pooling (NCHW layout)
+// ============================================================
+
+pub export fn syn_maxpool2d(
+    input: ?*anyopaque,
+    kernel_h: usize,
+    kernel_w: usize,
+    stride_h: usize,
+    stride_w: usize,
+    out: ?*?*anyopaque,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const result = pool_ops.maxPool2d(ffi_allocator, in_tw.tensor, kernel_h, kernel_w, stride_h, stride_w) catch |err| return mapError(err);
+    result.allocator.free(result.argmax);
+    return wrapTensor(result.output, out_ptr);
+}
+
+pub export fn syn_avgpool2d(
+    input: ?*anyopaque,
+    kernel_h: usize,
+    kernel_w: usize,
+    stride_h: usize,
+    stride_w: usize,
+    out: ?*?*anyopaque,
+) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const result = pool_ops.avgPool2d(ffi_allocator, in_tw.tensor, kernel_h, kernel_w, stride_h, stride_w) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Transpose (2D only)
+// ============================================================
+
+pub export fn syn_transpose(input: ?*anyopaque, out: ?*?*anyopaque) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const in_tw = ptrToTensor(input) orelse return SYN_ERR_NULL_PTR;
+    const result = transpose_ops.transpose2d(ffi_allocator, in_tw.tensor) catch |err| return mapError(err);
+    return wrapTensor(result, out_ptr);
+}
+
+// ============================================================
+// Raw SIMD vector operations (portable @Vector, auto-dispatched)
+// ============================================================
+
+pub export fn syn_vadd(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecAdd(d[0..len], ap[0..len], bp[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_vmul(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecMul(d[0..len], ap[0..len], bp[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_vfma(dst: ?[*]f32, a: ?[*]const f32, b: ?[*]const f32, c: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    const cp = c orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    vecFma(d[0..len], ap[0..len], bp[0..len], cp[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_vreduce_sum(src: ?[*]const f32, len: usize, out: ?*f32) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) {
+        out_ptr.* = 0.0;
+        return SYN_OK;
+    }
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = vecHsum(s[0..len]);
+    return SYN_OK;
+}
+
+pub export fn syn_vreduce_max(src: ?[*]const f32, len: usize, out: ?*f32) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) {
+        out_ptr.* = -std.math.inf(f32);
+        return SYN_OK;
+    }
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    out_ptr.* = vecHmax(s[0..len]);
+    return SYN_OK;
+}

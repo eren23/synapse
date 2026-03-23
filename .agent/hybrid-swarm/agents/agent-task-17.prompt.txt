@@ -1,0 +1,12 @@
+# Task: Rust Neural Network Layers (synapse-nn)
+
+Implement crates/synapse-nn/: module.rs (Module trait: forward/parameters/parameters_mut/set_training/is_training/name + ModuleList), sequential.rs (Sequential container), linear.rs (Linear(in,out,bias) with Xavier init), conv.rs (Conv2d with Kaiming init), batchnorm.rs (BatchNorm1d, BatchNorm2d), dropout.rs (Dropout mask during training, identity during inference), activation.rs (ReLU/Sigmoid/Tanh/GELU/Softmax modules), pool.rs (MaxPool2d/AvgPool2d/AdaptiveAvgPool2d), flatten.rs (Flatten(start_dim,end_dim)), embedding.rs (Embedding lookup with sparse gradient), rnn.rs (LSTMCell, GRUCell), init.rs (Xavier uniform/normal, Kaiming uniform/normal).
+
+Tests: All output shapes match expected formulas for every layer type. Sequential chains correctly. parameters() returns correct parameter count. Training/inference mode toggles through Sequential. Dropout zeros ~p fraction (p +/- 5% over 1000 trials). Benchmark: Forward pass of 5-layer CNN on 32x32x3.
+
+Pass/fail: All output shapes correct. Correct parameter counts. Dropout rate within p +/- 5%. Mode propagation works.
+
+Target files: synapse/crates/synapse-nn/Cargo.toml, synapse/crates/synapse-nn/src/lib.rs, synapse/crates/synapse-nn/src/module.rs, synapse/crates/synapse-nn/src/sequential.rs, synapse/crates/synapse-nn/src/linear.rs, synapse/crates/synapse-nn/src/conv.rs, synapse/crates/synapse-nn/src/batchnorm.rs, synapse/crates/synapse-nn/src/dropout.rs, synapse/crates/synapse-nn/src/activation.rs, synapse/crates/synapse-nn/src/pool.rs, synapse/crates/synapse-nn/src/flatten.rs, synapse/crates/synapse-nn/src/embedding.rs, synapse/crates/synapse-nn/src/rnn.rs, synapse/crates/synapse-nn/src/init.rs
+
+## Context from Previous Runs
+No relevant learnings found for this project.
