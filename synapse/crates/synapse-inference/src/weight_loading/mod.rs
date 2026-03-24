@@ -5,7 +5,7 @@ pub mod weight_map;
 
 pub use converter::{bf16_to_f32, f16_to_f32, transpose};
 pub use gguf::{load_gguf, parse_gguf};
-pub use safetensors::{load_safetensors, parse_safetensors};
+pub use safetensors::{load_safetensors, load_safetensors_sharded, parse_safetensors};
 pub use weight_map::WeightMapper;
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};

@@ -593,6 +593,7 @@ mod tests {
             position: PositionConfig::RoPE {
                 base: 10000.0,
                 max_position_embeddings: 128,
+                style: Default::default(),
             },
             quantization: QuantConfig::F32,
         };
@@ -627,6 +628,7 @@ mod tests {
             position: PositionConfig::RoPE {
                 base: 10000.0,
                 max_position_embeddings: 128,
+                style: Default::default(),
             },
             quantization: QuantConfig::F32,
         };

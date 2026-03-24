@@ -1,4 +1,5 @@
 use crate::config::{ModelConfig, PositionConfig};
+use crate::config::position::RoPEStyle;
 use crate::registry::{create_attention, create_ffn, create_norm};
 use crate::weight_loading::AlignedBuffer;
 
@@ -22,6 +23,15 @@ impl ModelBuilder {
         let arch = &config.architecture;
         let num_layers = arch.num_layers;
 
+        // Models that use per-head Q/K norms (e.g. Qwen3).
+        // LLaMA and Mistral do not have per-head norms.
+        let has_head_norms = !matches!(config.name.as_str(), "llama" | "mistral");
+
+        let rope_style = match &config.position {
+            PositionConfig::RoPE { style, .. } => *style,
+            _ => RoPEStyle::default(),
+        };
+
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
             layers.push(DecoderLayer {
@@ -30,6 +40,8 @@ impl ModelBuilder {
                 ffn_norm: create_norm(&config.norm),
                 ffn: create_ffn(&config.ffn),
                 hidden_size: arch.hidden_size,
+                has_head_norms,
+                rope_style,
                 attn_norm_weight: AlignedBuffer::new_zeroed(0),
                 w_q: AlignedBuffer::new_zeroed(0),
                 w_k: AlignedBuffer::new_zeroed(0),
@@ -69,7 +81,7 @@ impl ModelBuilder {
 /// Returns `(cos, sin)` each shaped `[max_pos, head_dim / 2]` (flat).
 fn precompute_rope_tables(config: &ModelConfig) -> (Vec<f32>, Vec<f32>) {
     let (base, max_pos) = match &config.position {
-        PositionConfig::RoPE { base, max_position_embeddings } => (*base, *max_position_embeddings),
+        PositionConfig::RoPE { base, max_position_embeddings, .. } => (*base, *max_position_embeddings),
         _ => (10_000.0, config.architecture.max_sequence_length),
     };
     let head_dim = config.attention.head_dim();

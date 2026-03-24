@@ -459,6 +459,7 @@ fn bench_model_config() -> ModelConfig {
         position: PositionConfig::RoPE {
             base: 10000.0,
             max_position_embeddings: 64,
+            style: Default::default(),
         },
         quantization: QuantConfig::F32,
     }

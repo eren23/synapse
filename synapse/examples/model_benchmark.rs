@@ -91,6 +91,7 @@ fn main() {
         cfg.position = PositionConfig::RoPE {
             base: 10000.0,
             max_position_embeddings: 128,
+            style: Default::default(),
         };
     }
 

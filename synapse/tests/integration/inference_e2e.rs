@@ -32,6 +32,7 @@ fn qwen3_test_config() -> ModelConfig {
         position: PositionConfig::RoPE {
             base: 1_000_000.0,
             max_position_embeddings: 128,
+            style: Default::default(),
         },
         quantization: QuantConfig::F32,
     }

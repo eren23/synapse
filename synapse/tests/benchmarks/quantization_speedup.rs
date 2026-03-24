@@ -8,6 +8,8 @@ use synapse_inference::model::ModelBuilder;
 use synapse_inference::quantization::quantize_model;
 use synapse_inference::weight_loading::AlignedBuffer;
 
+extern crate synapse_sys;
+
 fn bench_config() -> ModelConfig {
     ModelConfig {
         name: "Qwen3-QuantSpeedupBench".to_string(),
@@ -30,6 +32,7 @@ fn bench_config() -> ModelConfig {
         position: PositionConfig::RoPE {
             base: 10000.0,
             max_position_embeddings: 128,
+            style: Default::default(),
         },
         quantization: QuantConfig::F32,
     }
@@ -152,4 +155,78 @@ fn quantization_speedup_int8_vs_f32() {
         if speedup >= 1.0 { speedup } else { 1.0 / speedup },
         if speedup >= 1.0 { "faster" } else { "slower" }
     );
+}
+
+/// Isolated matmul benchmark: INT8 GEMM vs f32 SGEMM at real model dimensions.
+///
+/// Tests M=1 (single-token decode) at realistic K/N for SwiGLU FFN layers.
+/// This isolates the kernel performance from overhead in the full model forward.
+#[test]
+fn isolated_matmul_int8_vs_f32() {
+    let warmup = 10;
+    let iterations = 200;
+
+    // Real model dimensions: FFN gate projection in Qwen3-0.6B
+    let configs = [
+        ("FFN gate  (1×1024→3072)", 1, 1024, 3072),
+        ("FFN down  (1×3072→1024)", 1, 3072, 1024),
+        ("Attn Q    (1×1024→1024)", 1, 1024, 1024),
+        ("Prefill   (128×1024→3072)", 128, 1024, 3072),
+    ];
+
+    for (label, m, k, n) in &configs {
+        // Generate f32 data. B is [N, K] for f32 SGEMM (transposed internally).
+        let a_f32: Vec<f32> = gen_weights(m * k, 42);
+        let b_f32: Vec<f32> = gen_weights(n * k, 43);
+
+        // For INT8: generate random i8 data and scales directly.
+        // Layout: A_int8 [M, K], B_int8 [K, N], scales_a [M], scales_b [N].
+        let a_int8: Vec<i8> = (0..(m * k)).map(|i| ((i * 7 + 13) % 256) as i8).collect();
+        let b_int8: Vec<i8> = (0..(k * n)).map(|i| ((i * 11 + 17) % 256) as i8).collect();
+        let scales_a: Vec<f32> = (0..*m).map(|i| 0.01 + 0.001 * i as f32).collect();
+        let scales_b: Vec<f32> = (0..*n).map(|i| 0.01 + 0.001 * i as f32).collect();
+
+        // f32 SGEMM via FFI (same path as inference)
+        let sgemm = |a: &[f32], b: &[f32], m: usize, k: usize, n: usize| -> Vec<f32> {
+            let mut c = vec![0.0f32; m * n];
+            unsafe {
+                synapse_sys::syn_sgemm(
+                    m, n, k,
+                    a.as_ptr(), k, 0,
+                    b.as_ptr(), k, 1, // B transposed (same as matmul_t)
+                    c.as_mut_ptr(), n,
+                );
+            }
+            c
+        };
+
+        // Warmup f32
+        for _ in 0..warmup {
+            sgemm(&a_f32, &b_f32, *m, *k, *n);
+        }
+        // Bench f32 (SIMD tiled SGEMM)
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _ = sgemm(&a_f32, &b_f32, *m, *k, *n);
+        }
+        let f32_us = start.elapsed().as_micros() as f64 / iterations as f64;
+
+        // Warmup INT8
+        for _ in 0..warmup {
+            synapse_core::qgemm_int8(*m, *n, *k, &a_int8, &b_int8, &scales_a, &scales_b).unwrap();
+        }
+        // Bench INT8 (SIMD tiled INT8 GEMM)
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let _ = synapse_core::qgemm_int8(*m, *n, *k, &a_int8, &b_int8, &scales_a, &scales_b).unwrap();
+        }
+        let int8_us = start.elapsed().as_micros() as f64 / iterations as f64;
+
+        let speedup = f32_us / int8_us;
+        let gflops_f32 = (2.0 * *m as f64 * *n as f64 * *k as f64) / (f32_us * 1e3);
+        let gflops_int8 = (2.0 * *m as f64 * *n as f64 * *k as f64) / (int8_us * 1e3);
+        eprintln!(
+            "{label}: f32={f32_us:.0}μs ({gflops_f32:.1} GFLOPS), INT8={int8_us:.0}μs ({gflops_int8:.1} GFLOPS), speedup={speedup:.2}x"
+        );
+    }
 }

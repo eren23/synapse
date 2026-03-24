@@ -28,6 +28,7 @@ pub struct MappingResult {
 }
 
 /// Maps HuggingFace weight names to Synapse internal paths via pattern rules.
+#[derive(Debug)]
 pub struct WeightMapper {
     rules: Vec<MappingRule>,
 }
@@ -88,6 +89,75 @@ impl WeightMapper {
             rule("model.norm.weight", "norm.weight"),
             rule("lm_head.weight", "lm_head.weight"),
         ])
+    }
+
+    /// Create a mapper for the given HuggingFace model type.
+    ///
+    /// Supported: `"qwen3"`, `"llama"`, `"mistral"`.
+    pub fn from_model_type(model_type: &str) -> Result<Self, WeightError> {
+        match model_type {
+            "qwen3" => Ok(Self::qwen3()),
+            "llama" => Ok(Self::llama()),
+            "mistral" => Ok(Self::mistral()),
+            _ => Err(WeightError::InvalidFormat(format!(
+                "Unsupported model type: {model_type}"
+            ))),
+        }
+    }
+
+    /// Create a mapper for LLaMA weight names.
+    ///
+    /// Identical to Qwen3 but without q_norm/k_norm rules (LLaMA doesn't
+    /// have per-head norms).
+    pub fn llama() -> Self {
+        WeightMapper::new(vec![
+            rule("model.embed_tokens.weight", "embed_tokens.weight"),
+            rule(
+                "model.layers.{i}.self_attn.q_proj.weight",
+                "layers[{i}].attention.w_q",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.k_proj.weight",
+                "layers[{i}].attention.w_k",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.v_proj.weight",
+                "layers[{i}].attention.w_v",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.o_proj.weight",
+                "layers[{i}].attention.w_o",
+            ),
+            rule(
+                "model.layers.{i}.mlp.gate_proj.weight",
+                "layers[{i}].ffn.w_gate",
+            ),
+            rule(
+                "model.layers.{i}.mlp.up_proj.weight",
+                "layers[{i}].ffn.w_up",
+            ),
+            rule(
+                "model.layers.{i}.mlp.down_proj.weight",
+                "layers[{i}].ffn.w_down",
+            ),
+            rule(
+                "model.layers.{i}.input_layernorm.weight",
+                "layers[{i}].attn_norm.weight",
+            ),
+            rule(
+                "model.layers.{i}.post_attention_layernorm.weight",
+                "layers[{i}].ffn_norm.weight",
+            ),
+            rule("model.norm.weight", "norm.weight"),
+            rule("lm_head.weight", "lm_head.weight"),
+        ])
+    }
+
+    /// Create a mapper for Mistral weight names.
+    ///
+    /// Mistral has identical weight naming to LLaMA (no per-head norms).
+    pub fn mistral() -> Self {
+        Self::llama()
     }
 
     /// Map a single source name. Returns `None` if no rule matches.
@@ -363,5 +433,198 @@ mod tests {
         let result = mapper.map_keys(&keys);
         assert_eq!(result.mapping.len(), 1);
         assert_eq!(result.unmapped, vec!["totally.unknown.key"]);
+    }
+
+    // ── LLaMA / Mistral weight mapping ─────────────────────────────
+
+    /// Generate HF-style keys for LLaMA/Mistral (no q_norm/k_norm).
+    fn generate_llama_hf_keys(num_layers: usize) -> Vec<String> {
+        let mut keys = vec!["model.embed_tokens.weight".to_string()];
+        for i in 0..num_layers {
+            keys.push(format!("model.layers.{i}.self_attn.q_proj.weight"));
+            keys.push(format!("model.layers.{i}.self_attn.k_proj.weight"));
+            keys.push(format!("model.layers.{i}.self_attn.v_proj.weight"));
+            keys.push(format!("model.layers.{i}.self_attn.o_proj.weight"));
+            keys.push(format!("model.layers.{i}.mlp.gate_proj.weight"));
+            keys.push(format!("model.layers.{i}.mlp.up_proj.weight"));
+            keys.push(format!("model.layers.{i}.mlp.down_proj.weight"));
+            keys.push(format!("model.layers.{i}.input_layernorm.weight"));
+            keys.push(format!("model.layers.{i}.post_attention_layernorm.weight"));
+        }
+        keys.push("model.norm.weight".to_string());
+        keys.push("lm_head.weight".to_string());
+        keys
+    }
+
+    /// Generate Synapse-side keys for LLaMA/Mistral (no q_norm/k_norm).
+    fn generate_llama_synapse_keys(num_layers: usize) -> Vec<String> {
+        let mut keys = vec!["embed_tokens.weight".to_string()];
+        for i in 0..num_layers {
+            keys.push(format!("layers[{i}].attention.w_q"));
+            keys.push(format!("layers[{i}].attention.w_k"));
+            keys.push(format!("layers[{i}].attention.w_v"));
+            keys.push(format!("layers[{i}].attention.w_o"));
+            keys.push(format!("layers[{i}].ffn.w_gate"));
+            keys.push(format!("layers[{i}].ffn.w_up"));
+            keys.push(format!("layers[{i}].ffn.w_down"));
+            keys.push(format!("layers[{i}].attn_norm.weight"));
+            keys.push(format!("layers[{i}].ffn_norm.weight"));
+        }
+        keys.push("norm.weight".to_string());
+        keys.push("lm_head.weight".to_string());
+        keys
+    }
+
+    #[test]
+    fn llama_maps_all_32_layers() {
+        let num_layers = 32; // LLaMA-7B
+        let mapper = WeightMapper::llama();
+        let hf_keys = generate_llama_hf_keys(num_layers);
+        let synapse_keys = generate_llama_synapse_keys(num_layers);
+
+        let result = mapper.validate(&hf_keys, &synapse_keys).unwrap();
+
+        assert!(
+            result.unmapped.is_empty(),
+            "Unexpected keys: {:?}",
+            result.unmapped
+        );
+        assert_eq!(
+            result.mapping.len(),
+            hf_keys.len(),
+            "All HF keys should be mapped"
+        );
+
+        // Verify total: 32 layers x 9 per-layer + 3 global = 291
+        assert_eq!(hf_keys.len(), 32 * 9 + 3);
+        assert_eq!(result.mapping.len(), 291);
+    }
+
+    #[test]
+    fn llama_individual_mappings_correct() {
+        let mapper = WeightMapper::llama();
+
+        assert_eq!(
+            mapper.map_name("model.embed_tokens.weight"),
+            Some("embed_tokens.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.31.mlp.down_proj.weight"),
+            Some("layers[31].ffn.w_down".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.input_layernorm.weight"),
+            Some("layers[5].attn_norm.weight".to_string())
+        );
+        // LLaMA should NOT map q_norm/k_norm
+        assert_eq!(
+            mapper.map_name("model.layers.5.self_attn.q_norm.weight"),
+            None
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.self_attn.k_norm.weight"),
+            None
+        );
+        assert_eq!(
+            mapper.map_name("lm_head.weight"),
+            Some("lm_head.weight".to_string())
+        );
+    }
+
+    #[test]
+    fn mistral_maps_all_32_layers() {
+        let num_layers = 32; // Mistral-7B
+        let mapper = WeightMapper::mistral();
+        let hf_keys = generate_llama_hf_keys(num_layers);
+        let synapse_keys = generate_llama_synapse_keys(num_layers);
+
+        let result = mapper.validate(&hf_keys, &synapse_keys).unwrap();
+
+        assert!(
+            result.unmapped.is_empty(),
+            "Unexpected keys: {:?}",
+            result.unmapped
+        );
+        assert_eq!(
+            result.mapping.len(),
+            hf_keys.len(),
+            "All HF keys should be mapped"
+        );
+    }
+
+    #[test]
+    fn mistral_individual_mappings_correct() {
+        let mapper = WeightMapper::mistral();
+
+        assert_eq!(
+            mapper.map_name("model.embed_tokens.weight"),
+            Some("embed_tokens.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.15.self_attn.v_proj.weight"),
+            Some("layers[15].attention.w_v".to_string())
+        );
+        // Mistral should NOT map q_norm/k_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.k_norm.weight"),
+            None
+        );
+        assert_eq!(
+            mapper.map_name("model.norm.weight"),
+            Some("norm.weight".to_string())
+        );
+    }
+
+    // ── from_model_type auto-detection ─────────────────────────────
+
+    #[test]
+    fn from_model_type_selects_qwen3() {
+        let mapper = WeightMapper::from_model_type("qwen3").unwrap();
+        // Qwen3 mapper should handle q_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            Some("layers[0].attention.q_norm".to_string())
+        );
+    }
+
+    #[test]
+    fn from_model_type_selects_llama() {
+        let mapper = WeightMapper::from_model_type("llama").unwrap();
+        // LLaMA mapper should NOT handle q_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+    }
+
+    #[test]
+    fn from_model_type_selects_mistral() {
+        let mapper = WeightMapper::from_model_type("mistral").unwrap();
+        // Mistral mapper should NOT handle q_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+    }
+
+    #[test]
+    fn from_model_type_rejects_unknown() {
+        let result = WeightMapper::from_model_type("gpt2");
+        assert!(
+            matches!(result, Err(WeightError::InvalidFormat(ref msg)) if msg.contains("gpt2")),
+            "Expected InvalidFormat error for unsupported model type, got: {result:?}"
+        );
     }
 }

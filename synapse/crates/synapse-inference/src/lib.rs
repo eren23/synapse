@@ -74,6 +74,7 @@ mod tests {
             PositionConfig::RoPE {
                 base: 1_000_000.0,
                 max_position_embeddings: 32768,
+                style: Default::default(),
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F32);
@@ -111,6 +112,7 @@ mod tests {
             PositionConfig::RoPE {
                 base: 500_000.0,
                 max_position_embeddings: 131072,
+                style: Default::default(),
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F16);
@@ -217,6 +219,7 @@ mod tests {
         let rope = registry::create_position(&PositionConfig::RoPE {
             base: 10000.0,
             max_position_embeddings: 4096,
+            style: Default::default(),
         });
         assert_eq!(rope.name(), "RoPE");
         assert_eq!(rope.max_position_embeddings(), 4096);
@@ -353,6 +356,7 @@ mod model_tests {
             position: PositionConfig::RoPE {
                 base: 10000.0,
                 max_position_embeddings: 16,
+                style: Default::default(),
             },
             quantization: QuantConfig::F32,
         }
@@ -603,6 +607,7 @@ mod quantization_tests {
             position: PositionConfig::RoPE {
                 base: 10000.0,
                 max_position_embeddings: 16,
+                style: Default::default(),
             },
             quantization: QuantConfig::F32,
         }

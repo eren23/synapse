@@ -1,3 +1,4 @@
+use crate::config::position::RoPEStyle;
 use crate::kv_cache::KVCacheLayer;
 use crate::registry::{AttentionVariant, FFNVariant, NormVariant};
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
@@ -11,6 +12,10 @@ pub struct DecoderLayer {
     pub ffn_norm: Box<dyn NormVariant>,
     pub ffn: Box<dyn FFNVariant>,
     pub hidden_size: usize,
+    /// Whether this layer uses per-head Q/K norms (e.g. Qwen3 does, LLaMA/Mistral do not).
+    pub has_head_norms: bool,
+    /// RoPE dimension pairing convention.
+    pub rope_style: RoPEStyle,
 
     // ── Weights (64-byte aligned for SIMD) ───────────────────────────
     pub attn_norm_weight: AlignedBuffer,
@@ -121,7 +126,8 @@ impl DecoderLayer {
         let kv_dim = self.attention.num_kv_heads() * self.attention.head_dim();
         let inter = self.ffn.intermediate_size();
 
-        let norms = 2 * h + 2 * self.attention.head_dim(); // attn_norm + q/k norm + ffn_norm
+        let head_norms = if self.has_head_norms { 2 * self.attention.head_dim() } else { 0 };
+        let norms = 2 * h + head_norms; // attn_norm + ffn_norm + optional q/k norm
         let attn = q_dim * h + kv_dim * h + kv_dim * h + h * q_dim;
         let ffn = if is_gated_ffn(self.ffn.name()) {
             3 * inter * h
@@ -141,10 +147,12 @@ impl DecoderLayer {
             format!("layers[{i}].attention.w_k"),
             format!("layers[{i}].attention.w_v"),
             format!("layers[{i}].attention.w_o"),
-            format!("layers[{i}].attention.q_norm"),
-            format!("layers[{i}].attention.k_norm"),
-            format!("layers[{i}].ffn_norm.weight"),
         ];
+        if self.has_head_norms {
+            keys.push(format!("layers[{i}].attention.q_norm"));
+            keys.push(format!("layers[{i}].attention.k_norm"));
+        }
+        keys.push(format!("layers[{i}].ffn_norm.weight"));
         if is_gated_ffn(self.ffn.name()) {
             keys.push(format!("layers[{i}].ffn.w_gate"));
         }
@@ -286,8 +294,8 @@ impl DecoderLayer {
             self.attn_norm.eps() as f32,
         );
 
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
 
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
         for head in 0..num_heads {
@@ -348,8 +356,8 @@ impl DecoderLayer {
             self.attn_norm.eps() as f32,
         );
 
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos);
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos, self.rope_style);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos, self.rope_style);
 
         cache_layer.append(&k, &v).expect("KV cache append failed");
         let (cached_k, cached_v, seq_len) = cache_layer.slice().expect("KV cache slice failed");
@@ -452,8 +460,8 @@ impl DecoderLayer {
         );
 
         // Apply RoPE to Q and K
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
 
         // Multi-head causal attention with GQA support
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
@@ -537,8 +545,8 @@ impl DecoderLayer {
         );
 
         // Apply RoPE at the correct position
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos);
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos, self.rope_style);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos, self.rope_style);
 
         // Append RoPE'd K and raw V to cache
         cache_layer
@@ -585,14 +593,10 @@ impl DecoderLayer {
                 }
                 softmax_slice(&mut scores);
 
-                // score·V: [1, seq_len] × [seq_len, head_dim] → [1, head_dim]
-                for d in 0..head_dim {
-                    let mut sum = 0.0f32;
-                    for s in 0..seq_len {
-                        sum += scores[s] * v_heads[kv_head][s * head_dim + d];
-                    }
-                    attn_output[head * head_dim + d] = sum;
-                }
+                // score·V via SIMD: [1, seq_len] × [seq_len, head_dim] → [1, head_dim]
+                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, seq_len, head_dim);
+                attn_output[head * head_dim..(head + 1) * head_dim]
+                    .copy_from_slice(&sv);
             }
         } else {
             // Scalar path for short sequences (avoids gather overhead)
@@ -659,8 +663,8 @@ impl DecoderLayer {
         );
 
         // Apply RoPE
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
 
         // Populate KV cache with each position's RoPE'd K and raw V
         for t in 0..seq_len {
@@ -764,6 +768,7 @@ pub(crate) fn apply_rope_inplace(
     num_heads: usize,
     head_dim: usize,
     pos_offset: usize,
+    style: RoPEStyle,
 ) {
     let half_d = head_dim / 2;
     let total_dim = num_heads * head_dim;
@@ -772,17 +777,33 @@ pub(crate) fn apply_rope_inplace(
         let cos_row = pos * half_d;
         for head in 0..num_heads {
             let base = t * total_dim + head * head_dim;
-            for i in 0..half_d {
-                let idx_first = base + i;            // first half
-                let idx_second = base + half_d + i;  // second half
-                let cos_val = cos[cos_row + i];
-                let sin_val = sin[cos_row + i];
-                let x_first = qk[idx_first];
-                let x_second = qk[idx_second];
-                // rotate_half: q_embed = q * cos + rotate_half(q) * sin
-                // where rotate_half swaps halves with negation on the second
-                qk[idx_first] = x_first * cos_val - x_second * sin_val;
-                qk[idx_second] = x_second * cos_val + x_first * sin_val;
+            match style {
+                RoPEStyle::RotateHalf => {
+                    // Pairs (i, i + d/2): Qwen3, LLaMA 3, Mistral
+                    for i in 0..half_d {
+                        let idx_first = base + i;
+                        let idx_second = base + half_d + i;
+                        let cos_val = cos[cos_row + i];
+                        let sin_val = sin[cos_row + i];
+                        let x_first = qk[idx_first];
+                        let x_second = qk[idx_second];
+                        qk[idx_first] = x_first * cos_val - x_second * sin_val;
+                        qk[idx_second] = x_second * cos_val + x_first * sin_val;
+                    }
+                }
+                RoPEStyle::Interleaved => {
+                    // Pairs (2i, 2i+1): GPT-NeoX
+                    for i in 0..half_d {
+                        let idx_even = base + 2 * i;
+                        let idx_odd = base + 2 * i + 1;
+                        let cos_val = cos[cos_row + i];
+                        let sin_val = sin[cos_row + i];
+                        let x_even = qk[idx_even];
+                        let x_odd = qk[idx_odd];
+                        qk[idx_even] = x_even * cos_val - x_odd * sin_val;
+                        qk[idx_odd] = x_odd * cos_val + x_even * sin_val;
+                    }
+                }
             }
         }
     }
@@ -845,6 +866,30 @@ pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Ve
         )
     };
     debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
+    out
+}
+
+/// y = A * B  where A is [m, k], B is [k, n] → y is [m, n].
+///
+/// Non-transposed variant of [`matmul_t`]. Used for score·V in cached decode
+/// where scores are `[1, seq_len]` and V is `[seq_len, head_dim]`.
+pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+    debug_assert_eq!(a.len(), m * k, "matmul_nn: a.len() != m*k");
+    debug_assert_eq!(b.len(), k * n, "matmul_nn: b.len() != k*n");
+    let mut out = vec![0.0f32; m * n];
+    // syn_sgemm: C = op(A) * op(B), row-major.
+    //   A [m, k] no-transpose, lda = k
+    //   B [k, n] no-transpose, ldb = n
+    //   C [m, n], ldc = n
+    let status = unsafe {
+        synapse_sys::syn_sgemm(
+            m, n, k,
+            a.as_ptr(), k, 0,   // A: no transpose
+            b.as_ptr(), n, 0,   // B: no transpose
+            out.as_mut_ptr(), n, // C
+        )
+    };
+    debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm (nn) failed: {status}");
     out
 }
 
@@ -1576,6 +1621,8 @@ mod tests {
             ffn_norm: Box::new(TestNorm { eps: 1e-5 }),
             ffn: Box::new(TestFFN { inter }),
             hidden_size: hidden,
+            has_head_norms: true,
+            rope_style: RoPEStyle::default(),
             attn_norm_weight: AlignedBuffer::from_vec(
                 pseudo_rand(hidden, 1000)
                     .iter()
@@ -1666,7 +1713,7 @@ mod tests {
         // Apply RoPE to the normed K (matching what forward_one does)
         let (rope_cos, rope_sin) = make_test_rope(head_dim, 64);
         let mut k_full_roped = k_full_normed.clone();
-        apply_rope_inplace(&mut k_full_roped, &rope_cos, &rope_sin, seq_len, num_kv_heads, head_dim, 0);
+        apply_rope_inplace(&mut k_full_roped, &rope_cos, &rope_sin, seq_len, num_kv_heads, head_dim, 0, RoPEStyle::RotateHalf);
 
         // Now run forward_one incrementally and collect cache contents
         let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
@@ -1709,5 +1756,55 @@ mod tests {
 
         let full_last = &full_out[(seq_len - 1) * hidden..seq_len * hidden];
         assert_close(&last_out, full_last, 1e-4, "forward_one GQA (8h/2kv)");
+    }
+
+    #[test]
+    fn rope_interleaved_vs_rotate_half_differ() {
+        // Verify that the two RoPE styles produce different outputs for the same input.
+        let head_dim = 8;
+        let half_d = head_dim / 2;
+        let num_heads = 1;
+        let seq_len = 1;
+        let max_pos = 4;
+
+        // Precompute tables
+        let base = 10_000.0f32;
+        let mut cos = vec![0.0f32; max_pos * half_d];
+        let mut sin = vec![0.0f32; max_pos * half_d];
+        for pos in 0..max_pos {
+            for i in 0..half_d {
+                let freq = 1.0 / base.powf(2.0 * i as f32 / head_dim as f32);
+                let angle = pos as f32 * freq;
+                cos[pos * half_d + i] = angle.cos();
+                sin[pos * half_d + i] = angle.sin();
+            }
+        }
+
+        // Test at pos=2 where angles are non-trivial
+        let input: Vec<f32> = (1..=head_dim).map(|x| x as f32).collect();
+
+        let mut rh = input.clone();
+        apply_rope_inplace(&mut rh, &cos, &sin, seq_len, num_heads, head_dim, 2, RoPEStyle::RotateHalf);
+
+        let mut il = input.clone();
+        apply_rope_inplace(&mut il, &cos, &sin, seq_len, num_heads, head_dim, 2, RoPEStyle::Interleaved);
+
+        // Outputs should differ (different dimension pairing)
+        assert_ne!(rh, il, "RotateHalf and Interleaved should produce different results");
+    }
+
+    #[test]
+    fn rope_interleaved_roundtrip() {
+        // Applying interleaved RoPE at pos=0 with angle=0 should be identity.
+        let head_dim = 8;
+        let half_d = head_dim / 2;
+        // At pos=0, all angles are 0 → cos=1, sin=0 → identity
+        let cos = vec![1.0f32; half_d];
+        let sin = vec![0.0f32; half_d];
+
+        let input: Vec<f32> = (1..=head_dim).map(|x| x as f32).collect();
+        let mut out = input.clone();
+        apply_rope_inplace(&mut out, &cos, &sin, 1, 1, head_dim, 0, RoPEStyle::Interleaved);
+        assert_eq!(out, input, "RoPE at pos=0 should be identity");
     }
 }

@@ -4,11 +4,42 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::kv_cache::KVCache;
+use crate::model::causal_lm::ModelOutput;
 use crate::model::CausalLM;
+use crate::quantization::int8::QuantizedCausalLM;
 
 use super::output::GenerationOutput;
 use super::sampler::{CombinedSampler, GreedySampler, Sampler};
 use super::stopping::{StopChecker, StopCondition};
+
+/// Model dispatch enum supporting both f32 and INT8 quantized inference.
+pub enum ModelRef<'a> {
+    F32(&'a CausalLM),
+    Int8(&'a QuantizedCausalLM),
+}
+
+impl<'a> ModelRef<'a> {
+    fn forward(&self, token_ids: &[u32]) -> ModelOutput {
+        match self {
+            Self::F32(m) => m.forward(token_ids),
+            Self::Int8(m) => m.forward(token_ids),
+        }
+    }
+
+    fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
+        match self {
+            Self::F32(m) => m.forward_prefill(token_ids, cache),
+            Self::Int8(m) => m.forward_prefill(token_ids, cache),
+        }
+    }
+
+    fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
+        match self {
+            Self::F32(m) => m.forward_one(token, cache),
+            Self::Int8(m) => m.forward_one(token, cache),
+        }
+    }
+}
 
 /// Configuration for the generation pipeline.
 pub struct GenerationConfig {
@@ -49,7 +80,7 @@ impl Default for GenerationConfig {
 /// generates tokens one at a time (decode), sampling from the logits
 /// of the last position.
 pub struct GenerationPipeline<'a> {
-    model: &'a CausalLM,
+    model: ModelRef<'a>,
     #[cfg(feature = "metal")]
     backend: Option<&'a crate::metal::ComputeBackend>,
 }
@@ -57,7 +88,16 @@ pub struct GenerationPipeline<'a> {
 impl<'a> GenerationPipeline<'a> {
     pub fn new(model: &'a CausalLM) -> Self {
         Self {
-            model,
+            model: ModelRef::F32(model),
+            #[cfg(feature = "metal")]
+            backend: None,
+        }
+    }
+
+    /// Create a pipeline for an INT8 quantized model.
+    pub fn new_quantized(model: &'a QuantizedCausalLM) -> Self {
+        Self {
+            model: ModelRef::Int8(model),
             #[cfg(feature = "metal")]
             backend: None,
         }
@@ -66,7 +106,7 @@ impl<'a> GenerationPipeline<'a> {
     /// Create a pipeline with Metal GPU backend dispatch.
     #[cfg(feature = "metal")]
     pub fn with_backend(model: &'a CausalLM, backend: &'a crate::metal::ComputeBackend) -> Self {
-        Self { model, backend: Some(backend) }
+        Self { model: ModelRef::F32(model), backend: Some(backend) }
     }
 
     /// Run generation given prompt token IDs.
@@ -138,10 +178,12 @@ impl<'a> GenerationPipeline<'a> {
         // ── Prefill (populate KV-cache for all prompt tokens) ────────
         let prefill_output = {
             #[cfg(feature = "metal")]
-            if let Some(backend) = self.backend {
-                self.model.forward_prefill_with_backend(prompt_tokens, cache, backend)
-            } else {
-                self.model.forward_prefill(prompt_tokens, cache)
+            {
+                if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
+                    m.forward_prefill_with_backend(prompt_tokens, cache, backend)
+                } else {
+                    self.model.forward_prefill(prompt_tokens, cache)
+                }
             }
             #[cfg(not(feature = "metal"))]
             self.model.forward_prefill(prompt_tokens, cache)
@@ -165,10 +207,12 @@ impl<'a> GenerationPipeline<'a> {
             let last_token = *generated_tokens.last().unwrap();
             let output = {
                 #[cfg(feature = "metal")]
-                if let Some(backend) = self.backend {
-                    self.model.forward_one_with_backend(last_token, cache, backend)
-                } else {
-                    self.model.forward_one(last_token, cache)
+                {
+                    if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
+                        m.forward_one_with_backend(last_token, cache, backend)
+                    } else {
+                        self.model.forward_one(last_token, cache)
+                    }
                 }
                 #[cfg(not(feature = "metal"))]
                 self.model.forward_one(last_token, cache)
@@ -211,10 +255,12 @@ impl<'a> GenerationPipeline<'a> {
         // ── Prefill ──────────────────────────────────────────────────
         let prefill_output = {
             #[cfg(feature = "metal")]
-            if let Some(backend) = self.backend {
-                self.model.forward_with_backend(prompt_tokens, backend)
-            } else {
-                self.model.forward(prompt_tokens)
+            {
+                if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
+                    m.forward_with_backend(prompt_tokens, backend)
+                } else {
+                    self.model.forward(prompt_tokens)
+                }
             }
             #[cfg(not(feature = "metal"))]
             self.model.forward(prompt_tokens)
@@ -240,10 +286,12 @@ impl<'a> GenerationPipeline<'a> {
         ) {
             let output = {
                 #[cfg(feature = "metal")]
-                if let Some(backend) = self.backend {
-                    self.model.forward_with_backend(&all_tokens, backend)
-                } else {
-                    self.model.forward(&all_tokens)
+                {
+                    if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
+                        m.forward_with_backend(&all_tokens, backend)
+                    } else {
+                        self.model.forward(&all_tokens)
+                    }
                 }
                 #[cfg(not(feature = "metal"))]
                 self.model.forward(&all_tokens)
@@ -339,6 +387,7 @@ mod tests {
             position: PositionConfig::RoPE {
                 base: 10000.0,
                 max_position_embeddings: 256,
+                style: Default::default(),
             },
             quantization: QuantConfig::F32,
         }

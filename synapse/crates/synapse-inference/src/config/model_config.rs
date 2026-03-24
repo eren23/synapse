@@ -156,6 +156,7 @@ impl HuggingFaceConfig {
             position: PositionConfig::RoPE {
                 base: self.rope_theta.unwrap_or(10_000.0),
                 max_position_embeddings: self.max_position_embeddings,
+                style: Default::default(),
             },
             quantization,
         }
@@ -209,6 +210,7 @@ mod tests {
             PositionConfig::RoPE {
                 base: 1_000_000.0,
                 max_position_embeddings: 40960,
+                style: Default::default(),
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F32);

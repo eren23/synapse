@@ -189,7 +189,7 @@ impl PositionVariant for SinusoidalPosition {
 /// Create a position variant trait object from config.
 pub fn create_position(config: &PositionConfig) -> Box<dyn PositionVariant> {
     match config {
-        PositionConfig::RoPE { base, max_position_embeddings } => {
+        PositionConfig::RoPE { base, max_position_embeddings, .. } => {
             Box::new(RoPEPosition {
                 base: *base,
                 max_position_embeddings: *max_position_embeddings,

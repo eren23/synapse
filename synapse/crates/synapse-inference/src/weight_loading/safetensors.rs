@@ -3,8 +3,65 @@ use std::fs::File;
 use std::path::Path;
 
 use memmap2::Mmap;
+use serde::Deserialize;
 use super::{AlignedBuffer, RawTensor, WeightError};
 use super::converter::{bf16_bits_to_f32, f16_bits_to_f32};
+
+/// Represents the `model.safetensors.index.json` file used by sharded checkpoints.
+#[derive(Deserialize)]
+struct SafetensorsIndex {
+    weight_map: HashMap<String, String>,
+}
+
+/// Load tensors from a sharded safetensors checkpoint.
+///
+/// Reads `model.safetensors.index.json` from `model_dir`, then loads each
+/// unique shard file sequentially, extracting only the tensors listed in the
+/// index's `weight_map`. Shards are dropped after extraction to limit memory.
+pub fn load_safetensors_sharded(model_dir: &Path) -> Result<HashMap<String, RawTensor>, WeightError> {
+    let index_path = model_dir.join("model.safetensors.index.json");
+    let index_data = std::fs::read_to_string(&index_path).map_err(WeightError::Io)?;
+    let index: SafetensorsIndex = serde_json::from_str(&index_data)
+        .map_err(|e| WeightError::InvalidFormat(format!("Invalid index JSON: {e}")))?;
+
+    // Group tensor names by shard filename
+    let mut shard_to_tensors: HashMap<String, Vec<String>> = HashMap::new();
+    for (tensor_name, shard_filename) in &index.weight_map {
+        shard_to_tensors
+            .entry(shard_filename.clone())
+            .or_default()
+            .push(tensor_name.clone());
+    }
+
+    let mut result = HashMap::new();
+
+    // Load shards sequentially to avoid memory spikes
+    for (shard_filename, tensor_names) in &shard_to_tensors {
+        let shard_path = model_dir.join(shard_filename);
+        let shard_tensors = load_safetensors(&shard_path).map_err(|e| {
+            WeightError::InvalidFormat(format!(
+                "Failed to load shard '{}': {}", shard_filename, e
+            ))
+        })?;
+
+        for tensor_name in tensor_names {
+            match shard_tensors.get(tensor_name) {
+                Some(tensor) => {
+                    result.insert(tensor_name.clone(), tensor.clone());
+                }
+                None => {
+                    return Err(WeightError::InvalidFormat(format!(
+                        "Tensor '{}' listed in index but not found in shard '{}'",
+                        tensor_name, shard_filename
+                    )));
+                }
+            }
+        }
+        // shard_tensors is dropped here, freeing memory from unused tensors
+    }
+
+    Ok(result)
+}
 
 /// Load tensors from a safetensors file, returning raw tensors ready for model loading.
 ///
@@ -293,5 +350,123 @@ mod tests {
                 "Mismatch at index {i}: got {got}, want {want}"
             );
         }
+    }
+
+    #[test]
+    fn parse_safetensors_index_json() {
+        let index_json = r#"{
+            "metadata": { "total_size": 12345 },
+            "weight_map": {
+                "model.embed_tokens.weight": "model-00001-of-00002.safetensors",
+                "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00002.safetensors",
+                "model.layers.1.self_attn.q_proj.weight": "model-00002-of-00002.safetensors"
+            }
+        }"#;
+
+        let index: SafetensorsIndex = serde_json::from_str(index_json).unwrap();
+        assert_eq!(index.weight_map.len(), 3);
+        assert_eq!(
+            index.weight_map["model.embed_tokens.weight"],
+            "model-00001-of-00002.safetensors"
+        );
+        assert_eq!(
+            index.weight_map["model.layers.1.self_attn.q_proj.weight"],
+            "model-00002-of-00002.safetensors"
+        );
+    }
+
+    #[test]
+    fn load_sharded_safetensors_from_directory() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create shard 1 with two tensors
+        let w1: Vec<f32> = vec![1.0, 2.0, 3.0];
+        let w2: Vec<f32> = vec![4.0, 5.0];
+        let shard1 = make_safetensors(&[
+            ("tensor_a", "F32", &[3], &f32_to_bytes(&w1)),
+            ("tensor_b", "F32", &[2], &f32_to_bytes(&w2)),
+        ]);
+        std::fs::write(dir.path().join("model-00001-of-00002.safetensors"), &shard1).unwrap();
+
+        // Create shard 2 with one tensor (plus an extra tensor NOT in the index)
+        let w3: Vec<f32> = vec![6.0, 7.0, 8.0, 9.0];
+        let w_extra: Vec<f32> = vec![99.0];
+        let shard2 = make_safetensors(&[
+            ("tensor_c", "F32", &[4], &f32_to_bytes(&w3)),
+            ("extra_tensor", "F32", &[1], &f32_to_bytes(&w_extra)),
+        ]);
+        std::fs::write(dir.path().join("model-00002-of-00002.safetensors"), &shard2).unwrap();
+
+        // Create index file — only references tensor_a, tensor_b, tensor_c (not extra_tensor)
+        let index = serde_json::json!({
+            "metadata": { "total_size": 100 },
+            "weight_map": {
+                "tensor_a": "model-00001-of-00002.safetensors",
+                "tensor_b": "model-00001-of-00002.safetensors",
+                "tensor_c": "model-00002-of-00002.safetensors"
+            }
+        });
+        let mut f = File::create(dir.path().join("model.safetensors.index.json")).unwrap();
+        write!(f, "{}", serde_json::to_string(&index).unwrap()).unwrap();
+
+        let tensors = load_safetensors_sharded(dir.path()).unwrap();
+
+        // Should contain exactly 3 tensors (extra_tensor excluded)
+        assert_eq!(tensors.len(), 3);
+        assert_eq!(tensors["tensor_a"].data, w1);
+        assert_eq!(tensors["tensor_a"].shape, vec![3]);
+        assert_eq!(tensors["tensor_b"].data, w2);
+        assert_eq!(tensors["tensor_b"].shape, vec![2]);
+        assert_eq!(tensors["tensor_c"].data, w3);
+        assert_eq!(tensors["tensor_c"].shape, vec![4]);
+        assert!(!tensors.contains_key("extra_tensor"));
+    }
+
+    #[test]
+    fn sharded_loading_missing_shard_returns_error() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create index that references a shard that does not exist
+        let index = serde_json::json!({
+            "metadata": { "total_size": 100 },
+            "weight_map": {
+                "tensor_a": "missing-shard.safetensors"
+            }
+        });
+        let mut f = File::create(dir.path().join("model.safetensors.index.json")).unwrap();
+        write!(f, "{}", serde_json::to_string(&index).unwrap()).unwrap();
+
+        let result = load_safetensors_sharded(dir.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sharded_loading_missing_tensor_in_shard_returns_error() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create a shard that contains "actual_tensor" but not "claimed_tensor"
+        let w: Vec<f32> = vec![1.0];
+        let shard = make_safetensors(&[("actual_tensor", "F32", &[1], &f32_to_bytes(&w))]);
+        std::fs::write(dir.path().join("shard.safetensors"), &shard).unwrap();
+
+        // Index claims "claimed_tensor" is in the shard
+        let index = serde_json::json!({
+            "weight_map": {
+                "claimed_tensor": "shard.safetensors"
+            }
+        });
+        let mut f = File::create(dir.path().join("model.safetensors.index.json")).unwrap();
+        write!(f, "{}", serde_json::to_string(&index).unwrap()).unwrap();
+
+        let result = load_safetensors_sharded(dir.path());
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.unwrap_err());
+        assert!(err_msg.contains("claimed_tensor"));
     }
 }

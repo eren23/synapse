@@ -4,8 +4,9 @@ use crate::config::ModelConfig;
 use crate::generation::{GenerationConfig, GenerationOutput, GenerationPipeline};
 use crate::kv_cache::KVCache;
 use crate::model::{CausalLM, ModelBuilder, ModelOutput};
+use crate::quantization::{quantize_model, QuantizedCausalLM};
 use crate::tokenizer::{Tokenizer, TokenizerError};
-use crate::weight_loading::{load_gguf, load_safetensors, WeightError, WeightMapper};
+use crate::weight_loading::{load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper};
 
 /// Which compute backend to use for dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub enum BackendSelection {
 /// entry point for text generation.
 pub struct InferenceEngine {
     pub model: CausalLM,
+    pub quantized_model: Option<QuantizedCausalLM>,
     pub config: ModelConfig,
     pub tokenizer: Option<Tokenizer>,
     #[cfg(feature = "metal")]
@@ -33,14 +35,18 @@ impl InferenceEngine {
     /// Build an engine from a Hugging Face-style pretrained model directory.
     pub fn from_pretrained(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let config = ModelConfig::from_hf_file(&model_path.join("config.json"))?;
-        let checkpoint = find_checkpoint_file(model_path)?;
         let tokenizer = Tokenizer::from_model_dir(model_path)?;
-        let mapper = WeightMapper::qwen3();
+        let mapper = WeightMapper::from_model_type(&config.name)?;
 
         let mut model = ModelBuilder::from_config(&config);
-        let weights = match checkpoint.extension().and_then(|ext| ext.to_str()) {
-            Some("gguf") => load_gguf(&checkpoint)?,
-            _ => load_safetensors(&checkpoint)?,
+        let weights = if model_path.join("model.safetensors.index.json").exists() {
+            load_safetensors_sharded(model_path)?
+        } else {
+            let checkpoint = find_checkpoint_file(model_path)?;
+            match checkpoint.extension().and_then(|ext| ext.to_str()) {
+                Some("gguf") => load_gguf(&checkpoint)?,
+                _ => load_safetensors(&checkpoint)?,
+            }
         };
 
         // CODEx: exact-mode pretrained loading should fail on checkpoint drift
@@ -55,6 +61,7 @@ impl InferenceEngine {
 
         Ok(Self {
             model,
+            quantized_model: None,
             config,
             tokenizer: Some(tokenizer),
             #[cfg(feature = "metal")]
@@ -67,6 +74,7 @@ impl InferenceEngine {
         let model = ModelBuilder::from_config(&config);
         Self {
             model,
+            quantized_model: None,
             config,
             tokenizer: None,
             #[cfg(feature = "metal")]
@@ -84,6 +92,7 @@ impl InferenceEngine {
         };
         Self {
             model,
+            quantized_model: None,
             config,
             tokenizer: None,
             backend,
@@ -141,6 +150,16 @@ impl InferenceEngine {
         Ok(cache)
     }
 
+    /// Quantize the model to INT8. Call after loading weights.
+    pub fn quantize(&mut self) {
+        self.quantized_model = Some(quantize_model(&self.model));
+    }
+
+    /// Whether the engine has a quantized model available.
+    pub fn is_quantized(&self) -> bool {
+        self.quantized_model.is_some()
+    }
+
     pub fn generate_text(
         &self,
         prompt: &str,
@@ -150,10 +169,14 @@ impl InferenceEngine {
         let max_seq = prompt_tokens.len() + config.max_new_tokens;
         let mut cache = self.create_kv_cache(max_seq)?;
 
-        #[cfg(feature = "metal")]
-        let pipeline = GenerationPipeline::with_backend(&self.model, &self.backend);
-        #[cfg(not(feature = "metal"))]
-        let pipeline = GenerationPipeline::new(&self.model);
+        let pipeline = if let Some(ref qmodel) = self.quantized_model {
+            GenerationPipeline::new_quantized(qmodel)
+        } else {
+            #[cfg(feature = "metal")]
+            { GenerationPipeline::with_backend(&self.model, &self.backend) }
+            #[cfg(not(feature = "metal"))]
+            GenerationPipeline::new(&self.model)
+        };
 
         let mut output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
         let generated = &output.token_ids[output.num_prompt_tokens..];
@@ -163,13 +186,6 @@ impl InferenceEngine {
 }
 
 fn find_checkpoint_file(model_path: &Path) -> Result<PathBuf, WeightError> {
-    let index = model_path.join("model.safetensors.index.json");
-    if index.exists() {
-        return Err(WeightError::InvalidFormat(
-            "Sharded safetensors checkpoints are not supported yet".into(),
-        ));
-    }
-
     let canonical = model_path.join("model.safetensors");
     if canonical.exists() {
         return Ok(canonical);

@@ -80,6 +80,7 @@ fn demo_engine() -> InferenceEngine {
     cfg.position = PositionConfig::RoPE {
         base: 1_000_000.0,
         max_position_embeddings: 128,
+            style: Default::default(),
     };
 
     let mut model = ModelBuilder::from_config(&cfg);
@@ -91,6 +92,7 @@ fn demo_engine() -> InferenceEngine {
 
     InferenceEngine {
         model,
+        quantized_model: None,
         config: cfg,
         tokenizer: None,
     }
@@ -98,7 +100,7 @@ fn demo_engine() -> InferenceEngine {
 
 enum Mode {
     Demo,
-    Chat(PathBuf),
+    Chat { dir: PathBuf, quantize: bool },
     Verify(PathBuf),
 }
 
@@ -106,11 +108,13 @@ fn parse_args() -> Result<Mode, String> {
     let mut args = std::env::args().skip(1);
     let mut model_dir = None;
     let mut verify = false;
+    let mut quantize = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => return Ok(Mode::Demo),
             "--verify" => verify = true,
+            "--quantize" | "-q" => quantize = true,
             "--model-dir" => {
                 let value = args
                     .next()
@@ -121,6 +125,7 @@ fn parse_args() -> Result<Mode, String> {
                 println!("Usage:");
                 println!("  cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B");
                 println!("  cargo run --example qwen3_chat --release -- --model-dir /path --verify");
+                println!("  cargo run --example qwen3_chat --release -- --model-dir /path --quantize");
                 println!("  cargo run --example qwen3_chat --release -- --demo");
                 std::process::exit(0);
             }
@@ -130,7 +135,7 @@ fn parse_args() -> Result<Mode, String> {
 
     match (model_dir, verify) {
         (Some(dir), true) => Ok(Mode::Verify(dir)),
-        (Some(dir), false) => Ok(Mode::Chat(dir)),
+        (Some(dir), false) => Ok(Mode::Chat { dir, quantize }),
         (None, _) => Ok(Mode::Demo),
     }
 }
@@ -140,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match mode {
         Mode::Verify(dir) => run_verify(dir)?,
-        Mode::Chat(dir) => run_pretrained_chat(dir)?,
+        Mode::Chat { dir, quantize } => run_pretrained_chat(dir, quantize)?,
         Mode::Demo => run_demo_chat(),
     }
 
@@ -195,11 +200,18 @@ fn run_verify(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn run_pretrained_chat(model_dir: PathBuf, quantize: bool) -> Result<(), Box<dyn std::error::Error>> {
     print!("Loading checkpoint from {}...", model_dir.display());
     io::stdout().flush()?;
-    let engine = InferenceEngine::from_pretrained(&model_dir)?;
+    let mut engine = InferenceEngine::from_pretrained(&model_dir)?;
     println!(" done ({} params)", engine.param_count());
+
+    if quantize {
+        print!("Quantizing to INT8...");
+        io::stdout().flush()?;
+        engine.quantize();
+        println!(" done");
+    }
     println!("Type 'quit' to exit.");
 
     let tokenizer = engine.tokenizer().expect("pretrained engine has tokenizer").clone();
@@ -231,7 +243,11 @@ fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Err
         );
         let prompt_tokens = engine.encode(&prompt)?;
         let stream_tokenizer = tokenizer.clone();
-        let pipeline = GenerationPipeline::new(&engine.model);
+        let pipeline = if let Some(ref qmodel) = engine.quantized_model {
+            GenerationPipeline::new_quantized(qmodel)
+        } else {
+            GenerationPipeline::new(&engine.model)
+        };
 
         let max_new_tokens = 256;
         let max_seq = prompt_tokens.len() + max_new_tokens;
@@ -284,11 +300,13 @@ fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Err
 
         let output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
         println!();
+        let mode_str = if engine.is_quantized() { "INT8" } else { "f32" };
         println!(
-            "Generated {} tokens in {:.3}s ({:.1} tok/s)",
+            "Generated {} tokens in {:.3}s ({:.1} tok/s, {})",
             output.num_generated_tokens,
             output.elapsed.as_secs_f64(),
-            output.tokens_per_sec
+            output.tokens_per_sec,
+            mode_str,
         );
     }
 
