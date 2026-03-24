@@ -1103,6 +1103,13 @@ pub export fn syn_qgemm_int8(
     const sb = scales_b orelse return SYN_ERR_NULL_PTR;
     if (m == 0 or n == 0 or k == 0) return SYN_OK;
 
+    // M=1 fast path: GEMV uses no packing buffers, pass dummies
+    if (m == 1) {
+        var dummy: [1]i8 = .{0};
+        qmatmul_ops.int8GemmTiled(m, n, k, a_ptr, lda, b_ptr, ldb, c_ptr, ldc, sa, sb, &dummy, &dummy);
+        return SYN_OK;
+    }
+
     const eff_kc = @min(qmatmul_ops.KC, k);
     const eff_mc = ((@min(qmatmul_ops.MC, m) + qmatmul_ops.MR - 1) / qmatmul_ops.MR) * qmatmul_ops.MR;
     const eff_nc = ((@min(qmatmul_ops.NC, n) + qmatmul_ops.NR - 1) / qmatmul_ops.NR) * qmatmul_ops.NR;

@@ -49,6 +49,13 @@ pub fn int8GemmTiled(
     packed_a: [*]i8,
     packed_b: [*]i8,
 ) void {
+    // Fast path: M=1 GEMV (single-token decode in LLM inference).
+    // Avoids tiling, packing, and the scalar edge fallback.
+    if (m == 1) {
+        int8GemvRow(n, k, a, ldb, b, ldb, c, scales_a[0], scales_b);
+        return;
+    }
+
     // Zero C
     for (0..m) |i| {
         @memset((c + i * ldc)[0..n], @as(f32, 0));
@@ -135,6 +142,107 @@ pub noinline fn naiveF32Gemm(
             }
             c[i * ldc + j] = sum;
         }
+    }
+}
+
+// ================================================================
+// M=1 GEMV (single-token decode fast path)
+// ================================================================
+
+const I8x4 = @Vector(4, i8);
+
+/// Specialized INT8 matrix-vector multiply for M=1.
+///
+/// C[1,N] = scale_a * diag(scales_b) * (A[1,K] @ B[K,N])
+///
+/// No packing needed. Processes 32 output columns at a time with
+/// 8 × I32x4 accumulators. Uses vector loads + @intCast widening
+/// (compiles to NEON sxtl) instead of scalar byte loads.
+/// 4-unrolled over K to hide load latency.
+fn int8GemvRow(
+    n: usize,
+    k: usize,
+    a: [*]const i8,
+    _lda: usize,
+    b: [*]const i8,
+    ldb: usize,
+    c: [*]f32,
+    scale_a: f32,
+    scales_b: [*]const f32,
+) void {
+    _ = _lda;
+    const GEMV_NR: usize = 32; // Process 32 columns = 8 × I32x4
+
+    // Process 32 columns at a time (8 × I32x4 accumulators)
+    var j: usize = 0;
+    while (j + GEMV_NR <= n) : (j += GEMV_NR) {
+        const zero: I32x4 = @splat(@as(i32, 0));
+        var acc: [8]I32x4 = .{zero} ** 8;
+
+        // Main K loop — 4-unrolled for ILP
+        var p: usize = 0;
+        const k4 = k - (k % 4);
+        while (p < k4) : (p += 4) {
+            inline for (0..4) |u| {
+                const a_val: i32 = a[p + u];
+                const a_bcast: I32x4 = @splat(a_val);
+                const b_base = b + (p + u) * ldb + j;
+                inline for (0..8) |v| {
+                    const b_i8: I8x4 = (b_base + v * 4)[0..4].*;
+                    const b_i32: I32x4 = @intCast(b_i8);
+                    acc[v] += a_bcast * b_i32;
+                }
+            }
+        }
+        // K remainder
+        while (p < k) : (p += 1) {
+            const a_val: i32 = a[p];
+            const a_bcast: I32x4 = @splat(a_val);
+            const b_base = b + p * ldb + j;
+            inline for (0..8) |v| {
+                const b_i8: I8x4 = (b_base + v * 4)[0..4].*;
+                const b_i32: I32x4 = @intCast(b_i8);
+                acc[v] += a_bcast * b_i32;
+            }
+        }
+
+        // Convert to f32, apply scales, write to C
+        const sa: F32x4 = @splat(scale_a);
+        inline for (0..8) |v| {
+            const f_acc: F32x4 = @floatFromInt(acc[v]);
+            const sb: F32x4 = (scales_b + j + v * 4)[0..VEC_LEN].*;
+            (c + j + v * 4)[0..VEC_LEN].* = f_acc * sa * sb;
+        }
+    }
+
+    // Handle remaining columns with 8-wide blocks
+    while (j + 8 <= n) : (j += 8) {
+        const zero: I32x4 = @splat(@as(i32, 0));
+        var acc_lo: I32x4 = zero;
+        var acc_hi: I32x4 = zero;
+
+        for (0..k) |p| {
+            const a_val: i32 = a[p];
+            const a_bcast: I32x4 = @splat(a_val);
+            const b_base = b + p * ldb + j;
+            const b_lo_i8: I8x4 = b_base[0..4].*;
+            const b_hi_i8: I8x4 = (b_base + 4)[0..4].*;
+            acc_lo += a_bcast * @as(I32x4, @intCast(b_lo_i8));
+            acc_hi += a_bcast * @as(I32x4, @intCast(b_hi_i8));
+        }
+
+        const sa: F32x4 = @splat(scale_a);
+        (c + j)[0..VEC_LEN].* = @as(F32x4, @floatFromInt(acc_lo)) * sa * (scales_b + j)[0..VEC_LEN].*;
+        (c + j + 4)[0..VEC_LEN].* = @as(F32x4, @floatFromInt(acc_hi)) * sa * (scales_b + j + 4)[0..VEC_LEN].*;
+    }
+
+    // Scalar tail for remaining columns
+    while (j < n) : (j += 1) {
+        var acc: i32 = 0;
+        for (0..k) |p| {
+            acc += @as(i32, a[p]) * @as(i32, b[p * ldb + j]);
+        }
+        c[j] = @as(f32, @floatFromInt(acc)) * scale_a * scales_b[j];
     }
 }
 
