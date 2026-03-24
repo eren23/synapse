@@ -528,6 +528,13 @@ pub export fn syn_sgemm(
     const c_ptr = c orelse return SYN_ERR_NULL_PTR;
     if (m == 0 or n == 0 or k == 0) return SYN_OK;
 
+    // M=1 fast path: GEMV uses no packing buffers
+    if (m == 1 and trans_a == 0) {
+        var dummy: [1]f32 = .{0};
+        matmul_ops.sgemmTiled(m, n, k, a_ptr, lda, false, b_ptr, ldb, trans_b != 0, c_ptr, ldc, &dummy, &dummy);
+        return SYN_OK;
+    }
+
     const eff_kc = @min(matmul_ops.KC, k);
     const eff_mc = ((@min(matmul_ops.MC, m) + matmul_ops.MR - 1) / matmul_ops.MR) * matmul_ops.MR;
     const eff_nc = ((@min(matmul_ops.NC, n) + matmul_ops.NR - 1) / matmul_ops.NR) * matmul_ops.NR;

@@ -8,6 +8,9 @@ use std::collections::HashMap;
 pub struct BufferPool {
     device: Device,
     free: HashMap<usize, Vec<Buffer>>,
+    /// Cache of pre-transposed weight buffers keyed by source data pointer.
+    /// Weights never change during inference, so we transpose once and reuse.
+    weight_cache: HashMap<usize, Buffer>,
     allocated_count: usize,
     reused_count: usize,
 }
@@ -18,9 +21,43 @@ impl BufferPool {
         Self {
             device: device.clone(),
             free: HashMap::new(),
+            weight_cache: HashMap::new(),
             allocated_count: 0,
             reused_count: 0,
         }
+    }
+
+    /// Look up or create a cached pre-transposed weight buffer.
+    ///
+    /// On first call for a given weight pointer, transposes [n,k] → [k,n],
+    /// uploads to GPU, and caches. Subsequent calls return the cached buffer.
+    pub fn get_or_create_transposed_weight(
+        &mut self,
+        b: &[f32],
+        n: usize,
+        k: usize,
+    ) -> &Buffer {
+        let key = b.as_ptr() as usize;
+        self.weight_cache.entry(key).or_insert_with(|| {
+            // Transpose [n, k] → [k, n]
+            let mut bt = vec![0.0f32; k * n];
+            for i in 0..n {
+                for j in 0..k {
+                    bt[j * n + i] = b[i * k + j];
+                }
+            }
+            self.allocated_count += 1;
+            self.device.new_buffer_with_data(
+                bt.as_ptr() as *const _,
+                (bt.len() * std::mem::size_of::<f32>()) as u64,
+                MTLResourceOptions::StorageModeShared,
+            )
+        })
+    }
+
+    /// Get a reference to a previously cached transposed weight buffer.
+    pub fn get_cached_weight(&self, data_ptr: usize) -> Option<&Buffer> {
+        self.weight_cache.get(&data_ptr)
     }
 
     /// Get a buffer populated with `data`, reusing an existing buffer of matching

@@ -39,6 +39,7 @@ fn bench_config() -> ModelConfig {
             base: 1_000_000.0,
             max_position_embeddings: 256,
             style: Default::default(),
+            scaling: Default::default(),
         },
         quantization: QuantConfig::F32,
     }

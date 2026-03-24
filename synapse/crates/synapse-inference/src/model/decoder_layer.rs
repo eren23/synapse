@@ -362,23 +362,35 @@ impl DecoderLayer {
         cache_layer.append(&k, &v).expect("KV cache append failed");
         let (cached_k, cached_v, seq_len) = cache_layer.slice().expect("KV cache slice failed");
 
+        // Sliding window: limit attention to the last `window_size` positions
+        let (effective_k, effective_v, effective_len) = if let Some(ws) = self.attention.window_size() {
+            if seq_len > ws {
+                let offset = (seq_len - ws) * kv_dim;
+                (&cached_k[offset..], &cached_v[offset..], ws)
+            } else {
+                (cached_k, cached_v, seq_len)
+            }
+        } else {
+            (cached_k, cached_v, seq_len)
+        };
+
         let mut attn_output = vec![0.0f32; q_dim];
         for head in 0..num_heads {
             let kv_head = head / groups;
-            let mut scores = vec![0.0f32; seq_len];
-            for s in 0..seq_len {
+            let mut scores = vec![0.0f32; effective_len];
+            for s in 0..effective_len {
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
                     dot += q[head * head_dim + d]
-                        * cached_k[s * kv_dim + kv_head * head_dim + d];
+                        * effective_k[s * kv_dim + kv_head * head_dim + d];
                 }
                 scores[s] = dot * scale;
             }
             softmax_slice(&mut scores);
             for d in 0..head_dim {
                 let mut sum = 0.0f32;
-                for s in 0..seq_len {
-                    sum += scores[s] * cached_v[s * kv_dim + kv_head * head_dim + d];
+                for s in 0..effective_len {
+                    sum += scores[s] * effective_v[s * kv_dim + kv_head * head_dim + d];
                 }
                 attn_output[head * head_dim + d] = sum;
             }
@@ -558,25 +570,37 @@ impl DecoderLayer {
             .slice()
             .expect("KV cache slice failed");
 
-        // Compute attention: single Q against all cached K/V
+        // Sliding window: limit attention to the last `window_size` positions
+        let (effective_k, effective_v, effective_len) = if let Some(ws) = self.attention.window_size() {
+            if seq_len > ws {
+                let offset = (seq_len - ws) * kv_dim;
+                (&cached_k[offset..], &cached_v[offset..], ws)
+            } else {
+                (cached_k, cached_v, seq_len)
+            }
+        } else {
+            (cached_k, cached_v, seq_len)
+        };
+
+        // Compute attention: single Q against effective cached K/V
         let mut attn_output = vec![0.0f32; q_dim];
 
         // For longer sequences, gather K/V per kv_head into contiguous buffers
         // and use SIMD matmul for Q·K^T. For short sequences, scalar is faster
         // (avoids gather overhead).
-        if seq_len >= 16 {
+        if effective_len >= 16 {
             // SIMD path: gather + matmul_t
             let mut k_heads = Vec::with_capacity(num_kv_heads);
             let mut v_heads = Vec::with_capacity(num_kv_heads);
             for kv_head in 0..num_kv_heads {
-                let mut k_buf = vec![0.0f32; seq_len * head_dim];
-                let mut v_buf = vec![0.0f32; seq_len * head_dim];
-                for s in 0..seq_len {
+                let mut k_buf = vec![0.0f32; effective_len * head_dim];
+                let mut v_buf = vec![0.0f32; effective_len * head_dim];
+                for s in 0..effective_len {
                     let off = s * kv_dim + kv_head * head_dim;
                     k_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&cached_k[off..off + head_dim]);
+                        .copy_from_slice(&effective_k[off..off + head_dim]);
                     v_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&cached_v[off..off + head_dim]);
+                        .copy_from_slice(&effective_v[off..off + head_dim]);
                 }
                 k_heads.push(k_buf);
                 v_heads.push(v_buf);
@@ -586,15 +610,15 @@ impl DecoderLayer {
                 let kv_head = head / groups;
                 let q_head = &q[head * head_dim..(head + 1) * head_dim];
 
-                // Q·K^T via SIMD: [1, head_dim] × [seq_len, head_dim]^T = [1, seq_len]
-                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, seq_len);
+                // Q·K^T via SIMD: [1, head_dim] × [effective_len, head_dim]^T = [1, effective_len]
+                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, effective_len);
                 for s in &mut scores {
                     *s *= scale;
                 }
                 softmax_slice(&mut scores);
 
-                // score·V via SIMD: [1, seq_len] × [seq_len, head_dim] → [1, head_dim]
-                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, seq_len, head_dim);
+                // score·V via SIMD: [1, effective_len] × [effective_len, head_dim] → [1, head_dim]
+                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, effective_len, head_dim);
                 attn_output[head * head_dim..(head + 1) * head_dim]
                     .copy_from_slice(&sv);
             }
@@ -602,21 +626,21 @@ impl DecoderLayer {
             // Scalar path for short sequences (avoids gather overhead)
             for head in 0..num_heads {
                 let kv_head = head / groups;
-                let mut scores = vec![0.0f32; seq_len];
-                for s in 0..seq_len {
+                let mut scores = vec![0.0f32; effective_len];
+                for s in 0..effective_len {
                     let mut dot = 0.0f32;
                     for d in 0..head_dim {
                         dot += q[head * head_dim + d]
-                            * cached_k[s * kv_dim + kv_head * head_dim + d];
+                            * effective_k[s * kv_dim + kv_head * head_dim + d];
                     }
                     scores[s] = dot * scale;
                 }
                 softmax_slice(&mut scores);
                 for d in 0..head_dim {
                     let mut sum = 0.0f32;
-                    for s in 0..seq_len {
+                    for s in 0..effective_len {
                         sum += scores[s]
-                            * cached_v[s * kv_dim + kv_head * head_dim + d];
+                            * effective_v[s * kv_dim + kv_head * head_dim + d];
                     }
                     attn_output[head * head_dim + d] = sum;
                 }
@@ -1095,7 +1119,7 @@ mod tests {
     /// Assert element-wise closeness: |a - e| <= atol + rtol * |e|.
     /// Same semantics as numpy.allclose.
     fn assert_close(actual: &[f32], expected: &[f32], rtol: f32, label: &str) {
-        const ATOL: f32 = 1e-5;
+        const ATOL: f32 = 2e-5; // Allows for GEMV vs tiled SGEMM accumulation order differences
         assert_eq!(actual.len(), expected.len(), "{label}: length mismatch");
         for (i, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
             let diff = (a - e).abs();
@@ -1806,5 +1830,153 @@ mod tests {
         let mut out = input.clone();
         apply_rope_inplace(&mut out, &cos, &sin, 1, 1, head_dim, 0, RoPEStyle::Interleaved);
         assert_eq!(out, input, "RoPE at pos=0 should be identity");
+    }
+
+    // ── Sliding window attention tests ──────────────────────────────
+
+    /// AttentionVariant with sliding window support for tests.
+    #[derive(Debug)]
+    struct TestSlidingWindowAttn {
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        window_size: usize,
+    }
+    impl crate::registry::AttentionVariant for TestSlidingWindowAttn {
+        fn num_heads(&self) -> usize { self.num_heads }
+        fn head_dim(&self) -> usize { self.head_dim }
+        fn num_kv_heads(&self) -> usize { self.num_kv_heads }
+        fn window_size(&self) -> Option<usize> { Some(self.window_size) }
+        fn name(&self) -> &str { "SlidingWindow" }
+    }
+
+    /// Build a test DecoderLayer with sliding window attention.
+    fn make_test_layer_sliding_window(
+        hidden: usize,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        inter: usize,
+        window_size: usize,
+    ) -> DecoderLayer {
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        DecoderLayer {
+            attn_norm: Box::new(TestNorm { eps: 1e-5 }),
+            attention: Box::new(TestSlidingWindowAttn { num_heads, num_kv_heads, head_dim, window_size }),
+            ffn_norm: Box::new(TestNorm { eps: 1e-5 }),
+            ffn: Box::new(TestFFN { inter }),
+            hidden_size: hidden,
+            has_head_norms: true,
+            rope_style: RoPEStyle::default(),
+            attn_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(hidden, 1000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            w_q: AlignedBuffer::from_vec(pseudo_rand(q_dim * hidden, 2000)),
+            w_k: AlignedBuffer::from_vec(pseudo_rand(kv_dim * hidden, 3000)),
+            w_v: AlignedBuffer::from_vec(pseudo_rand(kv_dim * hidden, 4000)),
+            w_o: AlignedBuffer::from_vec(pseudo_rand(hidden * q_dim, 5000)),
+            q_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(head_dim, 6000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            k_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(head_dim, 7000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            ffn_norm_weight: AlignedBuffer::from_vec(
+                pseudo_rand(hidden, 8000)
+                    .iter()
+                    .map(|v| v.abs() + 0.1)
+                    .collect(),
+            ),
+            ffn_gate: AlignedBuffer::from_vec(pseudo_rand(inter * hidden, 9000)),
+            ffn_up: AlignedBuffer::from_vec(pseudo_rand(inter * hidden, 10000)),
+            ffn_down: AlignedBuffer::from_vec(pseudo_rand(hidden * inter, 11000)),
+        }
+    }
+
+    /// Sliding window decode: with window_size=4 and 8 cached positions,
+    /// forward_one at position 8 should only attend to the last 4 positions
+    /// (positions 5-8), producing a different result than full attention.
+    #[test]
+    fn sliding_window_attention_limits_decode_context() {
+        let (hidden, num_heads, num_kv_heads, head_dim, inter) = (64, 4, 4, 16, 128);
+        let window_size = 4;
+        let total_positions = 8;
+
+        // Build two layers with identical weights: one with sliding window, one without
+        let sw_layer = make_test_layer_sliding_window(
+            hidden, num_heads, num_kv_heads, head_dim, inter, window_size,
+        );
+        let full_layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
+
+        let (rope_cos, rope_sin) = make_test_rope(head_dim, 64);
+
+        // Generate input tokens
+        let input = pseudo_rand((total_positions + 1) * hidden, 42);
+
+        // Fill both caches with 8 positions
+        let mut sw_cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+        let mut full_cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+
+        for t in 0..total_positions {
+            let token = &input[t * hidden..(t + 1) * hidden];
+            let _ = sw_layer.forward_one(token, &mut sw_cache, t, &rope_cos, &rope_sin);
+            let _ = full_layer.forward_one(token, &mut full_cache, t, &rope_cos, &rope_sin);
+        }
+
+        // Both caches should have 8 entries
+        let (_, _, sw_len) = sw_cache.slice().unwrap();
+        let (_, _, full_len) = full_cache.slice().unwrap();
+        assert_eq!(sw_len, total_positions);
+        assert_eq!(full_len, total_positions);
+
+        // Now decode at position 8 with both layers
+        let decode_token = &input[total_positions * hidden..(total_positions + 1) * hidden];
+        let sw_out = sw_layer.forward_one(decode_token, &mut sw_cache, total_positions, &rope_cos, &rope_sin);
+        let full_out = full_layer.forward_one(decode_token, &mut full_cache, total_positions, &rope_cos, &rope_sin);
+
+        // The outputs should differ because sliding window attends to only
+        // the last 4 positions while full attention attends to all 9.
+        let differs = sw_out.iter().zip(full_out.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-5);
+        assert!(
+            differs,
+            "Sliding window (ws=4) output should differ from full attention with 9 cached positions"
+        );
+
+        // Verify the cache still has all 9 entries (sliding window only limits
+        // attention, not cache storage)
+        let (_, _, sw_len_after) = sw_cache.slice().unwrap();
+        assert_eq!(sw_len_after, total_positions + 1,
+            "Cache should still store all positions, not be truncated by sliding window");
+
+        // Additional verification: sliding window with window_size >= seq_len
+        // should behave identically to full attention
+        let big_window_layer = make_test_layer_sliding_window(
+            hidden, num_heads, num_kv_heads, head_dim, inter, 100, // window >> total positions
+        );
+        let mut big_cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+        let mut full_cache2 = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
+
+        for t in 0..total_positions {
+            let token = &input[t * hidden..(t + 1) * hidden];
+            let _ = big_window_layer.forward_one(token, &mut big_cache, t, &rope_cos, &rope_sin);
+            let _ = full_layer.forward_one(token, &mut full_cache2, t, &rope_cos, &rope_sin);
+        }
+
+        let big_out = big_window_layer.forward_one(decode_token, &mut big_cache, total_positions, &rope_cos, &rope_sin);
+        let full_out2 = full_layer.forward_one(decode_token, &mut full_cache2, total_positions, &rope_cos, &rope_sin);
+
+        assert_close(&big_out, &full_out2, 1e-5,
+            "Sliding window with window >= seq_len should match full attention");
     }
 }

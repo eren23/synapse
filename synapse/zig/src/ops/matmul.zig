@@ -137,6 +137,13 @@ pub fn sgemmTiled(
     packed_a: [*]f32,
     packed_b: [*]f32,
 ) void {
+    // Fast path: M=1 GEMV (single-token decode in LLM inference).
+    // Avoids tiling/packing and the scalar microKernelEdge fallback.
+    if (m == 1 and !trans_a) {
+        f32GemvRow(n, k, a, b, ldb, trans_b, c);
+        return;
+    }
+
     // L3: partition N
     var jc: usize = 0;
     while (jc < n) : (jc += NC) {
@@ -188,6 +195,143 @@ pub noinline fn naiveSgemm(
                 sum += a_val * b_val;
             }
             c[i * ldc + j] = sum;
+        }
+    }
+}
+
+// ================================================================
+// M=1 GEMV (single-token decode fast path)
+// ================================================================
+
+/// Specialized f32 matrix-vector multiply for M=1.
+///
+/// C[1,N] = A[1,K] x B^T[K,N]  (when trans_b=true, B is stored [N,K])
+/// C[1,N] = A[1,K] x B[K,N]    (when trans_b=false, B is stored [K,N])
+///
+/// Processes 32 output columns at a time with 8 x F32x4 FMA accumulators.
+/// 4-unrolled over K to hide load latency.
+fn f32GemvRow(
+    n: usize,
+    k: usize,
+    a: [*]const f32,
+    b: [*]const f32,
+    ldb: usize,
+    trans_b: bool,
+    c: [*]f32,
+) void {
+    const GEMV_NR: usize = 32; // 8 × F32x4
+
+    if (trans_b) {
+        // B is [N, K] (row j has K elements). dot(A[0..K], B[j, 0..K]) for each j.
+        // Process GEMV_NR output columns at a time.
+        var j: usize = 0;
+        while (j + GEMV_NR <= n) : (j += GEMV_NR) {
+            var acc: [8]F32x4 = .{@as(F32x4, @splat(@as(f32, 0)))} ** 8;
+
+            // 4-unrolled K loop
+            var p: usize = 0;
+            const k4 = k - (k % 4);
+            while (p < k4) : (p += 4) {
+                inline for (0..4) |u| {
+                    const a_bcast: F32x4 = @splat(a[p + u]);
+                    inline for (0..8) |v| {
+                        // B[j+v*4..j+v*4+4, p+u] — row-major B[N,K], element at row (j+v*4+lane), col (p+u)
+                        // For trans_b: B[row, col] = b[row * ldb + col]
+                        const b_vec = F32x4{
+                            b[(j + v * 4 + 0) * ldb + p + u],
+                            b[(j + v * 4 + 1) * ldb + p + u],
+                            b[(j + v * 4 + 2) * ldb + p + u],
+                            b[(j + v * 4 + 3) * ldb + p + u],
+                        };
+                        acc[v] = @mulAdd(F32x4, a_bcast, b_vec, acc[v]);
+                    }
+                }
+            }
+            // K remainder
+            while (p < k) : (p += 1) {
+                const a_bcast: F32x4 = @splat(a[p]);
+                inline for (0..8) |v| {
+                    const b_vec = F32x4{
+                        b[(j + v * 4 + 0) * ldb + p],
+                        b[(j + v * 4 + 1) * ldb + p],
+                        b[(j + v * 4 + 2) * ldb + p],
+                        b[(j + v * 4 + 3) * ldb + p],
+                    };
+                    acc[v] = @mulAdd(F32x4, a_bcast, b_vec, acc[v]);
+                }
+            }
+
+            inline for (0..8) |v| {
+                (c + j + v * 4)[0..VEC_LEN].* = acc[v];
+            }
+        }
+
+        // 8-wide cleanup
+        while (j + 8 <= n) : (j += 8) {
+            var acc_lo: F32x4 = @splat(@as(f32, 0));
+            var acc_hi: F32x4 = @splat(@as(f32, 0));
+            for (0..k) |p| {
+                const a_bcast: F32x4 = @splat(a[p]);
+                acc_lo = @mulAdd(F32x4, a_bcast, F32x4{
+                    b[(j + 0) * ldb + p], b[(j + 1) * ldb + p],
+                    b[(j + 2) * ldb + p], b[(j + 3) * ldb + p],
+                }, acc_lo);
+                acc_hi = @mulAdd(F32x4, a_bcast, F32x4{
+                    b[(j + 4) * ldb + p], b[(j + 5) * ldb + p],
+                    b[(j + 6) * ldb + p], b[(j + 7) * ldb + p],
+                }, acc_hi);
+            }
+            (c + j)[0..VEC_LEN].* = acc_lo;
+            (c + j + 4)[0..VEC_LEN].* = acc_hi;
+        }
+
+        // Scalar tail
+        while (j < n) : (j += 1) {
+            var sum: f32 = 0;
+            for (0..k) |p| {
+                sum += a[p] * b[j * ldb + p];
+            }
+            c[j] = sum;
+        }
+    } else {
+        // B is [K, N] (column j spans K rows). Contiguous column access.
+        var j: usize = 0;
+        while (j + GEMV_NR <= n) : (j += GEMV_NR) {
+            var acc: [8]F32x4 = .{@as(F32x4, @splat(@as(f32, 0)))} ** 8;
+
+            var p: usize = 0;
+            const k4 = k - (k % 4);
+            while (p < k4) : (p += 4) {
+                inline for (0..4) |u| {
+                    const a_bcast: F32x4 = @splat(a[p + u]);
+                    const b_base = b + (p + u) * ldb + j;
+                    inline for (0..8) |v| {
+                        const b_vec: F32x4 = (b_base + v * 4)[0..VEC_LEN].*;
+                        acc[v] = @mulAdd(F32x4, a_bcast, b_vec, acc[v]);
+                    }
+                }
+            }
+            while (p < k) : (p += 1) {
+                const a_bcast: F32x4 = @splat(a[p]);
+                const b_base = b + p * ldb + j;
+                inline for (0..8) |v| {
+                    const b_vec: F32x4 = (b_base + v * 4)[0..VEC_LEN].*;
+                    acc[v] = @mulAdd(F32x4, a_bcast, b_vec, acc[v]);
+                }
+            }
+
+            inline for (0..8) |v| {
+                (c + j + v * 4)[0..VEC_LEN].* = acc[v];
+            }
+        }
+
+        // Scalar tail
+        while (j < n) : (j += 1) {
+            var sum: f32 = 0;
+            for (0..k) |p| {
+                sum += a[p] * b[p * ldb + j];
+            }
+            c[j] = sum;
         }
     }
 }

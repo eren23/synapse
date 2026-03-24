@@ -29,6 +29,7 @@ fn test_config() -> ModelConfig {
             base: 10000.0,
             max_position_embeddings: 32,
             style: Default::default(),
+            scaling: Default::default(),
         },
         quantization: QuantConfig::F32,
     }

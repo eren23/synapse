@@ -600,11 +600,12 @@ mod tests {
         cached_output.extend_from_slice(&decode_output);
 
         assert_eq!(full_output.len(), cached_output.len());
-        for (i, (a, b)) in full_output.iter().zip(cached_output.iter()).enumerate() {
-            assert_eq!(
-                a.to_bits(),
-                b.to_bits(),
-                "Mismatch at index {i}: full={a}, cached={b}"
+        for (i, (&a, &b)) in full_output.iter().zip(cached_output.iter()).enumerate() {
+            let diff = (a - b).abs();
+            let tol = 1e-5 + 1e-4 * a.abs().max(b.abs());
+            assert!(
+                diff <= tol,
+                "Mismatch at index {i}: full={a}, cached={b}, diff={diff}"
             );
         }
     }

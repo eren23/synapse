@@ -5,7 +5,7 @@ use std::path::Path;
 use super::attention::AttentionConfig;
 use super::ffn::FFNConfig;
 use super::norm::NormConfig;
-use super::position::PositionConfig;
+use super::position::{self, PositionConfig};
 use super::quantization::QuantConfig;
 
 /// Top-level model configuration, deserializable from JSON.
@@ -81,6 +81,20 @@ struct HuggingFaceConfig {
     sliding_window: Option<usize>,
     #[serde(default)]
     use_sliding_window: bool,
+    #[serde(default)]
+    rope_scaling: Option<HfRoPEScaling>,
+}
+
+#[derive(Debug, Deserialize)]
+struct HfRoPEScaling {
+    #[serde(rename = "type", alias = "rope_type")]
+    scaling_type: String,
+    #[serde(default = "default_scaling_factor")]
+    factor: f64,
+}
+
+fn default_scaling_factor() -> f64 {
+    1.0
 }
 
 impl HuggingFaceConfig {
@@ -157,6 +171,14 @@ impl HuggingFaceConfig {
                 base: self.rope_theta.unwrap_or(10_000.0),
                 max_position_embeddings: self.max_position_embeddings,
                 style: Default::default(),
+                scaling: match &self.rope_scaling {
+                    Some(rs) => match rs.scaling_type.as_str() {
+                        "linear" => position::RoPEScaling::Linear { factor: rs.factor },
+                        "dynamic" => position::RoPEScaling::Dynamic { factor: rs.factor },
+                        _ => position::RoPEScaling::None,
+                    },
+                    None => position::RoPEScaling::None,
+                },
             },
             quantization,
         }
@@ -211,8 +233,44 @@ mod tests {
                 base: 1_000_000.0,
                 max_position_embeddings: 40960,
                 style: Default::default(),
+                scaling: Default::default(),
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F32);
+    }
+
+    #[test]
+    fn parse_hf_llama_with_rope_scaling() {
+        let json = r#"{
+            "model_type": "llama",
+            "hidden_act": "silu",
+            "hidden_size": 2048,
+            "intermediate_size": 8192,
+            "max_position_embeddings": 131072,
+            "num_attention_heads": 32,
+            "num_hidden_layers": 16,
+            "num_key_value_heads": 8,
+            "rms_norm_eps": 1e-5,
+            "rope_theta": 500000.0,
+            "rope_scaling": {
+                "type": "linear",
+                "factor": 8.0
+            },
+            "tie_word_embeddings": true,
+            "vocab_size": 128256
+        }"#;
+
+        let cfg = ModelConfig::from_hf_json(json).unwrap();
+        assert_eq!(cfg.name, "llama");
+        match cfg.position {
+            PositionConfig::RoPE { base, scaling, .. } => {
+                assert_eq!(base, 500000.0);
+                match scaling {
+                    position::RoPEScaling::Linear { factor } => assert_eq!(factor, 8.0),
+                    other => panic!("Expected Linear scaling, got {other:?}"),
+                }
+            }
+            _ => panic!("Expected RoPE position config"),
+        }
     }
 }

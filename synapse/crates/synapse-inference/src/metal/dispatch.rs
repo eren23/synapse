@@ -250,17 +250,6 @@ fn read_buffer(buf: &::metal::Buffer, n: usize) -> Vec<f32> {
     out
 }
 
-/// Transpose B from [n, k] (row-major) to [k, n] for the Metal matmul kernel.
-fn transpose(b: &[f32], n: usize, k: usize) -> Vec<f32> {
-    let mut bt = vec![0.0f32; k * n];
-    for i in 0..n {
-        for j in 0..k {
-            bt[j * n + i] = b[i * k + j];
-        }
-    }
-    bt
-}
-
 fn gpu_matmul_t(
     a: &[f32],
     b: &[f32],
@@ -273,10 +262,12 @@ fn gpu_matmul_t(
     let dev = &backend.device;
 
     // Metal matmul kernel expects B as [K, N], but our B is [N, K] (transposed).
-    let bt = transpose(b, n, k);
+    // Ensure the transposed weight is cached first, then borrow everything.
+    pool.get_or_create_transposed_weight(b, n, k);
 
+    // Now all borrows are separate — get pointers to cached data
+    let buf_b_ptr = b.as_ptr() as usize;
     let buf_a = pool.get_or_create(a);
-    let buf_b = pool.get_or_create(&bt);
     let buf_c = pool.create_empty(m * n);
     let buf_m = make_const_u32(dev, m as u32);
     let buf_n = make_const_u32(dev, n as u32);
@@ -287,7 +278,8 @@ fn gpu_matmul_t(
     let encoder = cmd_buf.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(pipeline);
     encoder.set_buffer(0, Some(&buf_a), 0);
-    encoder.set_buffer(1, Some(&buf_b), 0);
+    let buf_b = pool.get_cached_weight(buf_b_ptr).expect("weight should be cached");
+    encoder.set_buffer(1, Some(buf_b), 0);
     encoder.set_buffer(2, Some(&buf_c), 0);
     encoder.set_buffer(3, Some(&buf_m), 0);
     encoder.set_buffer(4, Some(&buf_n), 0);
@@ -307,7 +299,7 @@ fn gpu_matmul_t(
     let result = read_buffer(&buf_c, m * n);
 
     pool.release(buf_a);
-    pool.release(buf_b);
+    // buf_b is cached — don't release it
     pool.release(buf_c);
 
     result

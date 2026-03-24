@@ -1,5 +1,5 @@
 use crate::config::{ModelConfig, PositionConfig};
-use crate::config::position::RoPEStyle;
+use crate::config::position::{RoPEScaling, RoPEStyle};
 use crate::registry::{create_attention, create_ffn, create_norm};
 use crate::weight_loading::AlignedBuffer;
 
@@ -25,7 +25,7 @@ impl ModelBuilder {
 
         // Models that use per-head Q/K norms (e.g. Qwen3).
         // LLaMA and Mistral do not have per-head norms.
-        let has_head_norms = !matches!(config.name.as_str(), "llama" | "mistral");
+        let has_head_norms = !matches!(config.name.as_str(), "llama" | "mistral" | "phi" | "phi3" | "gemma" | "gemma2");
 
         let rope_style = match &config.position {
             PositionConfig::RoPE { style, .. } => *style,
@@ -80,20 +80,35 @@ impl ModelBuilder {
 ///
 /// Returns `(cos, sin)` each shaped `[max_pos, head_dim / 2]` (flat).
 fn precompute_rope_tables(config: &ModelConfig) -> (Vec<f32>, Vec<f32>) {
-    let (base, max_pos) = match &config.position {
-        PositionConfig::RoPE { base, max_position_embeddings, .. } => (*base, *max_position_embeddings),
-        _ => (10_000.0, config.architecture.max_sequence_length),
+    let (base, max_pos, scaling) = match &config.position {
+        PositionConfig::RoPE { base, max_position_embeddings, scaling, .. } => {
+            (*base, *max_position_embeddings, *scaling)
+        }
+        _ => (10_000.0, config.architecture.max_sequence_length, RoPEScaling::None),
     };
     let head_dim = config.attention.head_dim();
     let half_d = head_dim / 2;
+
+    // Apply dynamic NTK scaling to base frequency
+    let effective_base = match scaling {
+        RoPEScaling::Dynamic { factor } => base * factor.powf((head_dim as f64) / ((head_dim as f64) - 2.0)),
+        _ => base,
+    };
+
+    // Linear scaling factor applied to frequencies
+    let linear_factor = match scaling {
+        RoPEScaling::Linear { factor } => factor as f32,
+        _ => 1.0,
+    };
 
     let mut cos_data = vec![0.0f32; max_pos * half_d];
     let mut sin_data = vec![0.0f32; max_pos * half_d];
 
     for pos in 0..max_pos {
         for i in 0..half_d {
-            let freq = 1.0 / (base as f32).powf(2.0 * i as f32 / head_dim as f32);
-            let angle = pos as f32 * freq;
+            let freq = 1.0 / (effective_base as f32).powf(2.0 * i as f32 / head_dim as f32);
+            let scaled_freq = freq / linear_factor;
+            let angle = pos as f32 * scaled_freq;
             cos_data[pos * half_d + i] = angle.cos();
             sin_data[pos * half_d + i] = angle.sin();
         }

@@ -157,6 +157,7 @@ fn memory_usage_analytical_matches_actual() {
             base: 10000.0,
             max_position_embeddings: 16,
             style: Default::default(),
+            scaling: Default::default(),
         },
         quantization: QuantConfig::F32,
     };

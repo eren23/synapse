@@ -75,6 +75,7 @@ mod tests {
                 base: 1_000_000.0,
                 max_position_embeddings: 32768,
                 style: Default::default(),
+                scaling: Default::default(),
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F32);
@@ -113,6 +114,7 @@ mod tests {
                 base: 500_000.0,
                 max_position_embeddings: 131072,
                 style: Default::default(),
+                scaling: Default::default(),
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F16);
@@ -220,6 +222,7 @@ mod tests {
             base: 10000.0,
             max_position_embeddings: 4096,
             style: Default::default(),
+            scaling: Default::default(),
         });
         assert_eq!(rope.name(), "RoPE");
         assert_eq!(rope.max_position_embeddings(), 4096);
@@ -357,6 +360,7 @@ mod model_tests {
                 base: 10000.0,
                 max_position_embeddings: 16,
                 style: Default::default(),
+                scaling: Default::default(),
             },
             quantization: QuantConfig::F32,
         }
@@ -608,6 +612,7 @@ mod quantization_tests {
                 base: 10000.0,
                 max_position_embeddings: 16,
                 style: Default::default(),
+                scaling: Default::default(),
             },
             quantization: QuantConfig::F32,
         }

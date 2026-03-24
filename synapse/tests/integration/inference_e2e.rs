@@ -33,6 +33,7 @@ fn qwen3_test_config() -> ModelConfig {
             base: 1_000_000.0,
             max_position_embeddings: 128,
             style: Default::default(),
+            scaling: Default::default(),
         },
         quantization: QuantConfig::F32,
     }

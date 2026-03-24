@@ -358,22 +358,34 @@ impl QuantizedDecoderLayer {
             .slice()
             .expect("KV cache slice failed");
 
-        // Attention: single Q against all cached K/V (same logic as f32 path)
+        // Sliding window: limit attention to the last `window_size` positions
+        let (effective_k, effective_v, effective_len) = if let Some(ws) = self.attention.window_size() {
+            if seq_len > ws {
+                let offset = (seq_len - ws) * kv_dim;
+                (&cached_k[offset..], &cached_v[offset..], ws)
+            } else {
+                (cached_k, cached_v, seq_len)
+            }
+        } else {
+            (cached_k, cached_v, seq_len)
+        };
+
+        // Attention: single Q against effective cached K/V (same logic as f32 path)
         let mut attn_output = vec![0.0f32; q_dim];
 
-        if seq_len >= 16 {
+        if effective_len >= 16 {
             // SIMD path: gather + matmul
             let mut k_heads = Vec::with_capacity(num_kv_heads);
             let mut v_heads = Vec::with_capacity(num_kv_heads);
             for kv_head in 0..num_kv_heads {
-                let mut k_buf = vec![0.0f32; seq_len * head_dim];
-                let mut v_buf = vec![0.0f32; seq_len * head_dim];
-                for s in 0..seq_len {
+                let mut k_buf = vec![0.0f32; effective_len * head_dim];
+                let mut v_buf = vec![0.0f32; effective_len * head_dim];
+                for s in 0..effective_len {
                     let off = s * kv_dim + kv_head * head_dim;
                     k_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&cached_k[off..off + head_dim]);
+                        .copy_from_slice(&effective_k[off..off + head_dim]);
                     v_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&cached_v[off..off + head_dim]);
+                        .copy_from_slice(&effective_v[off..off + head_dim]);
                 }
                 k_heads.push(k_buf);
                 v_heads.push(v_buf);
@@ -383,13 +395,13 @@ impl QuantizedDecoderLayer {
                 let kv_head = head / groups;
                 let q_head = &q[head * head_dim..(head + 1) * head_dim];
 
-                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, seq_len);
+                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, effective_len);
                 for s in &mut scores {
                     *s *= scale;
                 }
                 softmax_slice(&mut scores);
 
-                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, seq_len, head_dim);
+                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, effective_len, head_dim);
                 attn_output[head * head_dim..(head + 1) * head_dim]
                     .copy_from_slice(&sv);
             }
@@ -397,21 +409,21 @@ impl QuantizedDecoderLayer {
             // Scalar path for short sequences
             for head in 0..num_heads {
                 let kv_head = head / groups;
-                let mut scores = vec![0.0f32; seq_len];
-                for s in 0..seq_len {
+                let mut scores = vec![0.0f32; effective_len];
+                for s in 0..effective_len {
                     let mut dot = 0.0f32;
                     for d in 0..head_dim {
                         dot += q[head * head_dim + d]
-                            * cached_k[s * kv_dim + kv_head * head_dim + d];
+                            * effective_k[s * kv_dim + kv_head * head_dim + d];
                     }
                     scores[s] = dot * scale;
                 }
                 softmax_slice(&mut scores);
                 for d in 0..head_dim {
                     let mut sum = 0.0f32;
-                    for s in 0..seq_len {
+                    for s in 0..effective_len {
                         sum += scores[s]
-                            * cached_v[s * kv_dim + kv_head * head_dim + d];
+                            * effective_v[s * kv_dim + kv_head * head_dim + d];
                     }
                     attn_output[head * head_dim + d] = sum;
                 }

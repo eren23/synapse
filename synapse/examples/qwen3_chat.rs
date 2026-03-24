@@ -80,7 +80,8 @@ fn demo_engine() -> InferenceEngine {
     cfg.position = PositionConfig::RoPE {
         base: 1_000_000.0,
         max_position_embeddings: 128,
-            style: Default::default(),
+        style: Default::default(),
+        scaling: Default::default(),
     };
 
     let mut model = ModelBuilder::from_config(&cfg);

@@ -93,12 +93,15 @@ impl WeightMapper {
 
     /// Create a mapper for the given HuggingFace model type.
     ///
-    /// Supported: `"qwen3"`, `"llama"`, `"mistral"`.
+    /// Supported: `"qwen3"`, `"llama"`, `"mistral"`, `"phi"` / `"phi3"`,
+    /// `"gemma"` / `"gemma2"`.
     pub fn from_model_type(model_type: &str) -> Result<Self, WeightError> {
         match model_type {
             "qwen3" => Ok(Self::qwen3()),
             "llama" => Ok(Self::llama()),
             "mistral" => Ok(Self::mistral()),
+            "phi" | "phi3" => Ok(Self::phi()),
+            "gemma" | "gemma2" => Ok(Self::gemma()),
             _ => Err(WeightError::InvalidFormat(format!(
                 "Unsupported model type: {model_type}"
             ))),
@@ -157,6 +160,29 @@ impl WeightMapper {
     ///
     /// Mistral has identical weight naming to LLaMA (no per-head norms).
     pub fn mistral() -> Self {
+        Self::llama()
+    }
+
+    /// Create a mapper for Phi-3/Phi-4 weight names (separate projections).
+    ///
+    /// When projections are stored as separate q_proj/k_proj/v_proj and
+    /// gate_proj/up_proj, Phi uses the same HF naming convention as LLaMA.
+    ///
+    /// NOTE: Some Phi checkpoints use fused `qkv_proj` (shape `[3*hidden, hidden]`)
+    /// and fused `gate_up_proj` (shape `[2*intermediate, hidden]`). Splitting those
+    /// into individual Q/K/V and gate/up tensors is not yet implemented and will
+    /// require a dedicated pre-processing step before weight loading.
+    pub fn phi() -> Self {
+        Self::llama()
+    }
+
+    /// Create a mapper for Gemma / Gemma-2 weight names.
+    ///
+    /// Gemma uses the same HF naming convention as LLaMA (no per-head norms).
+    /// Gemma-1 ties embeddings (no separate lm_head), but the mapper still
+    /// includes the lm_head rule — unused rules are harmless and Gemma-2 does
+    /// have a separate lm_head.
+    pub fn gemma() -> Self {
         Self::llama()
     }
 
@@ -625,6 +651,182 @@ mod tests {
         assert!(
             matches!(result, Err(WeightError::InvalidFormat(ref msg)) if msg.contains("gpt2")),
             "Expected InvalidFormat error for unsupported model type, got: {result:?}"
+        );
+    }
+
+    // ── Phi weight mapping ──────────────────────────────────────────
+
+    #[test]
+    fn phi_individual_mappings_correct() {
+        let mapper = WeightMapper::phi();
+
+        assert_eq!(
+            mapper.map_name("model.embed_tokens.weight"),
+            Some("embed_tokens.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.k_proj.weight"),
+            Some("layers[0].attention.w_k".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.v_proj.weight"),
+            Some("layers[0].attention.w_v".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.o_proj.weight"),
+            Some("layers[0].attention.w_o".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.15.mlp.gate_proj.weight"),
+            Some("layers[15].ffn.w_gate".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.15.mlp.up_proj.weight"),
+            Some("layers[15].ffn.w_up".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.15.mlp.down_proj.weight"),
+            Some("layers[15].ffn.w_down".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.input_layernorm.weight"),
+            Some("layers[5].attn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.post_attention_layernorm.weight"),
+            Some("layers[5].ffn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.norm.weight"),
+            Some("norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("lm_head.weight"),
+            Some("lm_head.weight".to_string())
+        );
+        // Phi should NOT map q_norm/k_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.k_norm.weight"),
+            None
+        );
+    }
+
+    // ── Gemma weight mapping ────────────────────────────────────────
+
+    #[test]
+    fn gemma_individual_mappings_correct() {
+        let mapper = WeightMapper::gemma();
+
+        assert_eq!(
+            mapper.map_name("model.embed_tokens.weight"),
+            Some("embed_tokens.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.k_proj.weight"),
+            Some("layers[0].attention.w_k".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.v_proj.weight"),
+            Some("layers[0].attention.w_v".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.o_proj.weight"),
+            Some("layers[0].attention.w_o".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.17.mlp.gate_proj.weight"),
+            Some("layers[17].ffn.w_gate".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.17.mlp.up_proj.weight"),
+            Some("layers[17].ffn.w_up".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.17.mlp.down_proj.weight"),
+            Some("layers[17].ffn.w_down".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.input_layernorm.weight"),
+            Some("layers[5].attn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.5.post_attention_layernorm.weight"),
+            Some("layers[5].ffn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("model.norm.weight"),
+            Some("norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("lm_head.weight"),
+            Some("lm_head.weight".to_string())
+        );
+        // Gemma should NOT map q_norm/k_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.k_norm.weight"),
+            None
+        );
+    }
+
+    // ── from_model_type for phi / gemma ─────────────────────────────
+
+    #[test]
+    fn from_model_type_selects_phi() {
+        let mapper = WeightMapper::from_model_type("phi3").unwrap();
+        // Phi mapper should handle standard projections
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        // But NOT q_norm/k_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+
+        // Also works with bare "phi" alias
+        let mapper2 = WeightMapper::from_model_type("phi").unwrap();
+        assert_eq!(
+            mapper2.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+    }
+
+    #[test]
+    fn from_model_type_selects_gemma() {
+        let mapper = WeightMapper::from_model_type("gemma2").unwrap();
+        // Gemma mapper should handle standard projections
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        // But NOT q_norm/k_norm
+        assert_eq!(
+            mapper.map_name("model.layers.0.self_attn.q_norm.weight"),
+            None
+        );
+
+        // Also works with bare "gemma" alias
+        let mapper2 = WeightMapper::from_model_type("gemma").unwrap();
+        assert_eq!(
+            mapper2.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
         );
     }
 }
