@@ -7,6 +7,9 @@ name = "synapse"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+metal = ["synapse-inference/metal"]
+
 [dependencies]
 synapse-autograd = { path = "crates/synapse-autograd" }
 synapse-nn = { path = "crates/synapse-nn" }

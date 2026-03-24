@@ -39,8 +39,14 @@ impl ComputeBackend {
     }
 
     /// Whether a matmul of given dimensions should go to GPU.
+    ///
+    /// M=1 (single-token decode) always stays on CPU — GPU kernel launch
+    /// overhead dominates for single-row operations. Metal is only used
+    /// for batched operations (prefill, training) where M > 1.
     fn should_use_gpu(&self, m: usize, n: usize, k: usize) -> bool {
-        matches!(self, ComputeBackend::Metal { .. }) && m * n * k > GPU_DISPATCH_THRESHOLD
+        matches!(self, ComputeBackend::Metal { .. })
+            && m > 1
+            && m * n * k > GPU_DISPATCH_THRESHOLD
     }
 
     /// y = A * B^T  where A is [m, k], B is [n, k] → y is [m, n].

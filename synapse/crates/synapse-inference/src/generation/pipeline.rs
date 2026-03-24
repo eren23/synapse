@@ -188,6 +188,7 @@ impl<'a> GenerationPipeline<'a> {
             #[cfg(not(feature = "metal"))]
             self.model.forward_prefill(prompt_tokens, cache)
         };
+        let prefill_elapsed = start.elapsed();
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
 
         // Sample first token
@@ -237,6 +238,7 @@ impl<'a> GenerationPipeline<'a> {
             num_prompt_tokens,
             generated_tokens.len(),
             elapsed,
+            prefill_elapsed,
         )
     }
 
@@ -265,6 +267,7 @@ impl<'a> GenerationPipeline<'a> {
             #[cfg(not(feature = "metal"))]
             self.model.forward(prompt_tokens)
         };
+        let prefill_elapsed = start.elapsed();
         let vocab_size = prefill_output.shape[2];
         let last_pos_logits = &prefill_output.logits
             [(num_prompt_tokens - 1) * vocab_size..num_prompt_tokens * vocab_size];
@@ -318,6 +321,7 @@ impl<'a> GenerationPipeline<'a> {
             num_prompt_tokens,
             generated_tokens.len(),
             elapsed,
+            prefill_elapsed,
         )
     }
 

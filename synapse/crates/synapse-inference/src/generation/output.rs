@@ -10,10 +10,14 @@ pub struct GenerationOutput {
     pub num_generated_tokens: usize,
     /// Number of prompt tokens consumed during prefill.
     pub num_prompt_tokens: usize,
-    /// Wall-clock time for the entire generation.
+    /// Wall-clock time for the entire generation (prefill + decode).
     pub elapsed: Duration,
-    /// Generated tokens per second (excludes prefill).
+    /// Wall-clock time for prefill only (time to first token).
+    pub prefill_elapsed: Duration,
+    /// Generated tokens per second (decode phase only, excludes prefill).
     pub tokens_per_sec: f64,
+    /// Prefill throughput: prompt tokens per second.
+    pub prefill_tokens_per_sec: f64,
 }
 
 impl GenerationOutput {
@@ -23,9 +27,16 @@ impl GenerationOutput {
         num_prompt_tokens: usize,
         num_generated_tokens: usize,
         elapsed: Duration,
+        prefill_elapsed: Duration,
     ) -> Self {
-        let tokens_per_sec = if elapsed.as_secs_f64() > 0.0 {
-            num_generated_tokens as f64 / elapsed.as_secs_f64()
+        let decode_elapsed = elapsed.saturating_sub(prefill_elapsed);
+        let tokens_per_sec = if decode_elapsed.as_secs_f64() > 0.0 {
+            num_generated_tokens as f64 / decode_elapsed.as_secs_f64()
+        } else {
+            0.0
+        };
+        let prefill_tokens_per_sec = if prefill_elapsed.as_secs_f64() > 0.0 {
+            num_prompt_tokens as f64 / prefill_elapsed.as_secs_f64()
         } else {
             0.0
         };
@@ -35,7 +46,9 @@ impl GenerationOutput {
             num_generated_tokens,
             num_prompt_tokens,
             elapsed,
+            prefill_elapsed,
             tokens_per_sec,
+            prefill_tokens_per_sec,
         }
     }
 }

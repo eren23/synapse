@@ -95,6 +95,8 @@ fn demo_engine() -> InferenceEngine {
         quantized_model: None,
         config: cfg,
         tokenizer: None,
+        #[cfg(feature = "metal")]
+        backend: synapse_inference::metal::ComputeBackend::auto(),
     }
 }
 
@@ -246,6 +248,9 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool) -> Result<(), Box<dyn
         let pipeline = if let Some(ref qmodel) = engine.quantized_model {
             GenerationPipeline::new_quantized(qmodel)
         } else {
+            #[cfg(feature = "metal")]
+            { GenerationPipeline::with_backend(&engine.model, &engine.backend) }
+            #[cfg(not(feature = "metal"))]
             GenerationPipeline::new(&engine.model)
         };
 
@@ -302,9 +307,11 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool) -> Result<(), Box<dyn
         println!();
         let mode_str = if engine.is_quantized() { "INT8" } else { "f32" };
         println!(
-            "Generated {} tokens in {:.3}s ({:.1} tok/s, {})",
+            "Prefill: {} tokens in {:.0}ms ({:.0} tok/s) | Decode: {} tokens at {:.1} tok/s | {}",
+            output.num_prompt_tokens,
+            output.prefill_elapsed.as_millis(),
+            output.prefill_tokens_per_sec,
             output.num_generated_tokens,
-            output.elapsed.as_secs_f64(),
             output.tokens_per_sec,
             mode_str,
         );
