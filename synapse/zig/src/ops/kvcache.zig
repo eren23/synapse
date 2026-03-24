@@ -102,6 +102,15 @@ pub const KvCache = struct {
     pub fn reset(self: *KvCache) void {
         self.pos = 0;
     }
+
+    /// Truncate to a given position. Used by speculative decoding to roll back
+    /// rejected draft tokens. The truncated entries are not zeroed — just
+    /// the position counter is updated.
+    pub fn truncateTo(self: *KvCache, new_len: usize) void {
+        if (new_len < self.pos) {
+            self.pos = new_len;
+        }
+    }
 };
 
 /// Per-layer management of N independent KV-caches.
@@ -147,6 +156,11 @@ pub const LayerCaches = struct {
     /// Get the cache for a specific layer.
     pub fn get(self: *LayerCaches, layer: usize) *KvCache {
         return &self.caches[layer];
+    }
+
+    /// Truncate all layer caches to a given position.
+    pub fn truncateAllTo(self: *LayerCaches, new_len: usize) void {
+        for (self.caches) |*c| c.truncateTo(new_len);
     }
 
     /// Reset all layer caches (rewind position counters).

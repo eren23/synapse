@@ -248,6 +248,49 @@ impl CausalLM {
         }
     }
 
+    /// Draft forward: runs only the first `n_draft_layers` layers.
+    /// Used by self-speculative decoding as a fast approximation.
+    /// Populates the KV cache for the draft layers only.
+    pub fn forward_one_draft(
+        &self,
+        token: u32,
+        cache: &mut KVCache,
+        n_draft_layers: usize,
+    ) -> ModelOutput {
+        let h = self.config.architecture.hidden_size;
+        let vocab = self.config.architecture.vocab_size;
+        let pos = cache.current_len().expect("failed to query cache length");
+
+        let mut x = vec![0.0f32; h];
+        let id = token as usize;
+        if id < vocab {
+            x.copy_from_slice(&self.embed_tokens[id * h..(id + 1) * h]);
+        }
+
+        // Only run the first n_draft_layers
+        let n = n_draft_layers.min(self.layers.len());
+        for (i, layer) in self.layers[..n].iter().enumerate() {
+            x = layer.forward_one(&x, cache.layer_mut(i), pos, &self.rope_cos, &self.rope_sin);
+        }
+        // Remaining layers: just append zeros to cache to keep positions in sync
+        let kv_dim = self.config.attention.num_kv_heads() * self.config.attention.head_dim();
+        let zeros = vec![0.0f32; kv_dim];
+        for i in n..self.layers.len() {
+            cache.layer_mut(i)
+                .append(&zeros, &zeros)
+                .expect("KV cache append failed for draft padding");
+        }
+
+        x = apply_norm(&x, &self.final_norm_weight, &*self.final_norm, h);
+        let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
+        let logits = matmul_t(&x, lm_weight, 1, h, vocab);
+
+        ModelOutput {
+            logits,
+            shape: [1, 1, vocab],
+        }
+    }
+
     /// Prefill forward pass dispatched through ComputeBackend.
     #[cfg(feature = "metal")]
     pub fn forward_prefill_with_backend(

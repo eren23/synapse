@@ -247,6 +247,121 @@ fn int8GemvRow(
 }
 
 // ================================================================
+// Q4_0 GEMV (4-bit weights, on-the-fly dequantization)
+// ================================================================
+
+const QK4_0: usize = 32; // Q4_0 block size: 32 elements
+const Q4_0_BLOCK_BYTES: usize = 2 + QK4_0 / 2; // f16 scale (2) + 16 nibble bytes = 18
+
+/// Q4_0 matrix-vector multiply for M=1.
+///
+/// C[1,N] = A_f32[1,K] @ dequant(B_q4[N,K])
+///
+/// B is stored as Q4_0 blocks in row-major order: each row j has K/32 blocks.
+/// Each block: [f16 scale (2 bytes)][16 bytes packed nibbles].
+/// Nibble value: (nibble - 8) * scale.
+///
+/// `b_q4` points to the raw Q4_0 block data for the entire [N, K] matrix.
+/// `n` = number of output features (rows of B).
+/// `k` = number of input features (must be multiple of 32).
+pub fn q4_0GemvRow(
+    n: usize,
+    k: usize,
+    a: [*]const f32,
+    b_q4: [*]const u8,
+    c: [*]f32,
+) void {
+    const blocks_per_row = k / QK4_0;
+    const row_bytes = blocks_per_row * Q4_0_BLOCK_BYTES;
+
+    // Process 4 output rows at a time for ILP
+    var j: usize = 0;
+    while (j + 4 <= n) : (j += 4) {
+        var sums: [4]f32 = .{0} ** 4;
+
+        for (0..blocks_per_row) |blk| {
+            const a_off = blk * QK4_0;
+
+            inline for (0..4) |r| {
+                const row_start = (j + r) * row_bytes;
+                const block_start = row_start + blk * Q4_0_BLOCK_BYTES;
+
+                // Read f16 scale
+                const scale_lo: u16 = b_q4[block_start];
+                const scale_hi: u16 = b_q4[block_start + 1];
+                const scale_bits = scale_lo | (scale_hi << 8);
+                const scale = f16ToF32(scale_bits);
+
+                // Dot product over 32 elements in this block
+                var block_sum: f32 = 0;
+                for (0..QK4_0 / 2) |i| {
+                    const byte = b_q4[block_start + 2 + i];
+                    const lo = @as(f32, @floatFromInt(@as(i32, byte & 0x0F) - 8));
+                    const hi = @as(f32, @floatFromInt(@as(i32, byte >> 4) - 8));
+                    block_sum += a[a_off + i * 2] * lo + a[a_off + i * 2 + 1] * hi;
+                }
+                sums[r] += block_sum * scale;
+            }
+        }
+
+        inline for (0..4) |r| {
+            c[j + r] = sums[r];
+        }
+    }
+
+    // Scalar tail
+    while (j < n) : (j += 1) {
+        var sum: f32 = 0;
+        const row_start = j * row_bytes;
+
+        for (0..blocks_per_row) |blk| {
+            const a_off = blk * QK4_0;
+            const block_start = row_start + blk * Q4_0_BLOCK_BYTES;
+
+            const scale_lo: u16 = b_q4[block_start];
+            const scale_hi: u16 = b_q4[block_start + 1];
+            const scale = f16ToF32(scale_lo | (scale_hi << 8));
+
+            for (0..QK4_0 / 2) |i| {
+                const byte = b_q4[block_start + 2 + i];
+                const lo = @as(f32, @floatFromInt(@as(i32, byte & 0x0F) - 8));
+                const hi = @as(f32, @floatFromInt(@as(i32, byte >> 4) - 8));
+                sum += (a[a_off + i * 2] * lo + a[a_off + i * 2 + 1] * hi) * scale;
+            }
+        }
+        c[j] = sum;
+    }
+}
+
+/// Convert f16 bits to f32 (IEEE 754 half-precision).
+fn f16ToF32(bits: u16) f32 {
+    const sign: u32 = @as(u32, bits >> 15) << 31;
+    const exp5: u32 = (bits >> 10) & 0x1F;
+    const mant: u32 = bits & 0x3FF;
+
+    if (exp5 == 0) {
+        // Subnormal or zero
+        if (mant == 0) return @bitCast(sign);
+        // Subnormal: normalize
+        var m = mant;
+        var e: u32 = 0;
+        while (m & 0x400 == 0) {
+            m <<= 1;
+            e += 1;
+        }
+        m &= 0x3FF;
+        const exp32 = (127 - 15 + 1 -% e) << 23;
+        return @bitCast(sign | exp32 | (m << 13));
+    } else if (exp5 == 31) {
+        // Inf or NaN
+        return @bitCast(sign | 0x7F800000 | (mant << 13));
+    }
+
+    const exp32 = (exp5 + 127 - 15) << 23;
+    return @bitCast(sign | exp32 | (mant << 13));
+}
+
+// ================================================================
 // Packing routines
 // ================================================================
 

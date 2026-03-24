@@ -95,6 +95,11 @@ impl KVCacheLayer {
         unsafe { check_status(ffi::syn_kvcache_reset(self.ptr)) }
     }
 
+    /// Truncate to a given position. Used by speculative decoding rollback.
+    pub fn truncate_to(&mut self, new_len: usize) -> Result<(), SynapseError> {
+        unsafe { check_status(ffi::syn_kvcache_truncate(self.ptr, new_len)) }
+    }
+
     pub fn current_len(&self) -> Result<usize, SynapseError> {
         let mut seq_len: usize = 0;
         unsafe {
@@ -192,6 +197,15 @@ impl KVCache {
     /// Current sequence length (same across all layers after uniform appends).
     pub fn current_len(&self) -> Result<usize, SynapseError> {
         self.layers[0].current_len()
+    }
+
+    /// Truncate all layers to a given position. Used by speculative decoding
+    /// to roll back rejected draft tokens.
+    pub fn truncate_to(&mut self, new_len: usize) -> Result<(), SynapseError> {
+        for layer in &mut self.layers {
+            layer.truncate_to(new_len)?;
+        }
+        Ok(())
     }
 
     /// Get a mutable reference to a specific layer's cache.

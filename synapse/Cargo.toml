@@ -124,6 +124,10 @@ name = "kvcache_decode"
 path = "tests/integration/kvcache_decode.rs"
 
 [[test]]
+name = "multi_model_validation"
+path = "tests/integration/multi_model_validation.rs"
+
+[[test]]
 name = "kvcache_speedup"
 path = "tests/benchmarks/kvcache_speedup.rs"
 

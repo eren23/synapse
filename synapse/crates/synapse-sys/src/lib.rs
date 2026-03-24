@@ -285,6 +285,28 @@ extern "C" {
         scales_b: *const f32,
     ) -> syn_status_t;
 
+    /// Fused causal attention for a single head on flat arrays.
+    /// Q: [seq_q, d_head], K: [seq_k, d_head], V: [seq_k, d_head]
+    /// Output: [seq_q, d_head]
+    pub fn syn_fused_attention(
+        seq_q: usize,
+        seq_k: usize,
+        d_head: usize,
+        q: *const f32,
+        k: *const f32,
+        v: *const f32,
+        out: *mut f32,
+    ) -> syn_status_t;
+
+    /// Q4_0 matrix-vector multiply: C[1,N] = A_f32[1,K] @ dequant(B_q4[N,K]).
+    /// K must be a multiple of 32.
+    pub fn syn_q4_0_gemv(
+        n: usize, k: usize,
+        a: *const f32,
+        b_q4: *const u8,
+        c: *mut f32,
+    ) -> syn_status_t;
+
     // ------------------------------------------------------------------
     // KV-Cache
     // ------------------------------------------------------------------
@@ -310,4 +332,5 @@ extern "C" {
     ) -> syn_status_t;
 
     pub fn syn_kvcache_reset(cache: *mut syn_kvcache_t) -> syn_status_t;
+    pub fn syn_kvcache_truncate(cache: *mut syn_kvcache_t, new_len: usize) -> syn_status_t;
 }

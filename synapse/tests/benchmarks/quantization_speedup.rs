@@ -226,8 +226,39 @@ fn isolated_matmul_int8_vs_f32() {
         let speedup = f32_us / int8_us;
         let gflops_f32 = (2.0 * *m as f64 * *n as f64 * *k as f64) / (f32_us * 1e3);
         let gflops_int8 = (2.0 * *m as f64 * *n as f64 * *k as f64) / (int8_us * 1e3);
+        // Q4_0 benchmark (M=1 only, Q4 requires K % 32 == 0)
+        let q4_us = if *m == 1 && *k % 32 == 0 {
+            // Generate fake Q4_0 block data: each block = 2 bytes (f16 scale) + 16 bytes (nibbles)
+            let blocks_per_row = *k / 32;
+            let block_bytes = 18; // 2 + 16
+            let row_bytes = blocks_per_row * block_bytes;
+            let total_bytes = *n * row_bytes;
+            let b_q4: Vec<u8> = (0..total_bytes).map(|i| (i % 256) as u8).collect();
+
+            // Warmup
+            for _ in 0..warmup {
+                synapse_core::q4_0_gemv(*n, *k, &a_f32, &b_q4).unwrap();
+            }
+            let start = Instant::now();
+            for _ in 0..iterations {
+                let _ = synapse_core::q4_0_gemv(*n, *k, &a_f32, &b_q4).unwrap();
+            }
+            let us = start.elapsed().as_micros() as f64 / iterations as f64;
+            Some(us)
+        } else {
+            None
+        };
+
+        let q4_str = if let Some(q4) = q4_us {
+            let gflops_q4 = (2.0 * *m as f64 * *n as f64 * *k as f64) / (q4 * 1e3);
+            let sp = f32_us / q4;
+            format!(", Q4={q4:.0}μs ({gflops_q4:.1} GFLOPS) {sp:.1}x")
+        } else {
+            String::new()
+        };
+
         eprintln!(
-            "{label}: f32={f32_us:.0}μs ({gflops_f32:.1} GFLOPS), INT8={int8_us:.0}μs ({gflops_int8:.1} GFLOPS), speedup={speedup:.2}x"
+            "{label}: f32={f32_us:.0}μs ({gflops_f32:.1} GFLOPS), INT8={int8_us:.0}μs ({gflops_int8:.1} GFLOPS) {speedup:.1}x{q4_str}"
         );
     }
 }

@@ -105,7 +105,7 @@ fn demo_engine() -> InferenceEngine {
 
 enum Mode {
     Demo,
-    Chat { dir: PathBuf, quantize: bool },
+    Chat { dir: PathBuf, quantize: bool, speculative: bool },
     Verify(PathBuf),
 }
 
@@ -114,12 +114,14 @@ fn parse_args() -> Result<Mode, String> {
     let mut model_dir = None;
     let mut verify = false;
     let mut quantize = false;
+    let mut speculative = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => return Ok(Mode::Demo),
             "--verify" => verify = true,
             "--quantize" | "-q" => quantize = true,
+            "--speculative" | "-s" => speculative = true,
             "--model-dir" => {
                 let value = args
                     .next()
@@ -140,7 +142,7 @@ fn parse_args() -> Result<Mode, String> {
 
     match (model_dir, verify) {
         (Some(dir), true) => Ok(Mode::Verify(dir)),
-        (Some(dir), false) => Ok(Mode::Chat { dir, quantize }),
+        (Some(dir), false) => Ok(Mode::Chat { dir, quantize, speculative }),
         (None, _) => Ok(Mode::Demo),
     }
 }
@@ -150,7 +152,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match mode {
         Mode::Verify(dir) => run_verify(dir)?,
-        Mode::Chat { dir, quantize } => run_pretrained_chat(dir, quantize)?,
+        Mode::Chat { dir, quantize, speculative } => run_pretrained_chat(dir, quantize, speculative)?,
         Mode::Demo => run_demo_chat(),
     }
 
@@ -205,7 +207,7 @@ fn run_verify(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_pretrained_chat(model_dir: PathBuf, quantize: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) -> Result<(), Box<dyn std::error::Error>> {
     print!("Loading checkpoint from {}...", model_dir.display());
     io::stdout().flush()?;
     let mut engine = InferenceEngine::from_pretrained(&model_dir)?;
@@ -277,6 +279,8 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool) -> Result<(), Box<dyn
             max_new_tokens,
             eos_token_id,
             stop_sequences: vec![stop_sequences.clone()],
+            speculative_k: if speculative { 4 } else { 0 },
+            speculative_draft_layers: 0, // auto: num_layers / 3
             combined: Some(CombinedSampler {
                 temperature: 0.7,
                 top_k: 40,

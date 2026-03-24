@@ -1131,6 +1131,138 @@ pub export fn syn_qgemm_int8(
 }
 
 // ============================================================
+// Fused causal attention (flat arrays, single head)
+// ============================================================
+
+/// Fused causal attention for a single head on flat arrays.
+///
+/// Q: [seq_q, d_head], K: [seq_k, d_head], V: [seq_k, d_head]
+/// Output: [seq_q, d_head]
+///
+/// Uses tiled Q dimension (TILE_Q=32) with online softmax.
+/// K is transposed internally for the Q·K^T matmul.
+pub export fn syn_fused_attention(
+    seq_q: usize,
+    seq_k: usize,
+    d_head: usize,
+    q: ?[*]const f32,
+    k: ?[*]const f32,
+    v: ?[*]const f32,
+    out: ?[*]f32,
+) c_int {
+    const q_ptr = q orelse return SYN_ERR_NULL_PTR;
+    const k_ptr = k orelse return SYN_ERR_NULL_PTR;
+    const v_ptr = v orelse return SYN_ERR_NULL_PTR;
+    const o_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (seq_q == 0 or seq_k == 0 or d_head == 0) return SYN_OK;
+
+    const attn_ops = @import("synapse").ops.attention;
+    const matmul_ops2 = @import("synapse").ops.matmul;
+    const TILE_Q = attn_ops.TILE_Q;
+    const MR2 = matmul_ops2.MR;
+    const NR2 = matmul_ops2.NR;
+    const KC2 = matmul_ops2.KC;
+
+    // Allocate scratch: s_tile [TILE_Q, seq_k] + packing buffers
+    const tq_al = ((TILE_Q + MR2 - 1) / MR2) * MR2;
+    const sk_al = ((seq_k + NR2 - 1) / NR2) * NR2;
+    const dh_al = ((d_head + NR2 - 1) / NR2) * NR2;
+    const kc_max = @max(@min(KC2, d_head), @min(KC2, seq_k));
+
+    const s_tile = ffi_allocator.alloc(f32, TILE_Q * seq_k) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(s_tile);
+    const pa = ffi_allocator.alloc(f32, @max(tq_al * kc_max, 1)) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(pa);
+    const pb = ffi_allocator.alloc(f32, @max(@max(sk_al * @min(KC2, d_head), dh_al * @min(KC2, seq_k)), 1)) catch return SYN_ERR_OUT_OF_MEMORY;
+    defer ffi_allocator.free(pb);
+
+    const scale: f32 = 1.0 / @sqrt(@as(f32, @floatFromInt(d_head)));
+
+    var tq: usize = 0;
+    while (tq < seq_q) : (tq += TILE_Q) {
+        const tqs = @min(TILE_Q, seq_q - tq);
+
+        // Zero S_tile
+        @memset(s_tile[0..tqs * seq_k], 0);
+
+        // S_tile = Q_tile @ K^T  (K is [seq_k, d_head], transposed)
+        matmul_ops2.sgemmTiled(
+            tqs, seq_k, d_head,
+            q_ptr + tq * d_head, d_head, false,
+            k_ptr, d_head, true,
+            s_tile.ptr, seq_k,
+            pa.ptr, pb.ptr,
+        );
+
+        // Scale
+        for (s_tile[0..tqs * seq_k]) |*val| val.* *= scale;
+
+        // Causal mask
+        for (0..tqs) |i| {
+            const mask_start = tq + i + 1;
+            if (mask_start < seq_k) {
+                @memset(s_tile[i * seq_k + mask_start .. (i + 1) * seq_k], -std.math.inf(f32));
+            }
+        }
+
+        // Online softmax per row
+        for (0..tqs) |i| {
+            const rb = i * seq_k;
+            var mx: f32 = -std.math.inf(f32);
+            var se: f32 = 0.0;
+            for (0..seq_k) |j2| {
+                const x = s_tile[rb + j2];
+                if (x > mx) {
+                    se = se * @exp(mx - x) + 1.0;
+                    mx = x;
+                } else {
+                    se += @exp(x - mx);
+                }
+            }
+            const inv = 1.0 / se;
+            for (0..seq_k) |j2| {
+                s_tile[rb + j2] = @exp(s_tile[rb + j2] - mx) * inv;
+            }
+        }
+
+        // O_tile = S_tile @ V (V is [seq_k, d_head], not transposed)
+        for (0..tqs) |i| {
+            @memset((o_ptr + (tq + i) * d_head)[0..d_head], 0);
+        }
+        matmul_ops2.sgemmTiled(
+            tqs, d_head, seq_k,
+            s_tile.ptr, seq_k, false,
+            v_ptr, d_head, false,
+            o_ptr + tq * d_head, d_head,
+            pa.ptr, pb.ptr,
+        );
+    }
+
+    return SYN_OK;
+}
+
+// ============================================================
+// Q4_0 GEMV (4-bit quantized matrix-vector multiply)
+// ============================================================
+
+pub export fn syn_q4_0_gemv(
+    n: usize,
+    k: usize,
+    a: ?[*]const f32,
+    b_q4: ?[*]const u8,
+    c: ?[*]f32,
+) c_int {
+    const a_ptr = a orelse return SYN_ERR_NULL_PTR;
+    const b_ptr = b_q4 orelse return SYN_ERR_NULL_PTR;
+    const c_ptr = c orelse return SYN_ERR_NULL_PTR;
+    if (n == 0 or k == 0) return SYN_OK;
+    if (k % 32 != 0) return SYN_ERR_SHAPE_MISMATCH;
+
+    qmatmul_ops.q4_0GemvRow(n, k, a_ptr, b_ptr, c_ptr);
+    return SYN_OK;
+}
+
+// ============================================================
 // KV-Cache management
 // ============================================================
 
@@ -1187,5 +1319,11 @@ pub export fn syn_kvcache_slice(
 pub export fn syn_kvcache_reset(cache: ?*anyopaque) c_int {
     const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
     c.reset();
+    return SYN_OK;
+}
+
+pub export fn syn_kvcache_truncate(cache: ?*anyopaque, new_len: usize) c_int {
+    const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
+    c.truncateTo(new_len);
     return SYN_OK;
 }
