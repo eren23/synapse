@@ -30,12 +30,48 @@ impl DecoderLayer {
     /// Pre-norm forward: norm→attention→residual→norm→FFN→residual.
     ///
     /// `x` is `[seq_len, hidden_size]` (flat). Returns same shape.
-    pub fn forward(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
+    /// `rope_cos` / `rope_sin` are `[max_pos, head_dim/2]` precomputed tables.
+    pub fn forward(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+    ) -> Vec<f32> {
         let h = self.hidden_size;
 
         // 1. Attention sub-layer
         let normed = apply_norm(x, &self.attn_norm_weight, &*self.attn_norm, h);
-        let attn_out = self.apply_attention(&normed, seq_len);
+        let attn_out = self.apply_attention(&normed, seq_len, rope_cos, rope_sin);
+        let mut residual = add_vecs(x, &attn_out);
+
+        // 2. FFN sub-layer
+        let normed = apply_norm(&residual, &self.ffn_norm_weight, &*self.ffn_norm, h);
+        let ffn_out = self.apply_ffn(&normed);
+        add_vecs_inplace(&mut residual, &ffn_out);
+
+        residual
+    }
+
+    /// Batched prefill: same as [`forward`] but also populates the KV cache.
+    ///
+    /// Runs the fast batched attention (all positions at once), then saves
+    /// the RoPE'd K and raw V for each position into `cache_layer` so that
+    /// subsequent [`forward_one`] decode steps can reuse them.
+    pub fn forward_prefill_batched(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        cache_layer: &mut KVCacheLayer,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+
+        // 1. Attention sub-layer (batched + cache populate)
+        let normed = apply_norm(x, &self.attn_norm_weight, &*self.attn_norm, h);
+        let attn_out =
+            self.apply_attention_and_cache(&normed, seq_len, cache_layer, rope_cos, rope_sin);
         let mut residual = add_vecs(x, &attn_out);
 
         // 2. FFN sub-layer
@@ -59,13 +95,15 @@ impl DecoderLayer {
         hidden: &[f32],
         cache_layer: &mut KVCacheLayer,
         pos: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
         debug_assert_eq!(hidden.len(), h, "forward_one: hidden must be [1, hidden_size]");
 
         // 1. Attention sub-layer
         let normed = apply_norm(hidden, &self.attn_norm_weight, &*self.attn_norm, h);
-        let attn_out = self.apply_attention_cached(&normed, cache_layer, pos);
+        let attn_out = self.apply_attention_cached(&normed, cache_layer, pos, rope_cos, rope_sin);
         let mut residual = add_vecs(hidden, &attn_out);
 
         // 2. FFN sub-layer
@@ -171,11 +209,13 @@ impl DecoderLayer {
         x: &[f32],
         seq_len: usize,
         backend: &crate::metal::ComputeBackend,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
 
         let normed = apply_norm_dispatch(x, &self.attn_norm_weight, &*self.attn_norm, h, backend);
-        let attn_out = self.apply_attention_dispatch(&normed, seq_len, backend);
+        let attn_out = self.apply_attention_dispatch(&normed, seq_len, backend, rope_cos, rope_sin);
         let mut residual = add_vecs(x, &attn_out);
 
         let normed = apply_norm_dispatch(
@@ -195,6 +235,8 @@ impl DecoderLayer {
         cache_layer: &mut KVCacheLayer,
         pos: usize,
         backend: &crate::metal::ComputeBackend,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
         debug_assert_eq!(hidden.len(), h);
@@ -202,7 +244,7 @@ impl DecoderLayer {
         let normed = apply_norm_dispatch(
             hidden, &self.attn_norm_weight, &*self.attn_norm, h, backend,
         );
-        let attn_out = self.apply_attention_cached_dispatch(&normed, cache_layer, pos, backend);
+        let attn_out = self.apply_attention_cached_dispatch(&normed, cache_layer, pos, backend, rope_cos, rope_sin);
         let mut residual = add_vecs(hidden, &attn_out);
 
         let normed = apply_norm_dispatch(
@@ -220,6 +262,8 @@ impl DecoderLayer {
         x: &[f32],
         seq_len: usize,
         backend: &crate::metal::ComputeBackend,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
         let num_heads = self.attention.num_heads();
@@ -233,14 +277,17 @@ impl DecoderLayer {
         let q = backend.matmul_t(x, &self.w_q, seq_len, h, q_dim);
         let k = backend.matmul_t(x, &self.w_k, seq_len, h, kv_dim);
         let v = backend.matmul_t(x, &self.w_v, seq_len, h, kv_dim);
-        let q = apply_headwise_rmsnorm(
+        let mut q = apply_headwise_rmsnorm(
             &q, &self.q_norm_weight, seq_len, num_heads, head_dim,
             self.attn_norm.eps() as f32,
         );
-        let k = apply_headwise_rmsnorm(
+        let mut k = apply_headwise_rmsnorm(
             &k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim,
             self.attn_norm.eps() as f32,
         );
+
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
 
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
         for head in 0..num_heads {
@@ -274,8 +321,10 @@ impl DecoderLayer {
         &self,
         x: &[f32],
         cache_layer: &mut KVCacheLayer,
-        _pos: usize,
+        pos: usize,
         backend: &crate::metal::ComputeBackend,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
         let num_heads = self.attention.num_heads();
@@ -290,14 +339,17 @@ impl DecoderLayer {
         let k = backend.matmul_t(x, &self.w_k, 1, h, kv_dim);
         let v = backend.matmul_t(x, &self.w_v, 1, h, kv_dim);
 
-        let q = apply_headwise_rmsnorm(
+        let mut q = apply_headwise_rmsnorm(
             &q, &self.q_norm_weight, 1, num_heads, head_dim,
             self.attn_norm.eps() as f32,
         );
-        let k = apply_headwise_rmsnorm(
+        let mut k = apply_headwise_rmsnorm(
             &k, &self.k_norm_weight, 1, num_kv_heads, head_dim,
             self.attn_norm.eps() as f32,
         );
+
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos);
 
         cache_layer.append(&k, &v).expect("KV cache append failed");
         let (cached_k, cached_v, seq_len) = cache_layer.slice().expect("KV cache slice failed");
@@ -361,7 +413,13 @@ impl DecoderLayer {
 
     // ── Attention ────────────────────────────────────────────────────
 
-    fn apply_attention(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
+    fn apply_attention(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+    ) -> Vec<f32> {
         let h = self.hidden_size;
         let num_heads = self.attention.num_heads();
         let num_kv_heads = self.attention.num_kv_heads();
@@ -375,7 +433,8 @@ impl DecoderLayer {
         let q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
         let k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
         let v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
-        let q = apply_headwise_rmsnorm(
+
+        let mut q = apply_headwise_rmsnorm(
             &q,
             &self.q_norm_weight,
             seq_len,
@@ -383,7 +442,7 @@ impl DecoderLayer {
             head_dim,
             self.attn_norm.eps() as f32,
         );
-        let k = apply_headwise_rmsnorm(
+        let mut k = apply_headwise_rmsnorm(
             &k,
             &self.k_norm_weight,
             seq_len,
@@ -391,6 +450,10 @@ impl DecoderLayer {
             head_dim,
             self.attn_norm.eps() as f32,
         );
+
+        // Apply RoPE to Q and K
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
 
         // Multi-head causal attention with GQA support
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
@@ -437,7 +500,9 @@ impl DecoderLayer {
         &self,
         x: &[f32],
         cache_layer: &mut KVCacheLayer,
-        _pos: usize,
+        pos: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
         let num_heads = self.attention.num_heads();
@@ -454,7 +519,7 @@ impl DecoderLayer {
         let v = matmul_t(x, &self.w_v, 1, h, kv_dim);
 
         // Apply headwise norms (same as full forward)
-        let q = apply_headwise_rmsnorm(
+        let mut q = apply_headwise_rmsnorm(
             &q,
             &self.q_norm_weight,
             1,
@@ -462,7 +527,7 @@ impl DecoderLayer {
             head_dim,
             self.attn_norm.eps() as f32,
         );
-        let k = apply_headwise_rmsnorm(
+        let mut k = apply_headwise_rmsnorm(
             &k,
             &self.k_norm_weight,
             1,
@@ -471,7 +536,11 @@ impl DecoderLayer {
             self.attn_norm.eps() as f32,
         );
 
-        // Append normed K and raw V to cache
+        // Apply RoPE at the correct position
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos);
+
+        // Append RoPE'd K and raw V to cache
         cache_layer
             .append(&k, &v)
             .expect("KV cache append failed");
@@ -484,35 +553,151 @@ impl DecoderLayer {
         // Compute attention: single Q against all cached K/V
         let mut attn_output = vec![0.0f32; q_dim];
 
-        for head in 0..num_heads {
-            let kv_head = head / groups;
-
-            // Scores: Q[head] · K[s, kv_head] for all cached positions
-            let mut scores = vec![0.0f32; seq_len];
-            for s in 0..seq_len {
-                let mut dot = 0.0f32;
-                for d in 0..head_dim {
-                    dot += q[head * head_dim + d]
-                        * cached_k[s * kv_dim + kv_head * head_dim + d];
+        // For longer sequences, gather K/V per kv_head into contiguous buffers
+        // and use SIMD matmul for Q·K^T. For short sequences, scalar is faster
+        // (avoids gather overhead).
+        if seq_len >= 16 {
+            // SIMD path: gather + matmul_t
+            let mut k_heads = Vec::with_capacity(num_kv_heads);
+            let mut v_heads = Vec::with_capacity(num_kv_heads);
+            for kv_head in 0..num_kv_heads {
+                let mut k_buf = vec![0.0f32; seq_len * head_dim];
+                let mut v_buf = vec![0.0f32; seq_len * head_dim];
+                for s in 0..seq_len {
+                    let off = s * kv_dim + kv_head * head_dim;
+                    k_buf[s * head_dim..(s + 1) * head_dim]
+                        .copy_from_slice(&cached_k[off..off + head_dim]);
+                    v_buf[s * head_dim..(s + 1) * head_dim]
+                        .copy_from_slice(&cached_v[off..off + head_dim]);
                 }
-                scores[s] = dot * scale;
+                k_heads.push(k_buf);
+                v_heads.push(v_buf);
             }
 
-            softmax_slice(&mut scores);
+            for head in 0..num_heads {
+                let kv_head = head / groups;
+                let q_head = &q[head * head_dim..(head + 1) * head_dim];
 
-            // Weighted sum of cached values
-            for d in 0..head_dim {
-                let mut sum = 0.0f32;
-                for s in 0..seq_len {
-                    sum += scores[s]
-                        * cached_v[s * kv_dim + kv_head * head_dim + d];
+                // Q·K^T via SIMD: [1, head_dim] × [seq_len, head_dim]^T = [1, seq_len]
+                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, seq_len);
+                for s in &mut scores {
+                    *s *= scale;
                 }
-                attn_output[head * head_dim + d] = sum;
+                softmax_slice(&mut scores);
+
+                // score·V: [1, seq_len] × [seq_len, head_dim] → [1, head_dim]
+                for d in 0..head_dim {
+                    let mut sum = 0.0f32;
+                    for s in 0..seq_len {
+                        sum += scores[s] * v_heads[kv_head][s * head_dim + d];
+                    }
+                    attn_output[head * head_dim + d] = sum;
+                }
+            }
+        } else {
+            // Scalar path for short sequences (avoids gather overhead)
+            for head in 0..num_heads {
+                let kv_head = head / groups;
+                let mut scores = vec![0.0f32; seq_len];
+                for s in 0..seq_len {
+                    let mut dot = 0.0f32;
+                    for d in 0..head_dim {
+                        dot += q[head * head_dim + d]
+                            * cached_k[s * kv_dim + kv_head * head_dim + d];
+                    }
+                    scores[s] = dot * scale;
+                }
+                softmax_slice(&mut scores);
+                for d in 0..head_dim {
+                    let mut sum = 0.0f32;
+                    for s in 0..seq_len {
+                        sum += scores[s]
+                            * cached_v[s * kv_dim + kv_head * head_dim + d];
+                    }
+                    attn_output[head * head_dim + d] = sum;
+                }
             }
         }
 
         // Output projection
         matmul_t(&attn_output, &self.w_o, 1, q_dim, h)
+    }
+
+    // ── Batched attention + cache populate (for prefill) ────────────
+
+    /// Like [`apply_attention`] but also saves RoPE'd K and raw V to the
+    /// cache for each position, so subsequent decode steps can reuse them.
+    fn apply_attention_and_cache(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        cache_layer: &mut KVCacheLayer,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        let num_heads = self.attention.num_heads();
+        let num_kv_heads = self.attention.num_kv_heads();
+        let head_dim = self.attention.head_dim();
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+        let groups = num_heads / num_kv_heads;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+
+        // Q, K, V projections (batched over all positions)
+        let q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
+        let k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
+        let v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+
+        let mut q = apply_headwise_rmsnorm(
+            &q, &self.q_norm_weight, seq_len, num_heads, head_dim,
+            self.attn_norm.eps() as f32,
+        );
+        let mut k = apply_headwise_rmsnorm(
+            &k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim,
+            self.attn_norm.eps() as f32,
+        );
+
+        // Apply RoPE
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
+
+        // Populate KV cache with each position's RoPE'd K and raw V
+        for t in 0..seq_len {
+            let k_token = &k[t * kv_dim..(t + 1) * kv_dim];
+            let v_token = &v[t * kv_dim..(t + 1) * kv_dim];
+            cache_layer
+                .append(k_token, v_token)
+                .expect("KV cache append failed during prefill");
+        }
+
+        // Batched causal attention (same as apply_attention)
+        let mut attn_output = vec![0.0f32; seq_len * q_dim];
+
+        for head in 0..num_heads {
+            let kv_head = head / groups;
+            for t in 0..seq_len {
+                let mut scores = vec![f32::NEG_INFINITY; seq_len];
+                for s in 0..=t {
+                    let mut dot = 0.0f32;
+                    for d in 0..head_dim {
+                        dot += q[t * q_dim + head * head_dim + d]
+                            * k[s * kv_dim + kv_head * head_dim + d];
+                    }
+                    scores[s] = dot * scale;
+                }
+                softmax_slice(&mut scores[..=t]);
+                for d in 0..head_dim {
+                    let mut sum = 0.0f32;
+                    for s in 0..=t {
+                        sum += scores[s] * v[s * kv_dim + kv_head * head_dim + d];
+                    }
+                    attn_output[t * q_dim + head * head_dim + d] = sum;
+                }
+            }
+        }
+
+        matmul_t(&attn_output, &self.w_o, seq_len, q_dim, h)
     }
 
     // ── FFN ──────────────────────────────────────────────────────────
@@ -561,6 +746,47 @@ impl DecoderLayer {
 }
 
 // ── Math helpers ─────────────────────────────────────────────────────
+
+/// Apply RoPE rotation to Q or K vectors in-place (rotate-half convention).
+///
+/// `qk` layout: `[seq_len, num_heads * head_dim]` (flat, heads contiguous).
+/// Uses the HuggingFace "rotate_half" convention: pairs dimension `i` with
+/// dimension `i + head_dim/2` (first-half/second-half), NOT adjacent pairs.
+///
+/// cos/sin tables are `[max_pos, head_dim / 2]` (one entry per pair).
+/// `pos_offset` is 0 for full-sequence forward, or the cache length for
+/// single-token decode steps.
+pub(crate) fn apply_rope_inplace(
+    qk: &mut [f32],
+    cos: &[f32],
+    sin: &[f32],
+    seq_len: usize,
+    num_heads: usize,
+    head_dim: usize,
+    pos_offset: usize,
+) {
+    let half_d = head_dim / 2;
+    let total_dim = num_heads * head_dim;
+    for t in 0..seq_len {
+        let pos = pos_offset + t;
+        let cos_row = pos * half_d;
+        for head in 0..num_heads {
+            let base = t * total_dim + head * head_dim;
+            for i in 0..half_d {
+                let idx_first = base + i;            // first half
+                let idx_second = base + half_d + i;  // second half
+                let cos_val = cos[cos_row + i];
+                let sin_val = sin[cos_row + i];
+                let x_first = qk[idx_first];
+                let x_second = qk[idx_second];
+                // rotate_half: q_embed = q * cos + rotate_half(q) * sin
+                // where rotate_half swaps halves with negation on the second
+                qk[idx_first] = x_first * cos_val - x_second * sin_val;
+                qk[idx_second] = x_second * cos_val + x_first * sin_val;
+            }
+        }
+    }
+}
 
 /// Whether this FFN variant is gated (3 weight matrices vs 2).
 pub(crate) fn is_gated_ffn(name: &str) -> bool {
@@ -722,7 +948,7 @@ fn layernorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32
     out
 }
 
-fn apply_headwise_rmsnorm(
+pub(crate) fn apply_headwise_rmsnorm(
     x: &[f32],
     weight: &[f32],
     _rows: usize,
@@ -1317,6 +1543,23 @@ mod tests {
         fn name(&self) -> &str { "SwiGLU" }
     }
 
+    /// Build test RoPE cos/sin tables.
+    fn make_test_rope(head_dim: usize, max_pos: usize) -> (Vec<f32>, Vec<f32>) {
+        let half_d = head_dim / 2;
+        let base: f32 = 10_000.0;
+        let mut cos = vec![0.0f32; max_pos * half_d];
+        let mut sin = vec![0.0f32; max_pos * half_d];
+        for pos in 0..max_pos {
+            for i in 0..half_d {
+                let freq = 1.0 / base.powf(2.0 * i as f32 / head_dim as f32);
+                let angle = pos as f32 * freq;
+                cos[pos * half_d + i] = angle.cos();
+                sin[pos * half_d + i] = angle.sin();
+            }
+        }
+        (cos, sin)
+    }
+
     /// Build a test DecoderLayer with pseudo-random weights.
     fn make_test_layer(
         hidden: usize,
@@ -1373,20 +1616,21 @@ mod tests {
     fn forward_one_matches_forward_last_position() {
         let (hidden, num_heads, num_kv_heads, head_dim, inter) = (64, 4, 4, 16, 128);
         let layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
+        let (rope_cos, rope_sin) = make_test_rope(head_dim, 64);
         let seq_len = 5;
 
         // Build a multi-token input: [seq_len, hidden]
         let input = pseudo_rand(seq_len * hidden, 42);
 
         // Full forward pass
-        let full_out = layer.forward(&input, seq_len);
+        let full_out = layer.forward(&input, seq_len, &rope_cos, &rope_sin);
 
         // Incremental forward_one for each token
         let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
         let mut last_out = vec![0.0f32; hidden];
         for t in 0..seq_len {
             let token = &input[t * hidden..(t + 1) * hidden];
-            last_out = layer.forward_one(token, &mut cache, t);
+            last_out = layer.forward_one(token, &mut cache, t, &rope_cos, &rope_sin);
         }
 
         // Compare: forward_one output at last position should match
@@ -1419,18 +1663,23 @@ mod tests {
             &k_full, &layer.k_norm_weight, seq_len, num_kv_heads, head_dim, eps,
         );
 
+        // Apply RoPE to the normed K (matching what forward_one does)
+        let (rope_cos, rope_sin) = make_test_rope(head_dim, 64);
+        let mut k_full_roped = k_full_normed.clone();
+        apply_rope_inplace(&mut k_full_roped, &rope_cos, &rope_sin, seq_len, num_kv_heads, head_dim, 0);
+
         // Now run forward_one incrementally and collect cache contents
         let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
         for t in 0..seq_len {
             let token = &input[t * h..(t + 1) * h];
-            let _ = layer.forward_one(token, &mut cache, t);
+            let _ = layer.forward_one(token, &mut cache, t, &rope_cos, &rope_sin);
         }
 
         let (cached_k, cached_v, cached_len) = cache.slice().unwrap();
         assert_eq!(cached_len, seq_len);
 
-        // Cached K should match normed K from full forward
-        assert_close(cached_k, &k_full_normed, 1e-5, "cached K vs full normed K");
+        // Cached K should match RoPE'd normed K from full forward
+        assert_close(cached_k, &k_full_roped, 1e-5, "cached K vs full RoPE'd normed K");
         // Cached V should match raw V from full forward
         assert_close(cached_v, &v_full, 1e-5, "cached V vs full raw V");
     }
@@ -1442,19 +1691,20 @@ mod tests {
         // 8 Q-heads, 2 KV-heads → groups = 4
         let (hidden, num_heads, num_kv_heads, head_dim, inter) = (64, 8, 2, 8, 128);
         let layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
+        let (rope_cos, rope_sin) = make_test_rope(head_dim, 64);
         let seq_len = 6;
 
         let input = pseudo_rand(seq_len * hidden, 314);
 
         // Full forward
-        let full_out = layer.forward(&input, seq_len);
+        let full_out = layer.forward(&input, seq_len, &rope_cos, &rope_sin);
 
         // Incremental forward_one
         let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
         let mut last_out = vec![0.0f32; hidden];
         for t in 0..seq_len {
             let token = &input[t * hidden..(t + 1) * hidden];
-            last_out = layer.forward_one(token, &mut cache, t);
+            last_out = layer.forward_one(token, &mut cache, t, &rope_cos, &rope_sin);
         }
 
         let full_last = &full_out[(seq_len - 1) * hidden..seq_len * hidden];

@@ -3,7 +3,8 @@ use std::mem;
 use crate::config::ModelConfig;
 use crate::model::causal_lm::ModelOutput;
 use crate::model::decoder_layer::{
-    add_vecs, add_vecs_inplace, apply_norm, gelu, matmul_t, silu, softmax_slice,
+    add_vecs, add_vecs_inplace, apply_headwise_rmsnorm, apply_norm, apply_rope_inplace, gelu,
+    matmul_t, silu, softmax_slice,
 };
 use crate::model::CausalLM;
 use crate::quantization::QuantizedLinear;
@@ -23,6 +24,8 @@ pub struct QuantizedDecoderLayer {
     pub hidden_size: usize,
 
     pub attn_norm_weight: Vec<f32>,
+    pub q_norm_weight: Vec<f32>,
+    pub k_norm_weight: Vec<f32>,
     pub ffn_norm_weight: Vec<f32>,
 
     pub w_q: QuantizedLinear,
@@ -42,6 +45,8 @@ pub struct QuantizedCausalLM {
     pub embed_tokens: Vec<f32>,
     pub final_norm_weight: Vec<f32>,
     pub lm_head_weight: Option<Vec<f32>>,
+    pub rope_cos: Vec<f32>,
+    pub rope_sin: Vec<f32>,
 }
 
 /// Quantize all Linear layers in a CausalLM to weight-only INT8.
@@ -79,6 +84,8 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
                 ffn: create_ffn(&cfg.ffn),
                 hidden_size: h,
                 attn_norm_weight: layer.attn_norm_weight.to_vec(),
+                q_norm_weight: layer.q_norm_weight.to_vec(),
+                k_norm_weight: layer.k_norm_weight.to_vec(),
                 ffn_norm_weight: layer.ffn_norm_weight.to_vec(),
                 w_q,
                 w_k,
@@ -98,6 +105,8 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
         embed_tokens: model.embed_tokens.to_vec(),
         final_norm_weight: model.final_norm_weight.to_vec(),
         lm_head_weight: model.lm_head_weight.as_ref().map(|w| w.to_vec()),
+        rope_cos: model.rope_cos.clone(),
+        rope_sin: model.rope_sin.clone(),
     }
 }
 
@@ -105,12 +114,18 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
 
 impl QuantizedDecoderLayer {
     /// Pre-norm forward: norm→attention→residual→norm→FFN→residual.
-    pub fn forward(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
+    pub fn forward(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+    ) -> Vec<f32> {
         let h = self.hidden_size;
 
         // 1. Attention sub-layer
         let normed = apply_norm(x, &self.attn_norm_weight, &*self.attn_norm, h);
-        let attn_out = self.apply_attention(&normed, seq_len);
+        let attn_out = self.apply_attention(&normed, seq_len, rope_cos, rope_sin);
         let mut residual = add_vecs(x, &attn_out);
 
         // 2. FFN sub-layer
@@ -121,7 +136,13 @@ impl QuantizedDecoderLayer {
         residual
     }
 
-    fn apply_attention(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
+    fn apply_attention(
+        &self,
+        x: &[f32],
+        seq_len: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+    ) -> Vec<f32> {
         let num_heads = self.attention.num_heads();
         let num_kv_heads = self.attention.num_kv_heads();
         let head_dim = self.attention.head_dim();
@@ -138,6 +159,13 @@ impl QuantizedDecoderLayer {
         let q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
         let k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
         let v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+
+        // Apply headwise Q/K norms, then RoPE
+        let eps = self.attn_norm.eps() as f32;
+        let mut q = apply_headwise_rmsnorm(&q, &self.q_norm_weight, seq_len, num_heads, head_dim, eps);
+        let mut k = apply_headwise_rmsnorm(&k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim, eps);
+        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0);
+        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0);
 
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
 
@@ -248,7 +276,7 @@ impl QuantizedCausalLM {
 
         // 2. Quantized decoder layers
         for layer in &self.layers {
-            x = layer.forward(&x, seq_len);
+            x = layer.forward(&x, seq_len, &self.rope_cos, &self.rope_sin);
         }
 
         // 3. Final norm

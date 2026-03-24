@@ -153,24 +153,14 @@ impl Tokenizer {
         let mut special_tokens = HashMap::new();
         if let Some(added) = value.get("added_tokens").and_then(|v| v.as_array()) {
             for token in added {
-                if token
-                    .get("special")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false)
-                {
-                    let content = token
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            TokenizerError::Invalid("special token missing content".into())
-                        })?;
-                    let id = token
-                        .get("id")
-                        .and_then(|v| v.as_u64())
-                        .ok_or_else(|| {
-                            TokenizerError::Invalid("special token missing id".into())
-                        })? as u32;
-                    special_tokens.insert(content.to_string(), id);
+                // Load ALL added tokens for pre-split encoding, not just those
+                // marked special=true. HF tokenizers treat all added tokens as
+                // pre-split during encoding; the special flag only affects masking.
+                if let (Some(content), Some(id)) = (
+                    token.get("content").and_then(|v| v.as_str()),
+                    token.get("id").and_then(|v| v.as_u64()),
+                ) {
+                    special_tokens.insert(content.to_string(), id as u32);
                 }
             }
         }

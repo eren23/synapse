@@ -35,6 +35,12 @@ pub struct CausalLM {
     pub final_norm_weight: AlignedBuffer,
     /// `None` when `tie_word_embeddings` is true (reuses `embed_tokens`).
     pub lm_head_weight: Option<AlignedBuffer>,
+
+    // ── RoPE precomputed tables (shared across all layers) ───────────
+    /// Cosine table: `[max_position_embeddings, head_dim / 2]`.
+    pub rope_cos: Vec<f32>,
+    /// Sine table: `[max_position_embeddings, head_dim / 2]`.
+    pub rope_sin: Vec<f32>,
 }
 
 impl CausalLM {
@@ -113,7 +119,7 @@ impl CausalLM {
 
         // 2. Decoder layers
         for layer in &self.layers {
-            x = layer.forward(&x, seq_len);
+            x = layer.forward(&x, seq_len, &self.rope_cos, &self.rope_sin);
         }
 
         // 3. Final norm
@@ -150,7 +156,7 @@ impl CausalLM {
         }
 
         for layer in &self.layers {
-            x = layer.forward_with_backend(&x, seq_len, backend);
+            x = layer.forward_with_backend(&x, seq_len, backend, &self.rope_cos, &self.rope_sin);
         }
 
         x = apply_norm_dispatch(&x, &self.final_norm_weight, &*self.final_norm, h, backend);
@@ -166,9 +172,8 @@ impl CausalLM {
 
     /// Prefill forward pass: process all prompt tokens and populate the KV cache.
     ///
-    /// Embeds all tokens, runs through decoder layers one token at a time
-    /// (populating `cache` with each layer's K/V), then returns logits for
-    /// the **last** token position only.
+    /// Runs batched attention across all positions (fast) while simultaneously
+    /// populating the KV cache for subsequent decode steps.
     ///
     /// After this call, `cache` holds K/V for all `token_ids.len()` positions,
     /// ready for subsequent [`forward_one`] decode steps.
@@ -187,15 +192,11 @@ impl CausalLM {
             }
         }
 
-        // 2. Decoder layers — process tokens sequentially per layer to populate cache
+        // 2. Decoder layers — batched forward with cache populate
         for (i, layer) in self.layers.iter().enumerate() {
-            let mut new_x = Vec::with_capacity(seq_len * h);
-            for t in 0..seq_len {
-                let hidden = &x[t * h..(t + 1) * h];
-                let out = layer.forward_one(hidden, cache.layer_mut(i), t);
-                new_x.extend_from_slice(&out);
-            }
-            x = new_x;
+            x = layer.forward_prefill_batched(
+                &x, seq_len, cache.layer_mut(i), &self.rope_cos, &self.rope_sin,
+            );
         }
 
         // 3. Final norm (last token only)
@@ -231,7 +232,7 @@ impl CausalLM {
 
         // 2. Decoder layers with KV cache
         for (i, layer) in self.layers.iter().enumerate() {
-            x = layer.forward_one(&x, cache.layer_mut(i), pos);
+            x = layer.forward_one(&x, cache.layer_mut(i), pos, &self.rope_cos, &self.rope_sin);
         }
 
         // 3. Final norm
@@ -268,14 +269,11 @@ impl CausalLM {
             }
         }
 
+        // Use batched prefill (same as CPU path - batched attention + cache populate)
         for (i, layer) in self.layers.iter().enumerate() {
-            let mut new_x = Vec::with_capacity(seq_len * h);
-            for t in 0..seq_len {
-                let hidden = &x[t * h..(t + 1) * h];
-                let out = layer.forward_one_with_backend(hidden, cache.layer_mut(i), t, backend);
-                new_x.extend_from_slice(&out);
-            }
-            x = new_x;
+            x = layer.forward_prefill_batched(
+                &x, seq_len, cache.layer_mut(i), &self.rope_cos, &self.rope_sin,
+            );
         }
 
         let last_hidden = &x[(seq_len - 1) * h..seq_len * h];
@@ -311,7 +309,7 @@ impl CausalLM {
         }
 
         for (i, layer) in self.layers.iter().enumerate() {
-            x = layer.forward_one_with_backend(&x, cache.layer_mut(i), pos, backend);
+            x = layer.forward_one_with_backend(&x, cache.layer_mut(i), pos, backend, &self.rope_cos, &self.rope_sin);
         }
 
         x = apply_norm_dispatch(&x, &self.final_norm_weight, &*self.final_norm, h, backend);

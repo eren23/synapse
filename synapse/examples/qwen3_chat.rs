@@ -96,13 +96,21 @@ fn demo_engine() -> InferenceEngine {
     }
 }
 
-fn parse_args() -> Result<Option<PathBuf>, String> {
+enum Mode {
+    Demo,
+    Chat(PathBuf),
+    Verify(PathBuf),
+}
+
+fn parse_args() -> Result<Mode, String> {
     let mut args = std::env::args().skip(1);
     let mut model_dir = None;
+    let mut verify = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--demo" => return Ok(None),
+            "--demo" => return Ok(Mode::Demo),
+            "--verify" => verify = true,
             "--model-dir" => {
                 let value = args
                     .next()
@@ -112,6 +120,7 @@ fn parse_args() -> Result<Option<PathBuf>, String> {
             "--help" | "-h" => {
                 println!("Usage:");
                 println!("  cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B");
+                println!("  cargo run --example qwen3_chat --release -- --model-dir /path --verify");
                 println!("  cargo run --example qwen3_chat --release -- --demo");
                 std::process::exit(0);
             }
@@ -119,16 +128,68 @@ fn parse_args() -> Result<Option<PathBuf>, String> {
         }
     }
 
-    Ok(model_dir)
+    match (model_dir, verify) {
+        (Some(dir), true) => Ok(Mode::Verify(dir)),
+        (Some(dir), false) => Ok(Mode::Chat(dir)),
+        (None, _) => Ok(Mode::Demo),
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model_dir = parse_args().map_err(io::Error::other)?;
+    let mode = parse_args().map_err(io::Error::other)?;
 
-    if let Some(model_dir) = model_dir {
-        run_pretrained_chat(model_dir)?;
-    } else {
-        run_demo_chat();
+    match mode {
+        Mode::Verify(dir) => run_verify(dir)?,
+        Mode::Chat(dir) => run_pretrained_chat(dir)?,
+        Mode::Demo => run_demo_chat(),
+    }
+
+    Ok(())
+}
+
+fn run_verify(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    print!("Loading checkpoint from {}...", model_dir.display());
+    io::stdout().flush()?;
+    let engine = InferenceEngine::from_pretrained(&model_dir)?;
+    println!(" done ({} params)", engine.param_count());
+
+    let prompt = "<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n";
+    let tokens = engine.encode(prompt)?;
+    println!("Prompt: {prompt:?}");
+    println!("Token IDs ({} tokens): {:?}", tokens.len(), tokens);
+
+    let h = engine.config.architecture.hidden_size;
+    let vocab = engine.config.architecture.vocab_size;
+
+    // Step 1: Embedding - compare first 8 values at positions 0 and last
+    let id0 = tokens[0] as usize;
+    println!("\nEmbed[0,:8]:  {:?}", &engine.model.embed_tokens[id0 * h..id0 * h + 8]);
+    let id_last = *tokens.last().unwrap() as usize;
+    println!("Embed[-1,:8]: {:?}", &engine.model.embed_tokens[id_last * h..id_last * h + 8]);
+
+    // Full forward for logits
+    let output = engine.model.forward(&tokens);
+    let seq_len = output.shape[1];
+    let last_logits = &output.logits[(seq_len - 1) * vocab..seq_len * vocab];
+
+    let mut indexed: Vec<(usize, f32)> = last_logits.iter().cloned().enumerate().collect();
+    indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+    println!("\nTop-10 next-token logits (compare against HF transformers):");
+    println!("{:<10} {:<15} {}", "Token ID", "Logit", "Decoded");
+    println!("{}", "-".repeat(45));
+    let tokenizer = engine.tokenizer().unwrap();
+    for &(id, logit) in indexed.iter().take(10) {
+        let decoded = tokenizer.decode(&[id as u32]).unwrap_or_default();
+        println!("{:<10} {:<15.6} {:?}", id, logit, decoded);
+    }
+
+    // Print specific token logits for direct comparison
+    println!("\nSpecific token logits for comparison:");
+    for tid in [151667u32, 151644, 151668, 2784, 151645, 47611] {
+        let logit = last_logits[tid as usize];
+        let decoded = tokenizer.decode(&[tid]).unwrap_or_default();
+        println!("  {tid:<10} {logit:<15.6} {decoded:?}");
     }
 
     Ok(())
@@ -172,8 +233,19 @@ fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Err
         let stream_tokenizer = tokenizer.clone();
         let pipeline = GenerationPipeline::new(&engine.model);
 
+        let max_new_tokens = 256;
+        let max_seq = prompt_tokens.len() + max_new_tokens;
+        let mut cache = engine.create_kv_cache(max_seq)?;
+
+        // Qwen3 generates <think>...</think> before the answer.
+        // Show "thinking..." while hidden, then stream the actual answer.
+        let think_id = tokenizer.encode("<think>").ok().and_then(|v| v.first().copied());
+        let end_think_id = tokenizer.encode("</think>").ok().and_then(|v| v.first().copied());
+        let in_think = std::cell::Cell::new(false);
+        let think_shown = std::cell::Cell::new(false);
+
         let config = GenerationConfig {
-            max_new_tokens: 128,
+            max_new_tokens,
             eos_token_id,
             stop_sequences: vec![stop_sequences.clone()],
             combined: Some(CombinedSampler {
@@ -184,6 +256,24 @@ fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Err
             }),
             seed: Some(42),
             on_token: Some(Box::new(move |token| {
+                if Some(token) == think_id {
+                    in_think.set(true);
+                    if !think_shown.get() {
+                        print!("(thinking...) ");
+                        let _ = io::stdout().flush();
+                        think_shown.set(true);
+                    }
+                    return;
+                }
+                if Some(token) == end_think_id {
+                    in_think.set(false);
+                    print!("\r              \r"); // clear "thinking..."
+                    let _ = io::stdout().flush();
+                    return;
+                }
+                if in_think.get() {
+                    return;
+                }
                 if let Ok(piece) = stream_tokenizer.decode_token_piece(token) {
                     print!("{piece}");
                     let _ = io::stdout().flush();
@@ -192,7 +282,7 @@ fn run_pretrained_chat(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Err
             ..Default::default()
         };
 
-        let output = pipeline.generate(&prompt_tokens, config, None);
+        let output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
         println!();
         println!(
             "Generated {} tokens in {:.3}s ({:.1} tok/s)",

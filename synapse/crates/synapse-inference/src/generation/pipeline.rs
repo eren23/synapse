@@ -50,11 +50,23 @@ impl Default for GenerationConfig {
 /// of the last position.
 pub struct GenerationPipeline<'a> {
     model: &'a CausalLM,
+    #[cfg(feature = "metal")]
+    backend: Option<&'a crate::metal::ComputeBackend>,
 }
 
 impl<'a> GenerationPipeline<'a> {
     pub fn new(model: &'a CausalLM) -> Self {
-        Self { model }
+        Self {
+            model,
+            #[cfg(feature = "metal")]
+            backend: None,
+        }
+    }
+
+    /// Create a pipeline with Metal GPU backend dispatch.
+    #[cfg(feature = "metal")]
+    pub fn with_backend(model: &'a CausalLM, backend: &'a crate::metal::ComputeBackend) -> Self {
+        Self { model, backend: Some(backend) }
     }
 
     /// Run generation given prompt token IDs.
@@ -124,7 +136,16 @@ impl<'a> GenerationPipeline<'a> {
         let mut generated_tokens: Vec<u32> = Vec::new();
 
         // ── Prefill (populate KV-cache for all prompt tokens) ────────
-        let prefill_output = self.model.forward_prefill(prompt_tokens, cache);
+        let prefill_output = {
+            #[cfg(feature = "metal")]
+            if let Some(backend) = self.backend {
+                self.model.forward_prefill_with_backend(prompt_tokens, cache, backend)
+            } else {
+                self.model.forward_prefill(prompt_tokens, cache)
+            }
+            #[cfg(not(feature = "metal"))]
+            self.model.forward_prefill(prompt_tokens, cache)
+        };
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
 
         // Sample first token
@@ -142,7 +163,16 @@ impl<'a> GenerationPipeline<'a> {
             generated_tokens.len(),
         ) {
             let last_token = *generated_tokens.last().unwrap();
-            let output = self.model.forward_one(last_token, cache);
+            let output = {
+                #[cfg(feature = "metal")]
+                if let Some(backend) = self.backend {
+                    self.model.forward_one_with_backend(last_token, cache, backend)
+                } else {
+                    self.model.forward_one(last_token, cache)
+                }
+                #[cfg(not(feature = "metal"))]
+                self.model.forward_one(last_token, cache)
+            };
 
             logits_buf.clear();
             logits_buf.extend_from_slice(&output.logits);
@@ -179,7 +209,16 @@ impl<'a> GenerationPipeline<'a> {
         let mut generated_tokens: Vec<u32> = Vec::new();
 
         // ── Prefill ──────────────────────────────────────────────────
-        let prefill_output = self.model.forward(prompt_tokens);
+        let prefill_output = {
+            #[cfg(feature = "metal")]
+            if let Some(backend) = self.backend {
+                self.model.forward_with_backend(prompt_tokens, backend)
+            } else {
+                self.model.forward(prompt_tokens)
+            }
+            #[cfg(not(feature = "metal"))]
+            self.model.forward(prompt_tokens)
+        };
         let vocab_size = prefill_output.shape[2];
         let last_pos_logits = &prefill_output.logits
             [(num_prompt_tokens - 1) * vocab_size..num_prompt_tokens * vocab_size];
@@ -199,7 +238,16 @@ impl<'a> GenerationPipeline<'a> {
             &generated_tokens,
             generated_tokens.len(),
         ) {
-            let output = self.model.forward(&all_tokens);
+            let output = {
+                #[cfg(feature = "metal")]
+                if let Some(backend) = self.backend {
+                    self.model.forward_with_backend(&all_tokens, backend)
+                } else {
+                    self.model.forward(&all_tokens)
+                }
+                #[cfg(not(feature = "metal"))]
+                self.model.forward(&all_tokens)
+            };
             let seq_len = output.shape[1];
             let last_logits =
                 &output.logits[(seq_len - 1) * vocab_size..seq_len * vocab_size];
@@ -276,7 +324,7 @@ mod tests {
                 hidden_size: 32,
                 num_layers: 2,
                 vocab_size: 64,
-                max_sequence_length: 16,
+                max_sequence_length: 256,
                 tie_word_embeddings: true,
             },
             attention: AttentionConfig::GQA {
@@ -290,7 +338,7 @@ mod tests {
             },
             position: PositionConfig::RoPE {
                 base: 10000.0,
-                max_position_embeddings: 16,
+                max_position_embeddings: 256,
             },
             quantization: QuantConfig::F32,
         }

@@ -36,3 +36,6 @@ out/
 .zig-cache/
 zig-cache/
 zig-out/
+
+#attocode
+.attocode/index/

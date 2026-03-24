@@ -1,4 +1,4 @@
-use crate::config::ModelConfig;
+use crate::config::{ModelConfig, PositionConfig};
 use crate::registry::{create_attention, create_ffn, create_norm};
 use crate::weight_loading::AlignedBuffer;
 
@@ -17,6 +17,7 @@ impl ModelBuilder {
     ///
     /// Creates embedding + N decoder layers + final norm + lm_head.
     /// Handles `tie_word_embeddings`: when true, `lm_head_weight` is `None`.
+    /// Precomputes RoPE cos/sin tables shared across all layers.
     pub fn from_config(config: &ModelConfig) -> CausalLM {
         let arch = &config.architecture;
         let num_layers = arch.num_layers;
@@ -43,6 +44,9 @@ impl ModelBuilder {
             });
         }
 
+        // Precompute RoPE cos/sin tables
+        let (rope_cos, rope_sin) = precompute_rope_tables(config);
+
         CausalLM {
             final_norm: create_norm(&config.norm),
             layers,
@@ -54,6 +58,34 @@ impl ModelBuilder {
                 Some(AlignedBuffer::new_zeroed(0))
             },
             config: config.clone(),
+            rope_cos,
+            rope_sin,
         }
     }
+}
+
+/// Precompute RoPE cosine and sine tables from model config.
+///
+/// Returns `(cos, sin)` each shaped `[max_pos, head_dim / 2]` (flat).
+fn precompute_rope_tables(config: &ModelConfig) -> (Vec<f32>, Vec<f32>) {
+    let (base, max_pos) = match &config.position {
+        PositionConfig::RoPE { base, max_position_embeddings } => (*base, *max_position_embeddings),
+        _ => (10_000.0, config.architecture.max_sequence_length),
+    };
+    let head_dim = config.attention.head_dim();
+    let half_d = head_dim / 2;
+
+    let mut cos_data = vec![0.0f32; max_pos * half_d];
+    let mut sin_data = vec![0.0f32; max_pos * half_d];
+
+    for pos in 0..max_pos {
+        for i in 0..half_d {
+            let freq = 1.0 / (base as f32).powf(2.0 * i as f32 / head_dim as f32);
+            let angle = pos as f32 * freq;
+            cos_data[pos * half_d + i] = angle.cos();
+            sin_data[pos * half_d + i] = angle.sin();
+        }
+    }
+
+    (cos_data, sin_data)
 }

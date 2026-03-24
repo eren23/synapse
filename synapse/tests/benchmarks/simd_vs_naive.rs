@@ -527,7 +527,7 @@ fn simd_decoder_layer_vs_naive_e2e() {
     });
 
     let simd_median = bench(|| {
-        black_box(layer.forward(&x, seq_len));
+        black_box(layer.forward(&x, seq_len, &model.rope_cos, &model.rope_sin));
     });
 
     let speedup = naive_median / simd_median;

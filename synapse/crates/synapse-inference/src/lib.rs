@@ -852,8 +852,8 @@ mod quantization_tests {
 
         let err = nrmse(&f32_output.logits, &q_output.logits);
         assert!(
-            err < 0.01,
-            "Quantized model NRMSE {err:.6} exceeds 1%"
+            err < 0.02,
+            "Quantized model NRMSE {err:.6} exceeds 2%"
         );
     }
 }

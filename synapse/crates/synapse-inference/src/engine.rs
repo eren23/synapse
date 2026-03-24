@@ -149,7 +149,12 @@ impl InferenceEngine {
         let prompt_tokens = self.encode(prompt)?;
         let max_seq = prompt_tokens.len() + config.max_new_tokens;
         let mut cache = self.create_kv_cache(max_seq)?;
+
+        #[cfg(feature = "metal")]
+        let pipeline = GenerationPipeline::with_backend(&self.model, &self.backend);
+        #[cfg(not(feature = "metal"))]
         let pipeline = GenerationPipeline::new(&self.model);
+
         let mut output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
         let generated = &output.token_ids[output.num_prompt_tokens..];
         output.text = self.decode(generated)?;
