@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::chat_template::{ChatMessage, ChatTemplate};
 use crate::config::ModelConfig;
 use crate::generation::{GenerationConfig, GenerationOutput, GenerationPipeline};
 use crate::kv_cache::KVCache;
@@ -27,6 +28,7 @@ pub struct InferenceEngine {
     pub quantized_model: Option<QuantizedCausalLM>,
     pub config: ModelConfig,
     pub tokenizer: Option<Tokenizer>,
+    pub chat_template: Option<ChatTemplate>,
     #[cfg(feature = "metal")]
     pub backend: crate::metal::ComputeBackend,
 }
@@ -59,11 +61,22 @@ impl InferenceEngine {
             return Err(Box::new(WeightError::UnexpectedKeys(result.unexpected)));
         }
 
+        // Try to load chat template from tokenizer_config.json (best-effort).
+        let chat_template = {
+            let tokenizer_config_path = model_path.join("tokenizer_config.json");
+            if tokenizer_config_path.exists() {
+                ChatTemplate::from_tokenizer_config(&tokenizer_config_path).ok()
+            } else {
+                None
+            }
+        };
+
         Ok(Self {
             model,
             quantized_model: None,
             config,
             tokenizer: Some(tokenizer),
+            chat_template,
             #[cfg(feature = "metal")]
             backend: crate::metal::ComputeBackend::auto(),
         })
@@ -77,6 +90,7 @@ impl InferenceEngine {
             quantized_model: None,
             config,
             tokenizer: None,
+            chat_template: None,
             #[cfg(feature = "metal")]
             backend: crate::metal::ComputeBackend::auto(),
         }
@@ -95,6 +109,7 @@ impl InferenceEngine {
             quantized_model: None,
             config,
             tokenizer: None,
+            chat_template: None,
             backend,
         }
     }
@@ -137,6 +152,18 @@ impl InferenceEngine {
 
     pub fn tokenizer(&self) -> Option<&Tokenizer> {
         self.tokenizer.as_ref()
+    }
+
+    /// Format a list of chat messages into a prompt string using the loaded
+    /// chat template.  Falls back to the default Qwen3 / ChatML format if
+    /// no template was loaded from `tokenizer_config.json`.
+    pub fn format_chat(&self, messages: &[ChatMessage]) -> Result<String, Box<dyn std::error::Error>> {
+        let tmpl = self
+            .chat_template
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(ChatTemplate::default_qwen3);
+        tmpl.apply(messages)
     }
 
     /// Create a KV cache sized for this model's architecture.

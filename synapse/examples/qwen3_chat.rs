@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
+use synapse_inference::chat_template::ChatMessage;
 use synapse_inference::config::*;
 use synapse_inference::engine::InferenceEngine;
 use synapse_inference::generation::{CombinedSampler, GenerationConfig, GenerationPipeline};
@@ -96,6 +97,7 @@ fn demo_engine() -> InferenceEngine {
         quantized_model: None,
         config: cfg,
         tokenizer: None,
+        chat_template: None,
         #[cfg(feature = "metal")]
         backend: synapse_inference::metal::ComputeBackend::auto(),
     }
@@ -241,9 +243,14 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool) -> Result<(), Box<dyn
             break;
         }
 
-        let prompt = format!(
-            "<|im_start|>user\n{line}<|im_end|>\n<|im_start|>assistant\n"
-        );
+        let prompt = if let Some(ref tmpl) = engine.chat_template {
+            tmpl.apply(&[ChatMessage {
+                role: "user".into(),
+                content: line.clone(),
+            }])?
+        } else {
+            format!("<|im_start|>user\n{line}<|im_end|>\n<|im_start|>assistant\n")
+        };
         let prompt_tokens = engine.encode(&prompt)?;
         let stream_tokenizer = tokenizer.clone();
         let pipeline = if let Some(ref qmodel) = engine.quantized_model {
