@@ -11,22 +11,38 @@ use crate::model::decoder_layer::DecoderLayer;
 
 /// Pre-uploaded weight buffers for one decoder layer.
 pub struct MetalLayerWeights {
-    pub wq: Buffer,            // pre-transposed [K, q_dim]
-    pub wk: Buffer,            // pre-transposed [K, kv_dim]
+    pub wq: Buffer,            // pre-transposed [K, q_dim] f32
+    pub wk: Buffer,
     pub wv: Buffer,
-    pub wo: Buffer,            // pre-transposed [q_dim, h]
-    pub gate: Buffer,          // pre-transposed [h, inter]
+    pub wo: Buffer,
+    pub gate: Buffer,
     pub up: Buffer,
-    pub down: Buffer,          // pre-transposed [inter, h]
+    pub down: Buffer,
     pub attn_norm: Buffer,     // [h]
-    pub ffn_norm: Buffer,      // [h]
-    pub q_bias: Option<Buffer>,  // [q_dim] or None
-    pub k_bias: Option<Buffer>,  // [kv_dim] or None
-    pub v_bias: Option<Buffer>,  // [kv_dim] or None
-    pub q_norm: Option<Buffer>,  // [head_dim] or None
-    pub k_norm: Option<Buffer>,  // [head_dim] or None
-    /// Whether this layer has a gate projection (SwiGLU/GeGLU).
+    pub ffn_norm: Buffer,
+    pub q_bias: Option<Buffer>,
+    pub k_bias: Option<Buffer>,
+    pub v_bias: Option<Buffer>,
+    pub q_norm: Option<Buffer>,
+    pub k_norm: Option<Buffer>,
     pub has_gate: bool,
+    // ── INT8 quantized weights (optional, for GPU INT8 path) ────
+    pub wq_int8: Option<Buffer>,    // [K, q_dim] int8
+    pub wk_int8: Option<Buffer>,
+    pub wv_int8: Option<Buffer>,
+    pub wo_int8: Option<Buffer>,
+    pub gate_int8: Option<Buffer>,
+    pub up_int8: Option<Buffer>,
+    pub down_int8: Option<Buffer>,
+    pub wq_scale: Option<Buffer>,   // [q_dim] f32 per-column scale
+    pub wk_scale: Option<Buffer>,
+    pub wv_scale: Option<Buffer>,
+    pub wo_scale: Option<Buffer>,
+    pub gate_scale: Option<Buffer>,
+    pub up_scale: Option<Buffer>,
+    pub down_scale: Option<Buffer>,
+    /// Whether INT8 weights are available.
+    pub has_int8: bool,
 }
 
 /// GPU-resident KV cache.
@@ -140,6 +156,38 @@ fn upload_norm(device: &Device, data: &[f32]) -> Option<Buffer> {
     }
 }
 
+/// Quantize a transposed weight matrix to INT8 and upload both int8 data + scales.
+/// Input: f32 transposed weights [K, N] (row-major).
+/// Output: (int8_buf [K, N], scale_buf [N]).
+fn quantize_and_upload_int8(device: &Device, transposed: &[f32], k: usize, n: usize) -> (Buffer, Buffer) {
+    // Per-column quantization: for each column j, find max(|w|), scale = max/127
+    let mut scales = vec![0.0f32; n];
+    let mut int8_data = vec![0i8; k * n];
+
+    for j in 0..n {
+        let mut max_abs: f32 = 0.0;
+        for i in 0..k {
+            let v = transposed[i * n + j].abs();
+            if v > max_abs { max_abs = v; }
+        }
+        let scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
+        scales[j] = scale;
+        let inv_scale = 1.0 / scale;
+        for i in 0..k {
+            let val = transposed[i * n + j] * inv_scale;
+            int8_data[i * n + j] = val.round().clamp(-128.0, 127.0) as i8;
+        }
+    }
+
+    let int8_buf = device.new_buffer_with_data(
+        int8_data.as_ptr() as *const _,
+        (k * n) as u64,
+        MTLResourceOptions::StorageModeShared,
+    );
+    let scale_buf = upload(device, &scales);
+    (int8_buf, scale_buf)
+}
+
 // ---- Implementations -------------------------------------------------------
 
 impl MetalLayerWeights {
@@ -179,6 +227,29 @@ impl MetalLayerWeights {
         let q_norm = upload_norm(device, &layer.q_norm_weight);
         let k_norm = upload_norm(device, &layer.k_norm_weight);
 
+        // INT8 quantized weights (transposed layout [K, N])
+        let wq_t = transpose(&layer.w_q, q_dim, h);
+        let wk_t = transpose(&layer.w_k, kv_dim, h);
+        let wv_t = transpose(&layer.w_v, kv_dim, h);
+        let wo_t = transpose(&layer.w_o, h, q_dim);
+        let up_t = transpose(&layer.ffn_up, inter, h);
+        let down_t = transpose(&layer.ffn_down, h, inter);
+
+        let (wq_i8, wq_sc) = quantize_and_upload_int8(device, &wq_t, h, q_dim);
+        let (wk_i8, wk_sc) = quantize_and_upload_int8(device, &wk_t, h, kv_dim);
+        let (wv_i8, wv_sc) = quantize_and_upload_int8(device, &wv_t, h, kv_dim);
+        let (wo_i8, wo_sc) = quantize_and_upload_int8(device, &wo_t, q_dim, h);
+        let (up_i8, up_sc) = quantize_and_upload_int8(device, &up_t, h, inter);
+        let (down_i8, down_sc) = quantize_and_upload_int8(device, &down_t, inter, h);
+
+        let (gate_i8, gate_sc) = if has_gate {
+            let gate_t = transpose(&layer.ffn_gate, inter, h);
+            let (i8b, scb) = quantize_and_upload_int8(device, &gate_t, h, inter);
+            (Some(i8b), Some(scb))
+        } else {
+            (None, None)
+        };
+
         Self {
             wq, wk, wv, wo,
             gate, up, down,
@@ -186,6 +257,11 @@ impl MetalLayerWeights {
             q_bias, k_bias, v_bias,
             q_norm, k_norm,
             has_gate,
+            wq_int8: Some(wq_i8), wk_int8: Some(wk_i8), wv_int8: Some(wv_i8),
+            wo_int8: Some(wo_i8), gate_int8: gate_i8, up_int8: Some(up_i8), down_int8: Some(down_i8),
+            wq_scale: Some(wq_sc), wk_scale: Some(wk_sc), wv_scale: Some(wv_sc),
+            wo_scale: Some(wo_sc), gate_scale: gate_sc, up_scale: Some(up_sc), down_scale: Some(down_sc),
+            has_int8: true,
         }
     }
 }

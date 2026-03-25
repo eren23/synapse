@@ -44,6 +44,8 @@ const SHADER_SOURCE: &str = concat!(
     "\n",
     include_str!("shaders/gemv.metal"),
     "\n",
+    include_str!("shaders/gemv_int8.metal"),
+    "\n",
     // Simple utility kernels kept inline
     r#"
 #include <metal_stdlib>
@@ -106,6 +108,7 @@ pub(crate) const KERNEL_NAMES: &[&str] = &[
     "attention_decode",
     "headwise_rmsnorm",
     "gemv",
+    "gemv_int8",
 ];
 
 /// Optional kernels that require specific Metal feature support.

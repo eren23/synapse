@@ -344,6 +344,7 @@ pub fn gpu_forward_all_layers(
 
     // 3. Fetch all pipelines
     let gemv_pl = backend.pipeline("gemv").expect("gemv pipeline");
+    let gemv_int8_pl = backend.pipeline("gemv_int8").expect("gemv_int8 pipeline");
     let rmsnorm_pl = backend.pipeline("rmsnorm").expect("rmsnorm pipeline");
     let add_pl = backend.pipeline("elementwise_add").expect("elementwise_add pipeline");
     let swiglu_pl = backend.pipeline("swiglu").expect("swiglu pipeline");
@@ -367,10 +368,16 @@ pub fn gpu_forward_all_layers(
         // enc1: norm_x = rmsnorm(x, attn_norm_weight)
         encode_rmsnorm_fast(cmd_buf, rmsnorm_pl, &scratch.x, &lw.attn_norm, &scratch.norm_x, &c.h, &c.eps);
 
-        // enc2-4: Q/K/V = gemv(norm_x, W)
-        encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_x, &lw.wq, &scratch.q, q_dim, &c.q_dim, &c.h);
-        encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_x, &lw.wk, &scratch.k, kv_dim, &c.kv_dim, &c.h);
-        encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_x, &lw.wv, &scratch.v, kv_dim, &c.kv_dim, &c.h);
+        // enc2-4: Q/K/V = gemv(norm_x, W) — use INT8 if available
+        if lw.has_int8 {
+            encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.norm_x, lw.wq_int8.as_ref().unwrap(), lw.wq_scale.as_ref().unwrap(), &scratch.q, q_dim, &c.q_dim, &c.h);
+            encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.norm_x, lw.wk_int8.as_ref().unwrap(), lw.wk_scale.as_ref().unwrap(), &scratch.k, kv_dim, &c.kv_dim, &c.h);
+            encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.norm_x, lw.wv_int8.as_ref().unwrap(), lw.wv_scale.as_ref().unwrap(), &scratch.v, kv_dim, &c.kv_dim, &c.h);
+        } else {
+            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_x, &lw.wq, &scratch.q, q_dim, &c.q_dim, &c.h);
+            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_x, &lw.wk, &scratch.k, kv_dim, &c.kv_dim, &c.h);
+            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_x, &lw.wv, &scratch.v, kv_dim, &c.kv_dim, &c.h);
+        }
 
         // enc5-7: bias add (in-place)
         if let Some(ref bias) = lw.q_bias {
@@ -414,7 +421,11 @@ pub fn gpu_forward_all_layers(
         encode_attention_decode(cmd_buf, attn_decode_pl, &scratch.q, &kv.k_cache, &kv.v_cache, &scratch.attn_out, num_heads, num_kv_heads, head_dim, &model_bufs.seq_len_buf, kv_dim, dev);
 
         // enc14: O = gemv(attn_out, wo)
-        encode_gemv_fast(cmd_buf, gemv_pl, &scratch.attn_out, &lw.wo, &scratch.o, h, &c.h, &c.q_dim);
+        if lw.has_int8 {
+            encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.attn_out, lw.wo_int8.as_ref().unwrap(), lw.wo_scale.as_ref().unwrap(), &scratch.o, h, &c.h, &c.q_dim);
+        } else {
+            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.attn_out, &lw.wo, &scratch.o, h, &c.h, &c.q_dim);
+        }
 
         // enc15: residual = x + O
         encode_add_fast(cmd_buf, add_pl, &scratch.x, &scratch.o, &scratch.residual, h, &c.h);
@@ -425,16 +436,29 @@ pub fn gpu_forward_all_layers(
         encode_rmsnorm_fast(cmd_buf, rmsnorm_pl, &scratch.residual, &lw.ffn_norm, &scratch.norm_r, &c.h, &c.eps);
 
         // enc17-18: gate/up
-        if lw.has_gate {
-            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_r, &lw.gate, &scratch.gate_buf, inter, &c.inter, &c.h);
+        if lw.has_int8 {
+            if lw.has_gate {
+                if let (Some(ref gi), Some(ref gs)) = (&lw.gate_int8, &lw.gate_scale) {
+                    encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.norm_r, gi, gs, &scratch.gate_buf, inter, &c.inter, &c.h);
+                }
+            }
+            encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.norm_r, lw.up_int8.as_ref().unwrap(), lw.up_scale.as_ref().unwrap(), &scratch.up_buf, inter, &c.inter, &c.h);
+        } else {
+            if lw.has_gate {
+                encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_r, &lw.gate, &scratch.gate_buf, inter, &c.inter, &c.h);
+            }
+            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_r, &lw.up, &scratch.up_buf, inter, &c.inter, &c.h);
         }
-        encode_gemv_fast(cmd_buf, gemv_pl, &scratch.norm_r, &lw.up, &scratch.up_buf, inter, &c.inter, &c.h);
 
         // enc19: swiglu
         encode_swiglu_fast(cmd_buf, swiglu_pl, &scratch.gate_buf, &scratch.up_buf, &scratch.hidden, inter, &c.inter);
 
         // enc20: down = gemv(hidden, w_down)
-        encode_gemv_fast(cmd_buf, gemv_pl, &scratch.hidden, &lw.down, &scratch.down_buf, h, &c.h, &c.inter);
+        if lw.has_int8 {
+            encode_gemv_int8(cmd_buf, gemv_int8_pl, &scratch.hidden, lw.down_int8.as_ref().unwrap(), lw.down_scale.as_ref().unwrap(), &scratch.down_buf, h, &c.h, &c.inter);
+        } else {
+            encode_gemv_fast(cmd_buf, gemv_pl, &scratch.hidden, &lw.down, &scratch.down_buf, h, &c.h, &c.inter);
+        }
 
         // enc21: x = residual + down
         encode_add_fast(cmd_buf, add_pl, &scratch.residual, &scratch.down_buf, &scratch.x, h, &c.h);
@@ -633,6 +657,32 @@ fn add_bias_inplace(x: &mut [f32], bias: &[f32]) {
     for (val, &b) in x.iter_mut().zip(bias.iter()) {
         *val += b;
     }
+}
+
+/// INT8 GEMV encoder: y[N] = A_f32 @ dequant(B_int8) * scales
+fn encode_gemv_int8(
+    cmd_buf: &::metal::CommandBufferRef,
+    pipeline: &::metal::ComputePipelineState,
+    buf_a: &::metal::Buffer,
+    buf_b_int8: &::metal::Buffer,
+    buf_scales: &::metal::Buffer,
+    buf_c: &::metal::Buffer,
+    n: usize,
+    buf_n: &::metal::Buffer,
+    buf_k: &::metal::Buffer,
+) {
+    let encoder = cmd_buf.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(pipeline);
+    encoder.set_buffer(0, Some(buf_a), 0);
+    encoder.set_buffer(1, Some(buf_b_int8), 0);
+    encoder.set_buffer(2, Some(buf_scales), 0);
+    encoder.set_buffer(3, Some(buf_c), 0);
+    encoder.set_buffer(4, Some(buf_n), 0);
+    encoder.set_buffer(5, Some(buf_k), 0);
+    let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+    let tg = ::metal::MTLSize::new(256.min(n as u64), 1, 1);
+    encoder.dispatch_threads(grid, tg);
+    encoder.end_encoding();
 }
 
 // ── Fast encoder variants (zero-allocation, pre-allocated constants) ─
