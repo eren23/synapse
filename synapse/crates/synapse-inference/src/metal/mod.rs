@@ -800,7 +800,7 @@ mod tests {
         let head_dim: usize = 16;
         let half_d = head_dim / 2;
         let total = num_heads * head_dim;
-        let pos: usize = 3;
+        let _pos: usize = 3;
 
         // Random Q data and cos/sin for one position
         let q_data: Vec<f32> = (0..total).map(|i| pseudo_rand(50, i)).collect();
