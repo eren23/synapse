@@ -1,10 +1,13 @@
 mod buffer;
 mod device;
 pub mod dispatch;
+pub mod gpu_buffers;
+pub mod gpu_forward;
 
 pub use buffer::BufferPool;
 pub use device::{MetalBackend, MetalError};
 pub use dispatch::ComputeBackend;
+pub use gpu_buffers::MetalModelBuffers;
 
 #[cfg(test)]
 mod tests {

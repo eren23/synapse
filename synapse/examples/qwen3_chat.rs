@@ -100,6 +100,8 @@ fn demo_engine() -> InferenceEngine {
         chat_template: None,
         #[cfg(feature = "metal")]
         backend: synapse_inference::metal::ComputeBackend::auto(),
+        #[cfg(feature = "metal")]
+        metal_model_bufs_cell: None,
     }
 }
 
@@ -260,7 +262,17 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) ->
             GenerationPipeline::new(qmodel)
         } else {
             #[cfg(feature = "metal")]
-            { GenerationPipeline::with_backend(&engine.model, &engine.backend) }
+            {
+                if let Some(ref bufs_cell) = engine.metal_model_bufs_cell {
+                    if let synapse_inference::metal::ComputeBackend::Metal { ref backend, .. } = engine.backend {
+                        GenerationPipeline::with_gpu_resident(&engine.model, &engine.backend, bufs_cell, backend)
+                    } else {
+                        GenerationPipeline::with_backend(&engine.model, &engine.backend)
+                    }
+                } else {
+                    GenerationPipeline::with_backend(&engine.model, &engine.backend)
+                }
+            }
             #[cfg(not(feature = "metal"))]
             GenerationPipeline::new(&engine.model)
         };

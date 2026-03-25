@@ -9,6 +9,9 @@ use crate::quantization::{quantize_model, QuantizedCausalLM};
 use crate::tokenizer::{Tokenizer, TokenizerError};
 use crate::weight_loading::{load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper};
 
+#[cfg(feature = "metal")]
+use std::cell::RefCell;
+
 /// Which compute backend to use for dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendSelection {
@@ -31,6 +34,12 @@ pub struct InferenceEngine {
     pub chat_template: Option<ChatTemplate>,
     #[cfg(feature = "metal")]
     pub backend: crate::metal::ComputeBackend,
+    /// GPU-resident model buffers for Phase 3 all-layers-in-one-command-buffer.
+    /// Wrapped in RefCell because generate_text borrows &self but the decode loop
+    /// needs mutable access to update the GPU KV cache position.
+    /// Allocated when Metal backend is active; `None` for CPU-only or quantized.
+    #[cfg(feature = "metal")]
+    pub metal_model_bufs_cell: Option<RefCell<crate::metal::MetalModelBuffers>>,
 }
 
 impl InferenceEngine {
@@ -74,6 +83,17 @@ impl InferenceEngine {
             }
         };
 
+        #[cfg(feature = "metal")]
+        let backend = crate::metal::ComputeBackend::auto();
+        #[cfg(feature = "metal")]
+        let metal_model_bufs_cell = match &backend {
+            crate::metal::ComputeBackend::Metal { backend: ref mb, .. } => {
+                let max_seq = config.position.max_position_embeddings();
+                Some(RefCell::new(crate::metal::MetalModelBuffers::from_causal_lm(&model, max_seq, &mb.device)))
+            }
+            _ => None,
+        };
+
         Ok(Self {
             model,
             quantized_model: None,
@@ -81,7 +101,9 @@ impl InferenceEngine {
             tokenizer: Some(tokenizer),
             chat_template,
             #[cfg(feature = "metal")]
-            backend: crate::metal::ComputeBackend::auto(),
+            backend,
+            #[cfg(feature = "metal")]
+            metal_model_bufs_cell,
         })
     }
 
@@ -96,6 +118,8 @@ impl InferenceEngine {
             chat_template: None,
             #[cfg(feature = "metal")]
             backend: crate::metal::ComputeBackend::auto(),
+            #[cfg(feature = "metal")]
+            metal_model_bufs_cell: None,
         }
     }
 
@@ -114,6 +138,7 @@ impl InferenceEngine {
             tokenizer: None,
             chat_template: None,
             backend,
+            metal_model_bufs_cell: None,
         }
     }
 
@@ -203,7 +228,18 @@ impl InferenceEngine {
             GenerationPipeline::new(qmodel)
         } else {
             #[cfg(feature = "metal")]
-            { GenerationPipeline::with_backend(&self.model, &self.backend) }
+            {
+                // Use GPU-resident path if MetalModelBuffers are available
+                if let (Some(ref bufs_cell), crate::metal::ComputeBackend::Metal { ref backend, .. }) =
+                    (&self.metal_model_bufs_cell, &self.backend)
+                {
+                    GenerationPipeline::with_gpu_resident(
+                        &self.model, &self.backend, bufs_cell, backend,
+                    )
+                } else {
+                    GenerationPipeline::with_backend(&self.model, &self.backend)
+                }
+            }
             #[cfg(not(feature = "metal"))]
             GenerationPipeline::new(&self.model)
         };

@@ -65,6 +65,16 @@ pub struct GenerationPipeline<'a> {
     #[cfg(feature = "metal")]
     #[allow(dead_code)]
     backend: Option<&'a crate::metal::ComputeBackend>,
+    /// GPU-resident model buffers for Phase 3 all-layers-in-one-command-buffer.
+    #[cfg(feature = "metal")]
+    gpu_resident: Option<GpuResidentRefs<'a>>,
+}
+
+/// References needed for GPU-resident decode path.
+#[cfg(feature = "metal")]
+struct GpuResidentRefs<'a> {
+    model_bufs: &'a std::cell::RefCell<crate::metal::gpu_buffers::MetalModelBuffers>,
+    metal_backend: &'a crate::metal::MetalBackend,
 }
 
 impl<'a> GenerationPipeline<'a> {
@@ -73,6 +83,8 @@ impl<'a> GenerationPipeline<'a> {
             model,
             #[cfg(feature = "metal")]
             backend: None,
+            #[cfg(feature = "metal")]
+            gpu_resident: None,
         }
     }
 
@@ -83,7 +95,26 @@ impl<'a> GenerationPipeline<'a> {
     /// pipeline falls back to the CPU trait path automatically.
     #[cfg(feature = "metal")]
     pub fn with_backend(model: &'a dyn Model, backend: &'a crate::metal::ComputeBackend) -> Self {
-        Self { model, backend: Some(backend) }
+        Self {
+            model,
+            backend: Some(backend),
+            gpu_resident: None,
+        }
+    }
+
+    /// Create a pipeline with GPU-resident all-layers-in-one-command-buffer decode.
+    #[cfg(feature = "metal")]
+    pub fn with_gpu_resident(
+        model: &'a dyn Model,
+        backend: &'a crate::metal::ComputeBackend,
+        model_bufs: &'a std::cell::RefCell<crate::metal::gpu_buffers::MetalModelBuffers>,
+        metal_backend: &'a crate::metal::MetalBackend,
+    ) -> Self {
+        Self {
+            model,
+            backend: Some(backend),
+            gpu_resident: Some(GpuResidentRefs { model_bufs, metal_backend }),
+        }
     }
 
     /// Run generation given prompt token IDs.
@@ -166,6 +197,12 @@ impl<'a> GenerationPipeline<'a> {
         let prefill_elapsed = start.elapsed();
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
 
+        // If GPU-resident path is available, copy the CPU KV cache to GPU
+        #[cfg(feature = "metal")]
+        if let Some(ref gr) = self.gpu_resident {
+            gr.model_bufs.borrow_mut().kv_cache.populate_from_cpu_cache(cache);
+        }
+
         // Sample first token
         let first_token = self.sample_token(&mut logits_buf, &generated_tokens, config, rng);
         all_tokens.push(first_token);
@@ -181,7 +218,22 @@ impl<'a> GenerationPipeline<'a> {
             generated_tokens.len(),
         ) {
             let last_token = *generated_tokens.last().unwrap();
-            let output = self.model.forward_one(last_token, cache);
+            let output = {
+                #[cfg(feature = "metal")]
+                if let Some(ref gr) = self.gpu_resident {
+                    self.model.forward_one_gpu_resident(
+                        last_token,
+                        &mut gr.model_bufs.borrow_mut(),
+                        gr.metal_backend,
+                    )
+                } else if let Some(backend) = self.backend {
+                    self.model.forward_one_gpu(last_token, cache, backend)
+                } else {
+                    self.model.forward_one(last_token, cache)
+                }
+                #[cfg(not(feature = "metal"))]
+                self.model.forward_one(last_token, cache)
+            };
 
             logits_buf.clear();
             logits_buf.extend_from_slice(&output.logits);

@@ -354,14 +354,73 @@ impl CausalLM {
             x.copy_from_slice(&self.embed_tokens[id * h..(id + 1) * h]);
         }
 
-        for (i, layer) in self.layers.iter().enumerate() {
-            x = layer.forward_one_with_backend(&x, cache.layer_mut(i), pos, backend, &self.rope_cos, &self.rope_sin);
+        // Use GPU-native forward with batched command buffers when Metal is available
+        if let crate::metal::ComputeBackend::Metal { ref backend, ref pool } = backend {
+            let mut pool = pool.borrow_mut();
+            for (i, layer) in self.layers.iter().enumerate() {
+                x = crate::metal::gpu_forward::gpu_forward_one(
+                    layer, &x, cache.layer_mut(i), pos,
+                    &self.rope_cos, &self.rope_sin,
+                    backend, &mut pool,
+                );
+            }
+        } else {
+            for (i, layer) in self.layers.iter().enumerate() {
+                x = layer.forward_one(&x, cache.layer_mut(i), pos, &self.rope_cos, &self.rope_sin);
+            }
         }
 
         x = apply_norm_dispatch(&x, &self.final_norm_weight, &*self.final_norm, h, backend);
 
         let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
         let logits = backend.matmul_t(&x, lm_weight, 1, h, vocab);
+
+        ModelOutput {
+            logits,
+            shape: [1, 1, vocab],
+        }
+    }
+
+    /// GPU-resident single-token decode: all layers in one command buffer.
+    ///
+    /// Embedding lookup and final norm + LM head stay on CPU.
+    /// The 28-layer decoder runs entirely on GPU in a single commit+wait.
+    #[cfg(feature = "metal")]
+    pub fn forward_one_gpu_resident(
+        &self,
+        token: u32,
+        model_bufs: &mut crate::metal::gpu_buffers::MetalModelBuffers,
+        backend: &crate::metal::MetalBackend,
+    ) -> ModelOutput {
+        let h = self.config.architecture.hidden_size;
+        let vocab = self.config.architecture.vocab_size;
+        let num_heads = self.config.attention.num_heads();
+        let num_kv_heads = self.config.attention.num_kv_heads();
+        let head_dim = self.config.attention.head_dim();
+        let inter = self.config.ffn.intermediate_size();
+        let has_head_norms = self.layers.first().map_or(false, |l| l.has_head_norms);
+        let eps = self.layers.first().map_or(1e-6, |l| l.attn_norm.eps() as f32);
+
+        // 1. Embedding lookup on CPU -> [h]
+        let mut x = vec![0.0f32; h];
+        let id = token as usize;
+        if id < vocab {
+            x.copy_from_slice(&self.embed_tokens[id * h..(id + 1) * h]);
+        }
+
+        // 2. All decoder layers on GPU in one command buffer
+        x = crate::metal::gpu_forward::gpu_forward_all_layers(
+            model_bufs, &x,
+            num_heads, num_kv_heads, head_dim, h, inter,
+            has_head_norms, eps, backend,
+        );
+
+        // 3. Final norm on CPU
+        x = apply_norm(&x, &self.final_norm_weight, &*self.final_norm, h);
+
+        // 4. LM head projection on CPU
+        let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
+        let logits = matmul_t(&x, lm_weight, 1, h, vocab);
 
         ModelOutput {
             logits,
@@ -438,6 +497,26 @@ impl super::traits::Model for CausalLM {
 
     fn forward_one_draft(&self, token: u32, cache: &mut KVCache, n_layers: usize) -> ModelOutput {
         CausalLM::forward_one_draft(self, token, cache, n_layers)
+    }
+
+    #[cfg(feature = "metal")]
+    fn forward_one_gpu(
+        &self,
+        token: u32,
+        cache: &mut KVCache,
+        backend: &crate::metal::ComputeBackend,
+    ) -> ModelOutput {
+        CausalLM::forward_one_with_backend(self, token, cache, backend)
+    }
+
+    #[cfg(feature = "metal")]
+    fn forward_one_gpu_resident(
+        &self,
+        token: u32,
+        model_bufs: &mut crate::metal::gpu_buffers::MetalModelBuffers,
+        backend: &crate::metal::MetalBackend,
+    ) -> ModelOutput {
+        CausalLM::forward_one_gpu_resident(self, token, model_bufs, backend)
     }
 
     fn num_layers(&self) -> usize {

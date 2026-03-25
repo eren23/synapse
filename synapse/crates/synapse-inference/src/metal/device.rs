@@ -34,6 +34,16 @@ const SHADER_SOURCE: &str = concat!(
     "\n",
     include_str!("shaders/silu.metal"),
     "\n",
+    include_str!("shaders/rope.metal"),
+    "\n",
+    include_str!("shaders/kv_scatter.metal"),
+    "\n",
+    include_str!("shaders/attention_decode.metal"),
+    "\n",
+    include_str!("shaders/headwise_rmsnorm.metal"),
+    "\n",
+    include_str!("shaders/gemv.metal"),
+    "\n",
     // Simple utility kernels kept inline
     r#"
 #include <metal_stdlib>
@@ -91,6 +101,11 @@ pub(crate) const KERNEL_NAMES: &[&str] = &[
     "elementwise_mul",
     "elementwise_add",
     "softmax",
+    "rope_rotate_half",
+    "kv_cache_scatter",
+    "attention_decode",
+    "headwise_rmsnorm",
+    "gemv",
 ];
 
 /// Optional kernels that require specific Metal feature support.

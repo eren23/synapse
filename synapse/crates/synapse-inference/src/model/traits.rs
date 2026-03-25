@@ -23,6 +23,32 @@ pub trait Model {
         self.forward_one(token, cache)
     }
 
+    /// Single-token decode with Metal GPU backend.
+    /// Default: falls back to CPU forward_one.
+    #[cfg(feature = "metal")]
+    fn forward_one_gpu(
+        &self,
+        token: u32,
+        cache: &mut KVCache,
+        backend: &crate::metal::ComputeBackend,
+    ) -> ModelOutput {
+        let _ = backend;
+        self.forward_one(token, cache)
+    }
+
+    /// GPU-resident single-token decode: all layers in one command buffer.
+    /// Default: falls back to forward_one_gpu (per-layer dispatch).
+    #[cfg(feature = "metal")]
+    fn forward_one_gpu_resident(
+        &self,
+        token: u32,
+        model_bufs: &mut crate::metal::gpu_buffers::MetalModelBuffers,
+        backend: &crate::metal::MetalBackend,
+    ) -> ModelOutput {
+        let _ = (token, model_bufs, backend);
+        unimplemented!("GPU-resident forward not supported for this model type")
+    }
+
     /// Number of decoder layers.
     fn num_layers(&self) -> usize;
 
