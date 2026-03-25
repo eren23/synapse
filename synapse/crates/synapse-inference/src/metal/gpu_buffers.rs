@@ -156,6 +156,12 @@ fn upload_norm(device: &Device, data: &[f32]) -> Option<Buffer> {
     }
 }
 
+/// Public wrapper for `quantize_and_upload_int8` exposed for testing.
+#[cfg(test)]
+pub fn quantize_and_upload_int8_public(device: &Device, transposed: &[f32], k: usize, n: usize) -> (Buffer, Buffer) {
+    quantize_and_upload_int8(device, transposed, k, n)
+}
+
 /// Quantize a transposed weight matrix to INT8 and upload both int8 data + scales.
 /// Input: f32 transposed weights [K, N] (row-major).
 /// Output: (int8_buf [K, N], scale_buf [N]).
