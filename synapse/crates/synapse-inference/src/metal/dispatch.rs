@@ -2,7 +2,9 @@ use super::buffer::BufferPool;
 use super::device::MetalBackend;
 use std::cell::RefCell;
 
-/// Threshold for GPU dispatch: M*N*K > 1M elements → GPU path.
+/// GPU dispatch threshold: operations with M*N*K > this use Metal GPU.
+/// Empirically tuned for Apple M-series: GPU kernel launch overhead
+/// dominates for smaller operations.
 const GPU_DISPATCH_THRESHOLD: usize = 1_000_000;
 
 /// Backend dispatcher that routes operations to CPU (Zig SIMD) or GPU (Metal)

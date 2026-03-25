@@ -4,10 +4,11 @@ use crate::config::position::RoPEStyle;
 use crate::config::ModelConfig;
 use crate::kv_cache::{KVCache, KVCacheLayer};
 use crate::model::causal_lm::ModelOutput;
-use crate::model::decoder_layer::{
-    add_vecs, add_vecs_inplace, apply_headwise_rmsnorm, apply_norm, apply_rope_inplace, gelu,
-    matmul_nn, matmul_t, silu, softmax_slice,
-};
+use crate::ops::activation::{gelu, silu, softmax_slice};
+use crate::ops::matmul::matmul_t;
+use crate::ops::norm::{apply_headwise_rmsnorm, apply_norm};
+use crate::ops::rope::apply_rope_inplace;
+use crate::ops::vector::{add_vecs, add_vecs_inplace};
 use crate::model::CausalLM;
 use crate::quantization::QuantizedLinear;
 use crate::registry::{
@@ -29,6 +30,9 @@ pub struct QuantizedDecoderLayer {
     pub attn_norm_weight: Vec<f32>,
     pub q_norm_weight: Vec<f32>,
     pub k_norm_weight: Vec<f32>,
+    pub q_bias: Vec<f32>,
+    pub k_bias: Vec<f32>,
+    pub v_bias: Vec<f32>,
     pub ffn_norm_weight: Vec<f32>,
 
     pub w_q: QuantizedLinear,
@@ -48,6 +52,8 @@ pub struct QuantizedCausalLM {
     pub embed_tokens: Vec<f32>,
     pub final_norm_weight: Vec<f32>,
     pub lm_head_weight: Option<Vec<f32>>,
+    /// Quantized LM head for fast INT8 vocabulary projection.
+    pub lm_head_quantized: Option<QuantizedLinear>,
     pub rope_cos: Vec<f32>,
     pub rope_sin: Vec<f32>,
 }
@@ -90,6 +96,9 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
                 attn_norm_weight: layer.attn_norm_weight.to_vec(),
                 q_norm_weight: layer.q_norm_weight.to_vec(),
                 k_norm_weight: layer.k_norm_weight.to_vec(),
+                q_bias: layer.q_bias.to_vec(),
+                k_bias: layer.k_bias.to_vec(),
+                v_bias: layer.v_bias.to_vec(),
                 ffn_norm_weight: layer.ffn_norm_weight.to_vec(),
                 w_q,
                 w_k,
@@ -102,6 +111,15 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
         })
         .collect();
 
+    // Quantize LM head if it exists (not tied to embeddings)
+    let lm_head_quantized = model.lm_head_weight.as_ref().map(|w| {
+        QuantizedLinear::from_f32(w, cfg.architecture.vocab_size, h)
+    });
+    // For tied embeddings, quantize from embed_tokens
+    let lm_head_quantized = lm_head_quantized.or_else(|| {
+        Some(QuantizedLinear::from_f32(&model.embed_tokens, cfg.architecture.vocab_size, h))
+    });
+
     QuantizedCausalLM {
         config: model.config.clone(),
         layers,
@@ -109,6 +127,7 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
         embed_tokens: model.embed_tokens.to_vec(),
         final_norm_weight: model.final_norm_weight.to_vec(),
         lm_head_weight: model.lm_head_weight.as_ref().map(|w| w.to_vec()),
+        lm_head_quantized,
         rope_cos: model.rope_cos.clone(),
         rope_sin: model.rope_sin.clone(),
     }
@@ -117,6 +136,19 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
 // ── QuantizedDecoderLayer forward ────────────────────────────────────
 
 impl QuantizedDecoderLayer {
+    /// Add a per-column bias to a row-major matrix `[m, n]` in place.
+    /// No-op when `bias` is empty (model has no attention biases).
+    fn add_bias(x: &mut [f32], bias: &[f32], m: usize, n: usize) {
+        if bias.is_empty() {
+            return;
+        }
+        for row in 0..m {
+            for col in 0..n {
+                x[row * n + col] += bias[col];
+            }
+        }
+    }
+
     /// Pre-norm forward: norm→attention→residual→norm→FFN→residual.
     pub fn forward(
         &self,
@@ -209,9 +241,12 @@ impl QuantizedDecoderLayer {
         let (x_int8, scales_x) =
             synapse_core::quantize_per_channel_int8(x, seq_len, k_dim)
                 .expect("quantize_per_channel_int8 failed for attention input");
-        let q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
-        let k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
-        let v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
+        let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        Self::add_bias(&mut k, &self.k_bias, seq_len, kv_dim);
+        let mut v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
 
         // Apply headwise Q/K norms, then RoPE
         let eps = self.attn_norm.eps() as f32;
@@ -265,59 +300,28 @@ impl QuantizedDecoderLayer {
         let head_dim = self.attention.head_dim();
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
-        let groups = num_heads / num_kv_heads;
-        let scale = 1.0 / (head_dim as f32).sqrt();
 
         // INT8 Q/K/V projections (quantize input once, share across projections)
         let k_in = self.hidden_size;
         let (x_int8, scales_x) =
             synapse_core::quantize_per_channel_int8(x, seq_len, k_in)
                 .expect("quantize failed for prefill attention");
-        let q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
-        let k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
-        let v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
+        let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        Self::add_bias(&mut k, &self.k_bias, seq_len, kv_dim);
+        let mut v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, seq_len);
+        Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
 
-        let eps = self.attn_norm.eps() as f32;
-        let mut q = apply_headwise_rmsnorm(&q, &self.q_norm_weight, seq_len, num_heads, head_dim, eps);
-        let mut k = apply_headwise_rmsnorm(&k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim, eps);
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
+        let attn_out = crate::ops::attention::cached_attention_prefill(
+            &q, &k, &v,
+            seq_len, num_heads, num_kv_heads, head_dim,
+            cache_layer, rope_cos, rope_sin, self.rope_style,
+            &self.q_norm_weight, &self.k_norm_weight,
+            self.attn_norm.eps() as f32,
+        );
 
-        // Populate KV cache
-        for t in 0..seq_len {
-            let k_token = &k[t * kv_dim..(t + 1) * kv_dim];
-            let v_token = &v[t * kv_dim..(t + 1) * kv_dim];
-            cache_layer
-                .append(k_token, v_token)
-                .expect("KV cache append failed during prefill");
-        }
-
-        // Batched causal attention (identical to f32 path — attention is always f32)
-        let mut attn_output = vec![0.0f32; seq_len * q_dim];
-        for head in 0..num_heads {
-            let kv_head = head / groups;
-            for t in 0..seq_len {
-                let mut scores = vec![f32::NEG_INFINITY; seq_len];
-                for s in 0..=t {
-                    let mut dot = 0.0f32;
-                    for d in 0..head_dim {
-                        dot += q[t * q_dim + head * head_dim + d]
-                            * k[s * kv_dim + kv_head * head_dim + d];
-                    }
-                    scores[s] = dot * scale;
-                }
-                softmax_slice(&mut scores[..=t]);
-                for d in 0..head_dim {
-                    let mut sum = 0.0f32;
-                    for s in 0..=t {
-                        sum += scores[s] * v[s * kv_dim + kv_head * head_dim + d];
-                    }
-                    attn_output[t * q_dim + head * head_dim + d] = sum;
-                }
-            }
-        }
-
-        self.w_o.forward(&attn_output, seq_len)
+        self.w_o.forward(&attn_out, seq_len)
     }
 
     /// Single-token cached attention (for decode).
@@ -334,104 +338,26 @@ impl QuantizedDecoderLayer {
         let head_dim = self.attention.head_dim();
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
-        let groups = num_heads / num_kv_heads;
-        let scale = 1.0 / (head_dim as f32).sqrt();
 
         // INT8 Q/K/V projections for single token
-        let q = self.w_q.forward(x, 1);
-        let k = self.w_k.forward(x, 1);
-        let v = self.w_v.forward(x, 1);
+        let mut q = self.w_q.forward(x, 1);
+        Self::add_bias(&mut q, &self.q_bias, 1, q_dim);
+        let mut k = self.w_k.forward(x, 1);
+        Self::add_bias(&mut k, &self.k_bias, 1, kv_dim);
+        let mut v = self.w_v.forward(x, 1);
+        Self::add_bias(&mut v, &self.v_bias, 1, kv_dim);
 
-        let eps = self.attn_norm.eps() as f32;
-        let mut q = apply_headwise_rmsnorm(&q, &self.q_norm_weight, 1, num_heads, head_dim, eps);
-        let mut k = apply_headwise_rmsnorm(&k, &self.k_norm_weight, 1, num_kv_heads, head_dim, eps);
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos, self.rope_style);
-
-        // Append to cache
-        cache_layer
-            .append(&k, &v)
-            .expect("KV cache append failed");
-
-        // Get full cached K/V
-        let (cached_k, cached_v, seq_len) = cache_layer
-            .slice()
-            .expect("KV cache slice failed");
-
-        // Sliding window: limit attention to the last `window_size` positions
-        let (effective_k, effective_v, effective_len) = if let Some(ws) = self.attention.window_size() {
-            if seq_len > ws {
-                let offset = (seq_len - ws) * kv_dim;
-                (&cached_k[offset..], &cached_v[offset..], ws)
-            } else {
-                (cached_k, cached_v, seq_len)
-            }
-        } else {
-            (cached_k, cached_v, seq_len)
-        };
-
-        // Attention: single Q against effective cached K/V (same logic as f32 path)
-        let mut attn_output = vec![0.0f32; q_dim];
-
-        if effective_len >= 16 {
-            // SIMD path: gather + matmul
-            let mut k_heads = Vec::with_capacity(num_kv_heads);
-            let mut v_heads = Vec::with_capacity(num_kv_heads);
-            for kv_head in 0..num_kv_heads {
-                let mut k_buf = vec![0.0f32; effective_len * head_dim];
-                let mut v_buf = vec![0.0f32; effective_len * head_dim];
-                for s in 0..effective_len {
-                    let off = s * kv_dim + kv_head * head_dim;
-                    k_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&effective_k[off..off + head_dim]);
-                    v_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&effective_v[off..off + head_dim]);
-                }
-                k_heads.push(k_buf);
-                v_heads.push(v_buf);
-            }
-
-            for head in 0..num_heads {
-                let kv_head = head / groups;
-                let q_head = &q[head * head_dim..(head + 1) * head_dim];
-
-                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, effective_len);
-                for s in &mut scores {
-                    *s *= scale;
-                }
-                softmax_slice(&mut scores);
-
-                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, effective_len, head_dim);
-                attn_output[head * head_dim..(head + 1) * head_dim]
-                    .copy_from_slice(&sv);
-            }
-        } else {
-            // Scalar path for short sequences
-            for head in 0..num_heads {
-                let kv_head = head / groups;
-                let mut scores = vec![0.0f32; effective_len];
-                for s in 0..effective_len {
-                    let mut dot = 0.0f32;
-                    for d in 0..head_dim {
-                        dot += q[head * head_dim + d]
-                            * effective_k[s * kv_dim + kv_head * head_dim + d];
-                    }
-                    scores[s] = dot * scale;
-                }
-                softmax_slice(&mut scores);
-                for d in 0..head_dim {
-                    let mut sum = 0.0f32;
-                    for s in 0..effective_len {
-                        sum += scores[s]
-                            * effective_v[s * kv_dim + kv_head * head_dim + d];
-                    }
-                    attn_output[head * head_dim + d] = sum;
-                }
-            }
-        }
+        let attn_out = crate::ops::attention::cached_attention_decode(
+            &q, &k, &v,
+            num_heads, num_kv_heads, head_dim,
+            cache_layer, pos, rope_cos, rope_sin, self.rope_style,
+            &self.q_norm_weight, &self.k_norm_weight,
+            self.attn_norm.eps() as f32,
+            self.attention.window_size(),
+        );
 
         // INT8 output projection
-        self.w_o.forward(&attn_output, 1)
+        self.w_o.forward(&attn_out, 1)
     }
 
     fn apply_ffn(&self, x: &[f32]) -> Vec<f32> {
@@ -518,9 +444,13 @@ impl QuantizedCausalLM {
         // 3. Final norm
         x = apply_norm(&x, &self.final_norm_weight, &*self.final_norm, h);
 
-        // 4. LM head projection (stays f32)
-        let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
-        let logits = matmul_t(&x, lm_weight, seq_len, h, vocab);
+        // 4. LM head projection (INT8 quantized for speed)
+        let logits = if let Some(ref lm_q) = self.lm_head_quantized {
+            lm_q.forward(&x, seq_len)
+        } else {
+            let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
+            matmul_t(&x, lm_weight, seq_len, h, vocab)
+        };
 
         ModelOutput {
             logits,
@@ -606,6 +536,30 @@ impl QuantizedCausalLM {
             .as_ref()
             .map_or(0, |w| w.len() * mem::size_of::<f32>());
         embed + layers + norm + lm_head
+    }
+}
+
+impl crate::model::traits::Model for QuantizedCausalLM {
+    fn forward(&self, token_ids: &[u32]) -> ModelOutput {
+        QuantizedCausalLM::forward(self, token_ids)
+    }
+
+    fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
+        QuantizedCausalLM::forward_prefill(self, token_ids, cache)
+    }
+
+    fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
+        QuantizedCausalLM::forward_one(self, token, cache)
+    }
+
+    // No forward_one_draft for INT8 — use default (falls back to forward_one)
+
+    fn num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    fn config(&self) -> &ModelConfig {
+        &self.config
     }
 }
 

@@ -58,7 +58,10 @@ impl InferenceEngine {
             return Err(Box::new(WeightError::MissingKeys(result.missing)));
         }
         if !result.unexpected.is_empty() {
-            return Err(Box::new(WeightError::UnexpectedKeys(result.unexpected)));
+            eprintln!(
+                "Warning: {} unexpected weight keys (ignored)",
+                result.unexpected.len()
+            );
         }
 
         // Try to load chat template from tokenizer_config.json (best-effort).
@@ -197,7 +200,7 @@ impl InferenceEngine {
         let mut cache = self.create_kv_cache(max_seq)?;
 
         let pipeline = if let Some(ref qmodel) = self.quantized_model {
-            GenerationPipeline::new_quantized(qmodel)
+            GenerationPipeline::new(qmodel)
         } else {
             #[cfg(feature = "metal")]
             { GenerationPipeline::with_backend(&self.model, &self.backend) }

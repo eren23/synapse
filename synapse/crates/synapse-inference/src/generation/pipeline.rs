@@ -4,57 +4,14 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 
 use crate::kv_cache::KVCache;
-use crate::model::causal_lm::ModelOutput;
-use crate::model::CausalLM;
-use crate::quantization::int8::QuantizedCausalLM;
+use crate::model::traits::Model;
 
 use super::output::GenerationOutput;
 use super::sampler::{CombinedSampler, GreedySampler, Sampler};
 use super::stopping::{StopChecker, StopCondition};
 
-/// Model dispatch enum supporting both f32 and INT8 quantized inference.
-pub enum ModelRef<'a> {
-    F32(&'a CausalLM),
-    Int8(&'a QuantizedCausalLM),
-}
-
-impl<'a> ModelRef<'a> {
-    fn forward(&self, token_ids: &[u32]) -> ModelOutput {
-        match self {
-            Self::F32(m) => m.forward(token_ids),
-            Self::Int8(m) => m.forward(token_ids),
-        }
-    }
-
-    fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
-        match self {
-            Self::F32(m) => m.forward_prefill(token_ids, cache),
-            Self::Int8(m) => m.forward_prefill(token_ids, cache),
-        }
-    }
-
-    fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
-        match self {
-            Self::F32(m) => m.forward_one(token, cache),
-            Self::Int8(m) => m.forward_one(token, cache),
-        }
-    }
-
-    fn forward_one_draft(&self, token: u32, cache: &mut KVCache, n_layers: usize) -> ModelOutput {
-        match self {
-            Self::F32(m) => m.forward_one_draft(token, cache, n_layers),
-            // INT8 doesn't have a draft mode yet — fall back to full forward
-            Self::Int8(m) => m.forward_one(token, cache),
-        }
-    }
-
-    fn num_layers(&self) -> usize {
-        match self {
-            Self::F32(m) => m.layers.len(),
-            Self::Int8(m) => m.layers.len(),
-        }
-    }
-}
+/// Default fraction of model layers used for draft in self-speculative decoding.
+const DEFAULT_DRAFT_LAYER_FRACTION: usize = 3; // use num_layers / 3
 
 /// Configuration for the generation pipeline.
 pub struct GenerationConfig {
@@ -103,33 +60,30 @@ impl Default for GenerationConfig {
 /// generates tokens one at a time (decode), sampling from the logits
 /// of the last position.
 pub struct GenerationPipeline<'a> {
-    model: ModelRef<'a>,
+    model: &'a dyn Model,
+    /// Metal GPU backend — stored for future re-integration of GPU dispatch.
     #[cfg(feature = "metal")]
+    #[allow(dead_code)]
     backend: Option<&'a crate::metal::ComputeBackend>,
 }
 
 impl<'a> GenerationPipeline<'a> {
-    pub fn new(model: &'a CausalLM) -> Self {
+    pub fn new(model: &'a dyn Model) -> Self {
         Self {
-            model: ModelRef::F32(model),
-            #[cfg(feature = "metal")]
-            backend: None,
-        }
-    }
-
-    /// Create a pipeline for an INT8 quantized model.
-    pub fn new_quantized(model: &'a QuantizedCausalLM) -> Self {
-        Self {
-            model: ModelRef::Int8(model),
+            model,
             #[cfg(feature = "metal")]
             backend: None,
         }
     }
 
     /// Create a pipeline with Metal GPU backend dispatch.
+    ///
+    /// Note: Metal dispatch currently requires downcasting to CausalLM.
+    /// When the model is not a CausalLM (e.g. QuantizedCausalLM), the
+    /// pipeline falls back to the CPU trait path automatically.
     #[cfg(feature = "metal")]
-    pub fn with_backend(model: &'a CausalLM, backend: &'a crate::metal::ComputeBackend) -> Self {
-        Self { model: ModelRef::F32(model), backend: Some(backend) }
+    pub fn with_backend(model: &'a dyn Model, backend: &'a crate::metal::ComputeBackend) -> Self {
+        Self { model, backend: Some(backend) }
     }
 
     /// Run generation given prompt token IDs.
@@ -208,18 +162,7 @@ impl<'a> GenerationPipeline<'a> {
         let mut generated_tokens: Vec<u32> = Vec::new();
 
         // ── Prefill (populate KV-cache for all prompt tokens) ────────
-        let prefill_output = {
-            #[cfg(feature = "metal")]
-            {
-                if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
-                    m.forward_prefill_with_backend(prompt_tokens, cache, backend)
-                } else {
-                    self.model.forward_prefill(prompt_tokens, cache)
-                }
-            }
-            #[cfg(not(feature = "metal"))]
-            self.model.forward_prefill(prompt_tokens, cache)
-        };
+        let prefill_output = self.model.forward_prefill(prompt_tokens, cache);
         let prefill_elapsed = start.elapsed();
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
 
@@ -238,18 +181,7 @@ impl<'a> GenerationPipeline<'a> {
             generated_tokens.len(),
         ) {
             let last_token = *generated_tokens.last().unwrap();
-            let output = {
-                #[cfg(feature = "metal")]
-                {
-                    if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
-                        m.forward_one_with_backend(last_token, cache, backend)
-                    } else {
-                        self.model.forward_one(last_token, cache)
-                    }
-                }
-                #[cfg(not(feature = "metal"))]
-                self.model.forward_one(last_token, cache)
-            };
+            let output = self.model.forward_one(last_token, cache);
 
             logits_buf.clear();
             logits_buf.extend_from_slice(&output.logits);
@@ -292,7 +224,7 @@ impl<'a> GenerationPipeline<'a> {
         let n_draft = if config.speculative_draft_layers > 0 {
             config.speculative_draft_layers
         } else {
-            self.model.num_layers() / 3 // default: use 1/3 of layers for draft
+            self.model.num_layers() / DEFAULT_DRAFT_LAYER_FRACTION
         };
 
         // Prefill
@@ -335,8 +267,7 @@ impl<'a> GenerationPipeline<'a> {
             // positions and returns logits at each position.
             let mut verify_tokens = vec![*generated_tokens.last().unwrap()];
             verify_tokens.extend_from_slice(&draft_tokens);
-            let verify_out = self.model.forward_prefill(&verify_tokens, cache);
-            let vocab_size = verify_out.shape[2];
+            let _verify_out = self.model.forward_prefill(&verify_tokens, cache);
 
             // verify_out.logits has shape [1, K+1, vocab] but forward_prefill
             // only returns the LAST position's logits. We need per-position logits.
@@ -403,18 +334,7 @@ impl<'a> GenerationPipeline<'a> {
         let mut generated_tokens: Vec<u32> = Vec::new();
 
         // ── Prefill ──────────────────────────────────────────────────
-        let prefill_output = {
-            #[cfg(feature = "metal")]
-            {
-                if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
-                    m.forward_with_backend(prompt_tokens, backend)
-                } else {
-                    self.model.forward(prompt_tokens)
-                }
-            }
-            #[cfg(not(feature = "metal"))]
-            self.model.forward(prompt_tokens)
-        };
+        let prefill_output = self.model.forward(prompt_tokens);
         let prefill_elapsed = start.elapsed();
         let vocab_size = prefill_output.shape[2];
         let last_pos_logits = &prefill_output.logits
@@ -435,18 +355,7 @@ impl<'a> GenerationPipeline<'a> {
             &generated_tokens,
             generated_tokens.len(),
         ) {
-            let output = {
-                #[cfg(feature = "metal")]
-                {
-                    if let (Some(backend), ModelRef::F32(m)) = (self.backend, &self.model) {
-                        m.forward_with_backend(&all_tokens, backend)
-                    } else {
-                        self.model.forward(&all_tokens)
-                    }
-                }
-                #[cfg(not(feature = "metal"))]
-                self.model.forward(&all_tokens)
-            };
+            let output = self.model.forward(&all_tokens);
             let seq_len = output.shape[1];
             let last_logits =
                 &output.logits[(seq_len - 1) * vocab_size..seq_len * vocab_size];
@@ -512,7 +421,7 @@ impl<'a> GenerationPipeline<'a> {
 mod tests {
     use super::*;
     use crate::config::*;
-    use crate::model::ModelBuilder;
+    use crate::model::{CausalLM, ModelBuilder};
     use crate::weight_loading::{RawTensor, WeightMapper};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};

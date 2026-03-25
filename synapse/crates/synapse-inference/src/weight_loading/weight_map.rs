@@ -59,6 +59,18 @@ impl WeightMapper {
                 "layers[{i}].attention.w_o",
             ),
             rule(
+                "model.layers.{i}.self_attn.q_proj.bias",
+                "layers[{i}].attention.q_bias",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.k_proj.bias",
+                "layers[{i}].attention.k_bias",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.v_proj.bias",
+                "layers[{i}].attention.v_bias",
+            ),
+            rule(
                 "model.layers.{i}.self_attn.q_norm.weight",
                 "layers[{i}].attention.q_norm",
             ),
@@ -98,6 +110,7 @@ impl WeightMapper {
     pub fn from_model_type(model_type: &str) -> Result<Self, WeightError> {
         match model_type {
             "qwen3" => Ok(Self::qwen3()),
+            "qwen2" | "qwen2.5" => Ok(Self::llama()), // Same naming as LLaMA (no q_norm/k_norm)
             "llama" => Ok(Self::llama()),
             "mistral" => Ok(Self::mistral()),
             "phi" | "phi3" => Ok(Self::phi()),
@@ -130,6 +143,18 @@ impl WeightMapper {
             rule(
                 "model.layers.{i}.self_attn.o_proj.weight",
                 "layers[{i}].attention.w_o",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.q_proj.bias",
+                "layers[{i}].attention.q_bias",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.k_proj.bias",
+                "layers[{i}].attention.k_bias",
+            ),
+            rule(
+                "model.layers.{i}.self_attn.v_proj.bias",
+                "layers[{i}].attention.v_bias",
             ),
             rule(
                 "model.layers.{i}.mlp.gate_proj.weight",

@@ -394,14 +394,17 @@ fn parse_merges_value(value: &Value) -> Result<Vec<(String, String)>, TokenizerE
     let mut out = Vec::with_capacity(merges.len());
     for item in merges {
         if let Some(pair) = item.as_str() {
-            let mut parts = pair.split_whitespace();
-            let left = parts
-                .next()
-                .ok_or_else(|| TokenizerError::Invalid("merge pair missing lhs".into()))?;
-            let right = parts
-                .next()
-                .ok_or_else(|| TokenizerError::Invalid("merge pair missing rhs".into()))?;
-            out.push((left.to_string(), right.to_string()));
+            // Split on first space only — not split_whitespace, because merge
+            // tokens can BE whitespace characters (e.g. \r, \xa0).
+            if let Some(space_idx) = pair.find(' ') {
+                let left = &pair[..space_idx];
+                let right = &pair[space_idx + 1..];
+                if !left.is_empty() && !right.is_empty() {
+                    out.push((left.to_string(), right.to_string()));
+                    continue;
+                }
+            }
+            // Skip malformed merges rather than erroring
             continue;
         }
 

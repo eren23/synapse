@@ -1,11 +1,14 @@
 pub mod chat_template;
 pub mod config;
+#[cfg(feature = "diffusion")]
+pub mod diffusion;
 pub mod engine;
 pub mod generation;
 pub mod kv_cache;
 #[cfg(feature = "metal")]
 pub mod metal;
 pub mod model;
+pub mod ops;
 pub mod quantization;
 pub mod registry;
 pub mod tokenizer;
@@ -17,7 +20,7 @@ pub mod prelude {
         QuantConfig,
     };
     pub use crate::engine::InferenceEngine;
-    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, ModelBuilder, ModelOutput};
+    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput};
     pub use crate::generation::{
         CombinedSampler, GenerationConfig, GenerationOutput, GenerationPipeline, GreedySampler,
         RepetitionPenalty, Sampler, StopChecker, StopCondition, TemperatureSampler, TopKSampler,
@@ -586,7 +589,7 @@ mod model_tests {
 #[cfg(test)]
 mod quantization_tests {
     use crate::config::*;
-    use crate::model::decoder_layer::matmul_t;
+    use crate::ops::matmul::matmul_t;
     use crate::model::ModelBuilder;
     use crate::quantization::*;
 

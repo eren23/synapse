@@ -222,7 +222,7 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) ->
     println!("Type 'quit' to exit.");
 
     let tokenizer = engine.tokenizer().expect("pretrained engine has tokenizer").clone();
-    let stop_sequences = tokenizer.encode("<|im_end|>")?;
+    let stop_sequences = tokenizer.encode("<|im_end|>").unwrap_or_default();
     let eos_token_id = tokenizer.eos_token_id();
     let stdin = io::stdin();
     let mut line_reader = stdin.lock().lines();
@@ -251,12 +251,13 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) ->
                 content: line.clone(),
             }])?
         } else {
-            format!("<|im_start|>user\n{line}<|im_end|>\n<|im_start|>assistant\n")
+            // No chat template (base model) — pass input as raw text completion
+            line.clone()
         };
         let prompt_tokens = engine.encode(&prompt)?;
         let stream_tokenizer = tokenizer.clone();
         let pipeline = if let Some(ref qmodel) = engine.quantized_model {
-            GenerationPipeline::new_quantized(qmodel)
+            GenerationPipeline::new(qmodel)
         } else {
             #[cfg(feature = "metal")]
             { GenerationPipeline::with_backend(&engine.model, &engine.backend) }

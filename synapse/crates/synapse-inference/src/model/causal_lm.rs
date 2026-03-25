@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::ModelConfig;
 use crate::kv_cache::KVCache;
-use crate::model::decoder_layer::{apply_norm, matmul_t};
+use crate::ops::matmul::matmul_t;
+use crate::ops::norm::apply_norm;
 #[cfg(feature = "metal")]
 use crate::model::decoder_layer::apply_norm_dispatch;
 use crate::registry::NormVariant;
@@ -64,7 +65,9 @@ impl CausalLM {
             keys.extend(layer.weight_keys(i));
         }
         keys.push("norm.weight".to_string());
-        keys.push("lm_head.weight".to_string());
+        if !self.config.architecture.tie_word_embeddings {
+            keys.push("lm_head.weight".to_string());
+        }
         keys
     }
 
@@ -84,9 +87,9 @@ impl CausalLM {
         let mut loaded = HashSet::new();
 
         for (source, target) in &mapping.mapping {
-            if expected.contains(target) {
-                if let Some(raw) = weights.get(source) {
-                    self.set_weight(target, raw)?;
+            if let Some(raw) = weights.get(source) {
+                self.set_weight(target, raw)?;
+                if expected.contains(target) {
                     loaded.insert(target.clone());
                 }
             }
@@ -418,6 +421,32 @@ fn parse_layer_key(key: &str) -> Option<(usize, &str)> {
     let idx: usize = rest[..bracket].parse().ok()?;
     let field = rest[bracket + 1..].strip_prefix('.')?;
     Some((idx, field))
+}
+
+impl super::traits::Model for CausalLM {
+    fn forward(&self, token_ids: &[u32]) -> ModelOutput {
+        CausalLM::forward(self, token_ids)
+    }
+
+    fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
+        CausalLM::forward_prefill(self, token_ids, cache)
+    }
+
+    fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
+        CausalLM::forward_one(self, token, cache)
+    }
+
+    fn forward_one_draft(&self, token: u32, cache: &mut KVCache, n_layers: usize) -> ModelOutput {
+        CausalLM::forward_one_draft(self, token, cache, n_layers)
+    }
+
+    fn num_layers(&self) -> usize {
+        self.layers.len()
+    }
+
+    fn config(&self) -> &ModelConfig {
+        &self.config
+    }
 }
 
 #[cfg(test)]

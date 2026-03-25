@@ -6,6 +6,10 @@ resolver = "2"
 name = "synapse"
 version = "0.1.0"
 edition = "2021"
+description = "A modular LLM inference engine with Zig SIMD kernels and Metal GPU acceleration"
+license = "MIT"
+keywords = ["llm", "inference", "quantization", "transformer", "simd"]
+categories = ["science", "algorithms"]
 
 [features]
 metal = ["synapse-inference/metal"]

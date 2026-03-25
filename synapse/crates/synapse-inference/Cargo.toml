@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 metal = ["dep:metal"]
+diffusion = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

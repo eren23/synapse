@@ -1,5 +1,12 @@
 use crate::config::position::RoPEStyle;
 use crate::kv_cache::KVCacheLayer;
+use crate::ops::activation::{gelu, is_gated_ffn, softmax_slice};
+use crate::ops::matmul::matmul_t;
+use crate::ops::norm::{apply_headwise_rmsnorm, apply_norm};
+#[cfg(feature = "metal")]
+use crate::ops::norm::layernorm;
+use crate::ops::rope::apply_rope_inplace;
+use crate::ops::vector::{add_vecs, add_vecs_inplace};
 use crate::registry::{AttentionVariant, FFNVariant, NormVariant};
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
 
@@ -25,6 +32,11 @@ pub struct DecoderLayer {
     pub w_o: AlignedBuffer,
     pub q_norm_weight: AlignedBuffer,
     pub k_norm_weight: AlignedBuffer,
+    // ── Attention biases (empty if model doesn't use them) ──────────
+    pub q_bias: AlignedBuffer,
+    pub k_bias: AlignedBuffer,
+    pub v_bias: AlignedBuffer,
+    // ── FFN weights ─────────────────────────────────────────────────
     pub ffn_norm_weight: AlignedBuffer,
     pub ffn_gate: AlignedBuffer,
     pub ffn_up: AlignedBuffer,
@@ -172,6 +184,9 @@ impl DecoderLayer {
             "attention.w_o" => self.w_o = tensor.data.clone(),
             "attention.q_norm" => self.q_norm_weight = tensor.data.clone(),
             "attention.k_norm" => self.k_norm_weight = tensor.data.clone(),
+            "attention.q_bias" => self.q_bias = tensor.data.clone(),
+            "attention.k_bias" => self.k_bias = tensor.data.clone(),
+            "attention.v_bias" => self.v_bias = tensor.data.clone(),
             "ffn_norm.weight" => self.ffn_norm_weight = tensor.data.clone(),
             "ffn.w_gate" => self.ffn_gate = tensor.data.clone(),
             "ffn.w_up" => self.ffn_up = tensor.data.clone(),
@@ -193,6 +208,8 @@ impl DecoderLayer {
             "attention.w_k" | "attention.w_v" => vec![kv_dim, h],
             "attention.w_o" => vec![h, q_dim],
             "attention.q_norm" | "attention.k_norm" => vec![self.attention.head_dim()],
+            "attention.q_bias" => vec![q_dim],
+            "attention.k_bias" | "attention.v_bias" => vec![kv_dim],
             "ffn.w_gate" | "ffn.w_up" => vec![inter, h],
             "ffn.w_down" => vec![h, inter],
             _ => return Ok(()),
@@ -282,9 +299,12 @@ impl DecoderLayer {
         let groups = num_heads / num_kv_heads;
         let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let q = backend.matmul_t(x, &self.w_q, seq_len, h, q_dim);
-        let k = backend.matmul_t(x, &self.w_k, seq_len, h, kv_dim);
-        let v = backend.matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        let mut q = backend.matmul_t(x, &self.w_q, seq_len, h, q_dim);
+        Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
+        let mut k = backend.matmul_t(x, &self.w_k, seq_len, h, kv_dim);
+        Self::add_bias(&mut k, &self.k_bias, seq_len, kv_dim);
+        let mut v = backend.matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
         let mut q = apply_headwise_rmsnorm(
             &q, &self.q_norm_weight, seq_len, num_heads, head_dim,
             self.attn_norm.eps() as f32,
@@ -340,63 +360,25 @@ impl DecoderLayer {
         let head_dim = self.attention.head_dim();
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
-        let groups = num_heads / num_kv_heads;
-        let scale = 1.0 / (head_dim as f32).sqrt();
 
-        let q = backend.matmul_t(x, &self.w_q, 1, h, q_dim);
-        let k = backend.matmul_t(x, &self.w_k, 1, h, kv_dim);
-        let v = backend.matmul_t(x, &self.w_v, 1, h, kv_dim);
+        // GPU-dispatched Q/K/V projections
+        let mut q = backend.matmul_t(x, &self.w_q, 1, h, q_dim);
+        Self::add_bias(&mut q, &self.q_bias, 1, q_dim);
+        let mut k = backend.matmul_t(x, &self.w_k, 1, h, kv_dim);
+        Self::add_bias(&mut k, &self.k_bias, 1, kv_dim);
+        let mut v = backend.matmul_t(x, &self.w_v, 1, h, kv_dim);
+        Self::add_bias(&mut v, &self.v_bias, 1, kv_dim);
 
-        let mut q = apply_headwise_rmsnorm(
-            &q, &self.q_norm_weight, 1, num_heads, head_dim,
+        let attn_out = crate::ops::attention::cached_attention_decode(
+            &q, &k, &v,
+            num_heads, num_kv_heads, head_dim,
+            cache_layer, pos, rope_cos, rope_sin, self.rope_style,
+            &self.q_norm_weight, &self.k_norm_weight,
             self.attn_norm.eps() as f32,
-        );
-        let mut k = apply_headwise_rmsnorm(
-            &k, &self.k_norm_weight, 1, num_kv_heads, head_dim,
-            self.attn_norm.eps() as f32,
+            self.attention.window_size(),
         );
 
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos, self.rope_style);
-
-        cache_layer.append(&k, &v).expect("KV cache append failed");
-        let (cached_k, cached_v, seq_len) = cache_layer.slice().expect("KV cache slice failed");
-
-        // Sliding window: limit attention to the last `window_size` positions
-        let (effective_k, effective_v, effective_len) = if let Some(ws) = self.attention.window_size() {
-            if seq_len > ws {
-                let offset = (seq_len - ws) * kv_dim;
-                (&cached_k[offset..], &cached_v[offset..], ws)
-            } else {
-                (cached_k, cached_v, seq_len)
-            }
-        } else {
-            (cached_k, cached_v, seq_len)
-        };
-
-        let mut attn_output = vec![0.0f32; q_dim];
-        for head in 0..num_heads {
-            let kv_head = head / groups;
-            let mut scores = vec![0.0f32; effective_len];
-            for s in 0..effective_len {
-                let mut dot = 0.0f32;
-                for d in 0..head_dim {
-                    dot += q[head * head_dim + d]
-                        * effective_k[s * kv_dim + kv_head * head_dim + d];
-                }
-                scores[s] = dot * scale;
-            }
-            softmax_slice(&mut scores);
-            for d in 0..head_dim {
-                let mut sum = 0.0f32;
-                for s in 0..effective_len {
-                    sum += scores[s] * effective_v[s * kv_dim + kv_head * head_dim + d];
-                }
-                attn_output[head * head_dim + d] = sum;
-            }
-        }
-
-        backend.matmul_t(&attn_output, &self.w_o, 1, q_dim, h)
+        backend.matmul_t(&attn_out, &self.w_o, 1, q_dim, h)
     }
 
     #[cfg(feature = "metal")]
@@ -433,6 +415,19 @@ impl DecoderLayer {
 
     // ── Attention ────────────────────────────────────────────────────
 
+    /// Add a per-column bias to a row-major matrix `[m, n]` in place.
+    /// No-op when `bias` is empty (model has no attention biases).
+    fn add_bias(x: &mut [f32], bias: &[f32], m: usize, n: usize) {
+        if bias.is_empty() {
+            return;
+        }
+        for row in 0..m {
+            for col in 0..n {
+                x[row * n + col] += bias[col];
+            }
+        }
+    }
+
     fn apply_attention(
         &self,
         x: &[f32],
@@ -450,9 +445,12 @@ impl DecoderLayer {
         let scale = 1.0 / (head_dim as f32).sqrt();
 
         // Q, K, V projections: x is [seq_len, h]
-        let q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
-        let k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
-        let v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        let mut q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
+        Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
+        let mut k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
+        Self::add_bias(&mut k, &self.k_bias, seq_len, kv_dim);
+        let mut v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
 
         let mut q = apply_headwise_rmsnorm(
             &q,
@@ -512,9 +510,8 @@ impl DecoderLayer {
 
     // ── Cached attention (single-token decode) ────────────────────
     //
-    // Computes Q/K/V for one token, appends normed-K and raw-V to the
-    // cache, then runs Q (1 token) against the full cached K/V.
-    // No causal mask is needed because Q is always the latest position.
+    // Computes Q/K/V for one token, delegates to shared attention logic,
+    // then applies the output projection.
 
     fn apply_attention_cached(
         &self,
@@ -530,125 +527,26 @@ impl DecoderLayer {
         let head_dim = self.attention.head_dim();
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
-        let groups = num_heads / num_kv_heads;
-        let scale = 1.0 / (head_dim as f32).sqrt();
 
         // Q, K, V projections for single token: x is [1, h]
-        let q = matmul_t(x, &self.w_q, 1, h, q_dim);
-        let k = matmul_t(x, &self.w_k, 1, h, kv_dim);
-        let v = matmul_t(x, &self.w_v, 1, h, kv_dim);
+        let mut q = matmul_t(x, &self.w_q, 1, h, q_dim);
+        Self::add_bias(&mut q, &self.q_bias, 1, q_dim);
+        let mut k = matmul_t(x, &self.w_k, 1, h, kv_dim);
+        Self::add_bias(&mut k, &self.k_bias, 1, kv_dim);
+        let mut v = matmul_t(x, &self.w_v, 1, h, kv_dim);
+        Self::add_bias(&mut v, &self.v_bias, 1, kv_dim);
 
-        // Apply headwise norms (same as full forward)
-        let mut q = apply_headwise_rmsnorm(
-            &q,
-            &self.q_norm_weight,
-            1,
-            num_heads,
-            head_dim,
+        let attn_out = crate::ops::attention::cached_attention_decode(
+            &q, &k, &v,
+            num_heads, num_kv_heads, head_dim,
+            cache_layer, pos, rope_cos, rope_sin, self.rope_style,
+            &self.q_norm_weight, &self.k_norm_weight,
             self.attn_norm.eps() as f32,
+            self.attention.window_size(),
         );
-        let mut k = apply_headwise_rmsnorm(
-            &k,
-            &self.k_norm_weight,
-            1,
-            num_kv_heads,
-            head_dim,
-            self.attn_norm.eps() as f32,
-        );
-
-        // Apply RoPE at the correct position
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, 1, num_heads, head_dim, pos, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, 1, num_kv_heads, head_dim, pos, self.rope_style);
-
-        // Append RoPE'd K and raw V to cache
-        cache_layer
-            .append(&k, &v)
-            .expect("KV cache append failed");
-
-        // Get full cached K/V (all positions up to and including this one)
-        let (cached_k, cached_v, seq_len) = cache_layer
-            .slice()
-            .expect("KV cache slice failed");
-
-        // Sliding window: limit attention to the last `window_size` positions
-        let (effective_k, effective_v, effective_len) = if let Some(ws) = self.attention.window_size() {
-            if seq_len > ws {
-                let offset = (seq_len - ws) * kv_dim;
-                (&cached_k[offset..], &cached_v[offset..], ws)
-            } else {
-                (cached_k, cached_v, seq_len)
-            }
-        } else {
-            (cached_k, cached_v, seq_len)
-        };
-
-        // Compute attention: single Q against effective cached K/V
-        let mut attn_output = vec![0.0f32; q_dim];
-
-        // For longer sequences, gather K/V per kv_head into contiguous buffers
-        // and use SIMD matmul for Q·K^T. For short sequences, scalar is faster
-        // (avoids gather overhead).
-        if effective_len >= 16 {
-            // SIMD path: gather + matmul_t
-            let mut k_heads = Vec::with_capacity(num_kv_heads);
-            let mut v_heads = Vec::with_capacity(num_kv_heads);
-            for kv_head in 0..num_kv_heads {
-                let mut k_buf = vec![0.0f32; effective_len * head_dim];
-                let mut v_buf = vec![0.0f32; effective_len * head_dim];
-                for s in 0..effective_len {
-                    let off = s * kv_dim + kv_head * head_dim;
-                    k_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&effective_k[off..off + head_dim]);
-                    v_buf[s * head_dim..(s + 1) * head_dim]
-                        .copy_from_slice(&effective_v[off..off + head_dim]);
-                }
-                k_heads.push(k_buf);
-                v_heads.push(v_buf);
-            }
-
-            for head in 0..num_heads {
-                let kv_head = head / groups;
-                let q_head = &q[head * head_dim..(head + 1) * head_dim];
-
-                // Q·K^T via SIMD: [1, head_dim] × [effective_len, head_dim]^T = [1, effective_len]
-                let mut scores = matmul_t(q_head, &k_heads[kv_head], 1, head_dim, effective_len);
-                for s in &mut scores {
-                    *s *= scale;
-                }
-                softmax_slice(&mut scores);
-
-                // score·V via SIMD: [1, effective_len] × [effective_len, head_dim] → [1, head_dim]
-                let sv = matmul_nn(&scores, &v_heads[kv_head], 1, effective_len, head_dim);
-                attn_output[head * head_dim..(head + 1) * head_dim]
-                    .copy_from_slice(&sv);
-            }
-        } else {
-            // Scalar path for short sequences (avoids gather overhead)
-            for head in 0..num_heads {
-                let kv_head = head / groups;
-                let mut scores = vec![0.0f32; effective_len];
-                for s in 0..effective_len {
-                    let mut dot = 0.0f32;
-                    for d in 0..head_dim {
-                        dot += q[head * head_dim + d]
-                            * effective_k[s * kv_dim + kv_head * head_dim + d];
-                    }
-                    scores[s] = dot * scale;
-                }
-                softmax_slice(&mut scores);
-                for d in 0..head_dim {
-                    let mut sum = 0.0f32;
-                    for s in 0..effective_len {
-                        sum += scores[s]
-                            * effective_v[s * kv_dim + kv_head * head_dim + d];
-                    }
-                    attn_output[head * head_dim + d] = sum;
-                }
-            }
-        }
 
         // Output projection
-        matmul_t(&attn_output, &self.w_o, 1, q_dim, h)
+        matmul_t(&attn_out, &self.w_o, 1, q_dim, h)
     }
 
     // ── Batched attention + cache populate (for prefill) ────────────
@@ -669,82 +567,24 @@ impl DecoderLayer {
         let head_dim = self.attention.head_dim();
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
-        let groups = num_heads / num_kv_heads;
-        let scale = 1.0 / (head_dim as f32).sqrt();
 
         // Q, K, V projections (batched over all positions)
-        let q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
-        let k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
-        let v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        let mut q = matmul_t(x, &self.w_q, seq_len, h, q_dim);
+        Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
+        let mut k = matmul_t(x, &self.w_k, seq_len, h, kv_dim);
+        Self::add_bias(&mut k, &self.k_bias, seq_len, kv_dim);
+        let mut v = matmul_t(x, &self.w_v, seq_len, h, kv_dim);
+        Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
 
-        let mut q = apply_headwise_rmsnorm(
-            &q, &self.q_norm_weight, seq_len, num_heads, head_dim,
+        let attn_out = crate::ops::attention::cached_attention_prefill(
+            &q, &k, &v,
+            seq_len, num_heads, num_kv_heads, head_dim,
+            cache_layer, rope_cos, rope_sin, self.rope_style,
+            &self.q_norm_weight, &self.k_norm_weight,
             self.attn_norm.eps() as f32,
         );
-        let mut k = apply_headwise_rmsnorm(
-            &k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim,
-            self.attn_norm.eps() as f32,
-        );
 
-        // Apply RoPE
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
-
-        // Populate KV cache with each position's RoPE'd K and raw V
-        for t in 0..seq_len {
-            let k_token = &k[t * kv_dim..(t + 1) * kv_dim];
-            let v_token = &v[t * kv_dim..(t + 1) * kv_dim];
-            cache_layer
-                .append(k_token, v_token)
-                .expect("KV cache append failed during prefill");
-        }
-
-        // Batched causal attention via fused SIMD kernel.
-        // Gather per-head Q/K/V into contiguous buffers for the fused kernel.
-        let mut attn_output = vec![0.0f32; seq_len * q_dim];
-
-        for head in 0..num_heads {
-            let kv_head = head / groups;
-
-            // Gather Q for this head: [seq_len, head_dim]
-            let mut q_head = vec![0.0f32; seq_len * head_dim];
-            for t in 0..seq_len {
-                let src = t * q_dim + head * head_dim;
-                q_head[t * head_dim..(t + 1) * head_dim]
-                    .copy_from_slice(&q[src..src + head_dim]);
-            }
-
-            // Gather K for this kv_head: [seq_len, head_dim]
-            let mut k_head = vec![0.0f32; seq_len * head_dim];
-            for t in 0..seq_len {
-                let src = t * kv_dim + kv_head * head_dim;
-                k_head[t * head_dim..(t + 1) * head_dim]
-                    .copy_from_slice(&k[src..src + head_dim]);
-            }
-
-            // Gather V for this kv_head: [seq_len, head_dim]
-            let mut v_head = vec![0.0f32; seq_len * head_dim];
-            for t in 0..seq_len {
-                let src = t * kv_dim + kv_head * head_dim;
-                v_head[t * head_dim..(t + 1) * head_dim]
-                    .copy_from_slice(&v[src..src + head_dim]);
-            }
-
-            // Fused causal attention: Q·K^T → scale → mask → softmax → ·V
-            let head_out = synapse_core::fused_attention(
-                seq_len, seq_len, head_dim, &q_head, &k_head, &v_head,
-            )
-            .expect("fused attention failed");
-
-            // Scatter output back to interleaved layout
-            for t in 0..seq_len {
-                let dst = t * q_dim + head * head_dim;
-                attn_output[dst..dst + head_dim]
-                    .copy_from_slice(&head_out[t * head_dim..(t + 1) * head_dim]);
-            }
-        }
-
-        matmul_t(&attn_output, &self.w_o, seq_len, q_dim, h)
+        matmul_t(&attn_out, &self.w_o, seq_len, q_dim, h)
     }
 
     // ── FFN ──────────────────────────────────────────────────────────
@@ -792,85 +632,7 @@ impl DecoderLayer {
     }
 }
 
-// ── Math helpers ─────────────────────────────────────────────────────
-
-/// Apply RoPE rotation to Q or K vectors in-place (rotate-half convention).
-///
-/// `qk` layout: `[seq_len, num_heads * head_dim]` (flat, heads contiguous).
-/// Uses the HuggingFace "rotate_half" convention: pairs dimension `i` with
-/// dimension `i + head_dim/2` (first-half/second-half), NOT adjacent pairs.
-///
-/// cos/sin tables are `[max_pos, head_dim / 2]` (one entry per pair).
-/// `pos_offset` is 0 for full-sequence forward, or the cache length for
-/// single-token decode steps.
-pub(crate) fn apply_rope_inplace(
-    qk: &mut [f32],
-    cos: &[f32],
-    sin: &[f32],
-    seq_len: usize,
-    num_heads: usize,
-    head_dim: usize,
-    pos_offset: usize,
-    style: RoPEStyle,
-) {
-    let half_d = head_dim / 2;
-    let total_dim = num_heads * head_dim;
-    for t in 0..seq_len {
-        let pos = pos_offset + t;
-        let cos_row = pos * half_d;
-        for head in 0..num_heads {
-            let base = t * total_dim + head * head_dim;
-            match style {
-                RoPEStyle::RotateHalf => {
-                    // Pairs (i, i + d/2): Qwen3, LLaMA 3, Mistral
-                    for i in 0..half_d {
-                        let idx_first = base + i;
-                        let idx_second = base + half_d + i;
-                        let cos_val = cos[cos_row + i];
-                        let sin_val = sin[cos_row + i];
-                        let x_first = qk[idx_first];
-                        let x_second = qk[idx_second];
-                        qk[idx_first] = x_first * cos_val - x_second * sin_val;
-                        qk[idx_second] = x_second * cos_val + x_first * sin_val;
-                    }
-                }
-                RoPEStyle::Interleaved => {
-                    // Pairs (2i, 2i+1): GPT-NeoX
-                    for i in 0..half_d {
-                        let idx_even = base + 2 * i;
-                        let idx_odd = base + 2 * i + 1;
-                        let cos_val = cos[cos_row + i];
-                        let sin_val = sin[cos_row + i];
-                        let x_even = qk[idx_even];
-                        let x_odd = qk[idx_odd];
-                        qk[idx_even] = x_even * cos_val - x_odd * sin_val;
-                        qk[idx_odd] = x_odd * cos_val + x_even * sin_val;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Whether this FFN variant is gated (3 weight matrices vs 2).
-pub(crate) fn is_gated_ffn(name: &str) -> bool {
-    matches!(name, "SwiGLU" | "GeGLU")
-}
-
-/// Apply normalization (dispatch on variant name).
-pub(crate) fn apply_norm(
-    x: &[f32],
-    weight: &[f32],
-    norm: &dyn NormVariant,
-    hidden_size: usize,
-) -> Vec<f32> {
-    let eps = norm.eps() as f32;
-    match norm.name() {
-        "RMSNorm" => rmsnorm(x, weight, eps, hidden_size),
-        "LayerNorm" => layernorm(x, weight, eps, hidden_size),
-        _ => x.to_vec(),
-    }
-}
+// ── Dispatch helpers (Metal-specific, kept here) ─────────────────────
 
 /// Apply normalization dispatched through ComputeBackend.
 #[cfg(feature = "metal")]
@@ -889,56 +651,12 @@ pub(crate) fn apply_norm_dispatch(
     }
 }
 
-/// y = A * B^T  where A is [m, k], B is [n, k] → y is [m, n].
-///
-/// Dispatches to the Zig SIMD tiled GEMM (`syn_sgemm`) via FFI.
-pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-    debug_assert_eq!(a.len(), m * k, "matmul_t: a.len() != m*k");
-    debug_assert_eq!(b.len(), n * k, "matmul_t: b.len() != n*k");
-    let mut out = vec![0.0f32; m * n];
-    // syn_sgemm: C = op(A) * op(B), row-major.
-    //   A [m, k] no-transpose, lda = k
-    //   B [n, k] transposed → [k, n], ldb = k
-    //   C [m, n], ldc = n
-    let status = unsafe {
-        synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,   // A: no transpose
-            b.as_ptr(), k, 1,   // B: transpose
-            out.as_mut_ptr(), n, // C
-        )
-    };
-    debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
-    out
-}
-
-/// y = A * B  where A is [m, k], B is [k, n] → y is [m, n].
-///
-/// Non-transposed variant of [`matmul_t`]. Used for score·V in cached decode
-/// where scores are `[1, seq_len]` and V is `[seq_len, head_dim]`.
-pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-    debug_assert_eq!(a.len(), m * k, "matmul_nn: a.len() != m*k");
-    debug_assert_eq!(b.len(), k * n, "matmul_nn: b.len() != k*n");
-    let mut out = vec![0.0f32; m * n];
-    // syn_sgemm: C = op(A) * op(B), row-major.
-    //   A [m, k] no-transpose, lda = k
-    //   B [k, n] no-transpose, ldb = n
-    //   C [m, n], ldc = n
-    let status = unsafe {
-        synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,   // A: no transpose
-            b.as_ptr(), n, 0,   // B: no transpose
-            out.as_mut_ptr(), n, // C
-        )
-    };
-    debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm (nn) failed: {status}");
-    out
-}
+// ── Test-only naive reference implementations ────────────────────────
 
 /// Naive triple-loop reference implementation of y = A * B^T.
 ///
 /// Kept for test comparison against the SIMD path.
+#[cfg(test)]
 pub(crate) fn matmul_t_naive(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     debug_assert_eq!(a.len(), m * k, "matmul_t_naive: a.len() != m*k");
     debug_assert_eq!(b.len(), n * k, "matmul_t_naive: b.len() != n*k");
@@ -957,46 +675,11 @@ pub(crate) fn matmul_t_naive(a: &[f32], b: &[f32], m: usize, k: usize, n: usize)
     out
 }
 
-/// RMS normalization over the last dimension (SIMD via Zig FFI).
-///
-/// Uses `syn_vmul` / `syn_vreduce_sum` for zero-copy SIMD on each row,
-/// avoiding tensor-handle allocation overhead that dominates at small sizes.
-fn rmsnorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
-    let n = x.len() / hidden_size;
-    let mut out = vec![0.0f32; x.len()];
-
-    unsafe {
-        for i in 0..n {
-            let off = i * hidden_size;
-            let row_ptr = x.as_ptr().add(off);
-            let out_ptr = out.as_mut_ptr().add(off);
-
-            // SIMD: out = x ⊙ x  (reuse output as scratch for squared values)
-            synapse_sys::syn_vmul(out_ptr, row_ptr, row_ptr, hidden_size);
-
-            // SIMD: ms = Σ(x²)
-            let mut sum_sq = 0.0f32;
-            synapse_sys::syn_vreduce_sum(out_ptr, hidden_size, &mut sum_sq);
-
-            let scale = 1.0 / (sum_sq / hidden_size as f32 + eps).sqrt();
-
-            // SIMD: out = x ⊙ weight
-            synapse_sys::syn_vmul(out_ptr, row_ptr, weight.as_ptr(), hidden_size);
-
-            // Scale by normalization factor.  At 1024 elements this is auto-
-            // vectorized by LLVM and negligible relative to the SIMD ops above.
-            for j in 0..hidden_size {
-                *out_ptr.add(j) *= scale;
-            }
-        }
-    }
-    out
-}
-
 /// Naive scalar RMS normalization (reference for test comparison).
 ///
 /// Uses `black_box` on the accumulator to prevent LLVM auto-vectorization,
 /// giving a fair scalar-vs-SIMD benchmark comparison.
+#[cfg(test)]
 #[inline(never)]
 pub(crate) fn rmsnorm_naive(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
     let n = x.len() / hidden_size;
@@ -1018,42 +701,8 @@ pub(crate) fn rmsnorm_naive(x: &[f32], weight: &[f32], eps: f32, hidden_size: us
     out
 }
 
-/// Layer normalization over the last dimension (gamma only, no beta).
-fn layernorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
-    let n = x.len() / hidden_size;
-    let mut out = vec![0.0f32; x.len()];
-    for i in 0..n {
-        let off = i * hidden_size;
-        let slice = &x[off..off + hidden_size];
-        let mean: f32 = slice.iter().sum::<f32>() / hidden_size as f32;
-        let var: f32 =
-            slice.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / hidden_size as f32;
-        let scale = 1.0 / (var + eps).sqrt();
-        for j in 0..hidden_size {
-            out[off + j] = (slice[j] - mean) * scale * weight[j];
-        }
-    }
-    out
-}
-
-pub(crate) fn apply_headwise_rmsnorm(
-    x: &[f32],
-    weight: &[f32],
-    _rows: usize,
-    _heads: usize,
-    head_dim: usize,
-    eps: f32,
-) -> Vec<f32> {
-    if weight.is_empty() {
-        return x.to_vec();
-    }
-
-    // Data is already contiguous per-head: [rows * heads, head_dim].
-    // Delegate to SIMD rmsnorm which normalizes over the last dimension.
-    rmsnorm(x, weight, eps, head_dim)
-}
-
 /// Naive scalar headwise RMS normalization (reference for test comparison).
+#[cfg(test)]
 pub(crate) fn apply_headwise_rmsnorm_naive(
     x: &[f32],
     weight: &[f32],
@@ -1083,43 +732,11 @@ pub(crate) fn apply_headwise_rmsnorm_naive(
     out
 }
 
-pub(crate) fn silu(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
-}
-
-pub(crate) fn gelu(x: f32) -> f32 {
-    0.5 * x
-        * (1.0
-            + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
-}
-
-pub(crate) fn softmax_slice(x: &mut [f32]) {
-    let max = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let mut sum = 0.0f32;
-    for v in x.iter_mut() {
-        *v = (*v - max).exp();
-        sum += *v;
-    }
-    if sum > 0.0 {
-        for v in x.iter_mut() {
-            *v /= sum;
-        }
-    }
-}
-
-pub(crate) fn add_vecs(a: &[f32], b: &[f32]) -> Vec<f32> {
-    a.iter().zip(b.iter()).map(|(x, y)| x + y).collect()
-}
-
-pub(crate) fn add_vecs_inplace(a: &mut [f32], b: &[f32]) {
-    for (x, y) in a.iter_mut().zip(b.iter()) {
-        *x += *y;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::activation::silu;
+    use crate::ops::norm::rmsnorm;
 
     /// Generate deterministic pseudo-random f32 values in [-1, 1].
     fn pseudo_rand(len: usize, seed: u64) -> Vec<f32> {
@@ -1688,6 +1305,9 @@ mod tests {
                     .map(|v| v.abs() + 0.1)
                     .collect(),
             ),
+            q_bias: AlignedBuffer::new_zeroed(0),
+            k_bias: AlignedBuffer::new_zeroed(0),
+            v_bias: AlignedBuffer::new_zeroed(0),
             ffn_norm_weight: AlignedBuffer::from_vec(
                 pseudo_rand(hidden, 8000)
                     .iter()
@@ -1910,6 +1530,9 @@ mod tests {
                     .map(|v| v.abs() + 0.1)
                     .collect(),
             ),
+            q_bias: AlignedBuffer::new_zeroed(0),
+            k_bias: AlignedBuffer::new_zeroed(0),
+            v_bias: AlignedBuffer::new_zeroed(0),
             ffn_norm_weight: AlignedBuffer::from_vec(
                 pseudo_rand(hidden, 8000)
                     .iter()
