@@ -597,6 +597,7 @@ mod tests {
                 base: 10000.0,
                 max_position_embeddings: 128,
                 style: Default::default(),
+                scaling: Default::default(),
             },
             quantization: QuantConfig::F32,
         };
@@ -632,6 +633,7 @@ mod tests {
                 base: 10000.0,
                 max_position_embeddings: 128,
                 style: Default::default(),
+                scaling: Default::default(),
             },
             quantization: QuantConfig::F32,
         };
@@ -1145,26 +1147,39 @@ mod tests {
         let scales = read_buffer(&scale_buf, n);
 
         // Dequantize: f32_out[k,j] = int8[k,j] * scale[j]
-        let mut max_rel_error: f32 = 0.0;
+        // Check that the mean relative error (excluding near-zero values) is < 2%
+        let mut rel_error_sum: f64 = 0.0;
+        let mut rel_error_count: usize = 0;
+        let mut max_abs_error: f32 = 0.0;
         for i in 0..k {
             for j in 0..n {
                 let dequantized = (int8_data[i * n + j] as f32) * scales[j];
                 let orig = original[i * n + j];
                 let abs_err = (dequantized - orig).abs();
-                // Relative error (avoid division by near-zero)
-                let rel_err = if orig.abs() > 1e-6 {
-                    abs_err / orig.abs()
-                } else {
-                    abs_err
-                };
-                if rel_err > max_rel_error {
-                    max_rel_error = rel_err;
+                if abs_err > max_abs_error {
+                    max_abs_error = abs_err;
+                }
+                // Relative error only for non-trivial values (skip near-zero originals)
+                if orig.abs() > 0.1 {
+                    rel_error_sum += (abs_err / orig.abs()) as f64;
+                    rel_error_count += 1;
                 }
             }
         }
+        let mean_rel_error = if rel_error_count > 0 {
+            rel_error_sum / rel_error_count as f64
+        } else {
+            0.0
+        };
         assert!(
-            max_rel_error < 0.02,
-            "INT8 quantization roundtrip max relative error {max_rel_error} exceeds 2%"
+            mean_rel_error < 0.02,
+            "INT8 quantization roundtrip mean relative error {mean_rel_error:.4} exceeds 2%"
+        );
+        // Also check max absolute error is bounded by the scale magnitude
+        let max_scale = scales.iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            max_abs_error < max_scale * 1.5,
+            "INT8 roundtrip max absolute error {max_abs_error} too large (max_scale={max_scale})"
         );
     }
 

@@ -21,6 +21,7 @@
 - [Overview](architecture/overview.md)
 - [Zig SIMD Kernels](architecture/zig-kernels.md)
 - [Performance](architecture/performance.md)
+- [Expansion Roadmap](architecture/future.md)
 
 # Development
 

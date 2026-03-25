@@ -10,8 +10,20 @@ Qwen3-0.6B on Apple M5:
 |--------|---------|--------|-------------|
 | f32 CPU | 18 tok/s | 6.6 tok/s | 2.9x |
 | INT8 CPU | 31 tok/s | 14.6 tok/s | **6.3x** |
-| Metal + INT8 | 30 tok/s | 14.6 tok/s | 6.3x |
+| Metal INT8 GPU | 30 tok/s | 14.5 tok/s | 6.3x |
 | llama.cpp Q4_K_M (ref) | 5518 tok/s | 173 tok/s | — |
+
+## GPU Acceleration (Metal)
+
+Synapse supports GPU-resident decode on Apple Silicon via Metal:
+
+| Path | Decode | When to use |
+|------|--------|-------------|
+| CPU f32 | 6.7 tok/s | Default, no flags |
+| CPU INT8 | 14.0 tok/s | `--quantize` |
+| Metal INT8 GPU | 14.5 tok/s | `--features metal` |
+
+The Metal path keeps all 28 decoder layers on GPU in a single command buffer -- zero CPU-GPU round-trips during decode. Weights are auto-quantized to INT8 at load time.
 
 ## Features
 

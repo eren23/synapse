@@ -37,5 +37,13 @@ out/
 zig-cache/
 zig-out/
 
-#attocode
+# mdBook HTML output (source: synapse/docs/src; rebuild: cd synapse/docs && mdbook build)
+synapse/docs/book/
+
+# AI assistant project notes (local / optional)
+**/CLAUDE.md
+
+# Attocode local index, cache, embeddings (not the repo config file)
 .attocode/index/
+.attocode/cache/
+.attocode/vectors/
