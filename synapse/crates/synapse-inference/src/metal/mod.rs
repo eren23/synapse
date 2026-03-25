@@ -643,4 +643,611 @@ mod tests {
             assert!(!engine.backend.is_gpu(), "Auto without GPU should fallback to CPU");
         }
     }
+
+    // ==================== Critical shader correctness tests ====================
+
+    /// Create a Metal buffer from i8 data.
+    fn make_buffer_i8(device: &::metal::Device, data: &[i8]) -> ::metal::Buffer {
+        device.new_buffer_with_data(
+            data.as_ptr() as *const _,
+            data.len() as u64,
+            ::metal::MTLResourceOptions::StorageModeShared,
+        )
+    }
+
+    /// Read i8 values from a shared-mode Metal buffer.
+    fn read_buffer_i8(buf: &::metal::Buffer, n: usize) -> Vec<i8> {
+        let ptr = buf.contents() as *const i8;
+        let mut out = vec![0i8; n];
+        unsafe { std::ptr::copy_nonoverlapping(ptr, out.as_mut_ptr(), n) };
+        out
+    }
+
+    /// Simple deterministic pseudo-random f32 in [-1, 1] from a seed + index.
+    fn pseudo_rand(seed: u32, idx: usize) -> f32 {
+        // xorshift-like hash for reproducible test data
+        let mut h = seed.wrapping_add(idx as u32).wrapping_mul(2654435761);
+        h ^= h >> 16;
+        h = h.wrapping_mul(2246822519);
+        h ^= h >> 13;
+        // Map to [-1, 1]
+        (h as f32 / u32::MAX as f32) * 2.0 - 1.0
+    }
+
+    #[test]
+    fn gemv_int8_correctness() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let k: usize = 64;
+        let n: usize = 32;
+
+        // Random activations
+        let a: Vec<f32> = (0..k).map(|i| pseudo_rand(42, i)).collect();
+        // Random int8 weights
+        let b_int8: Vec<i8> = (0..k * n)
+            .map(|i| {
+                let v = pseudo_rand(99, i);
+                (v * 127.0).clamp(-128.0, 127.0) as i8
+            })
+            .collect();
+        // Random per-column scales
+        let scales: Vec<f32> = (0..n).map(|j| pseudo_rand(77, j).abs() * 0.1 + 0.01).collect();
+
+        // CPU reference: out[j] = sum_k(a[k] * i8_to_f32(b[k*N+j])) * scale[j]
+        let mut expected = vec![0.0f32; n];
+        for j in 0..n {
+            let mut sum = 0.0f32;
+            for ki in 0..k {
+                sum += a[ki] * (b_int8[ki * n + j] as f32);
+            }
+            expected[j] = sum * scales[j];
+        }
+
+        let buf_a = make_buffer(dev, &a);
+        let buf_b = make_buffer_i8(dev, &b_int8);
+        let buf_scales = make_buffer(dev, &scales);
+        let buf_out = make_empty(dev, n);
+        let buf_n = make_const_u32(dev, n as u32);
+        let buf_k = make_const_u32(dev, k as u32);
+
+        let pipeline = backend.pipeline("gemv_int8").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_a), 0);
+        encoder.set_buffer(1, Some(&buf_b), 0);
+        encoder.set_buffer(2, Some(&buf_scales), 0);
+        encoder.set_buffer(3, Some(&buf_out), 0);
+        encoder.set_buffer(4, Some(&buf_n), 0);
+        encoder.set_buffer(5, Some(&buf_k), 0);
+
+        let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(n.min(256) as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_out, n);
+        assert_approx(&result, &expected, 1e-2, "gemv_int8");
+    }
+
+    #[test]
+    fn gemv_f32_correctness() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let k: usize = 64;
+        let n: usize = 32;
+
+        let a: Vec<f32> = (0..k).map(|i| pseudo_rand(10, i)).collect();
+        // B layout: [K, N] row-major (gemv kernel convention)
+        let b: Vec<f32> = (0..k * n).map(|i| pseudo_rand(20, i)).collect();
+
+        // CPU reference: out[j] = sum_k(a[k] * B[k*N + j])
+        let mut expected = vec![0.0f32; n];
+        for j in 0..n {
+            let mut sum = 0.0f32;
+            for ki in 0..k {
+                sum += a[ki] * b[ki * n + j];
+            }
+            expected[j] = sum;
+        }
+
+        let buf_a = make_buffer(dev, &a);
+        let buf_b = make_buffer(dev, &b);
+        let buf_out = make_empty(dev, n);
+        let buf_n = make_const_u32(dev, n as u32);
+        let buf_k = make_const_u32(dev, k as u32);
+
+        let pipeline = backend.pipeline("gemv").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_a), 0);
+        encoder.set_buffer(1, Some(&buf_b), 0);
+        encoder.set_buffer(2, Some(&buf_out), 0);
+        encoder.set_buffer(3, Some(&buf_n), 0);
+        encoder.set_buffer(4, Some(&buf_k), 0);
+
+        let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(n.min(256) as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_out, n);
+        assert_approx(&result, &expected, 1e-4, "gemv_f32");
+    }
+
+    #[test]
+    fn rope_rotate_half_correctness() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let num_heads: usize = 4;
+        let head_dim: usize = 16;
+        let half_d = head_dim / 2;
+        let total = num_heads * head_dim;
+        let pos: usize = 3;
+
+        // Random Q data and cos/sin for one position
+        let q_data: Vec<f32> = (0..total).map(|i| pseudo_rand(50, i)).collect();
+        let cos_row: Vec<f32> = (0..half_d).map(|i| (i as f32 * 0.2).cos()).collect();
+        let sin_row: Vec<f32> = (0..half_d).map(|i| (i as f32 * 0.2).sin()).collect();
+
+        // CPU reference: apply_rope_inplace from ops::rope
+        let mut expected = q_data.clone();
+        crate::ops::rope::apply_rope_inplace(
+            &mut expected,
+            &cos_row,
+            &sin_row,
+            1,          // seq_len = 1
+            num_heads,
+            head_dim,
+            0,          // pos_offset = 0 (cos/sin already indexed for our position)
+            crate::config::position::RoPEStyle::RotateHalf,
+        );
+
+        // GPU: rope_rotate_half operates in-place on qk buffer
+        let buf_qk = make_buffer(dev, &q_data);
+        let buf_cos = make_buffer(dev, &cos_row);
+        let buf_sin = make_buffer(dev, &sin_row);
+        let buf_num_heads = make_const_u32(dev, num_heads as u32);
+        let buf_head_dim = make_const_u32(dev, head_dim as u32);
+
+        let total_pairs = (num_heads * half_d) as u64;
+        let pipeline = backend.pipeline("rope_rotate_half").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_qk), 0);
+        encoder.set_buffer(1, Some(&buf_cos), 0);
+        encoder.set_buffer(2, Some(&buf_sin), 0);
+        encoder.set_buffer(3, Some(&buf_num_heads), 0);
+        encoder.set_buffer(4, Some(&buf_head_dim), 0);
+
+        let grid = ::metal::MTLSize::new(total_pairs, 1, 1);
+        let tg = ::metal::MTLSize::new(total_pairs.min(256), 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_qk, total);
+        assert_approx(&result, &expected, 1e-5, "rope_rotate_half");
+    }
+
+    #[test]
+    fn kv_scatter_correctness() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let max_seq: usize = 16;
+        let kv_dim: usize = 8;
+        let pos: u32 = 5;
+
+        // Initialize caches to zero
+        let k_cache_data = vec![0.0f32; max_seq * kv_dim];
+        let v_cache_data = vec![0.0f32; max_seq * kv_dim];
+
+        // Token K/V data
+        let k_token: Vec<f32> = (0..kv_dim).map(|i| (i as f32 + 1.0) * 0.5).collect();
+        let v_token: Vec<f32> = (0..kv_dim).map(|i| (i as f32 + 1.0) * -0.3).collect();
+
+        let buf_k_cache = make_buffer(dev, &k_cache_data);
+        let buf_v_cache = make_buffer(dev, &v_cache_data);
+        let buf_k_token = make_buffer(dev, &k_token);
+        let buf_v_token = make_buffer(dev, &v_token);
+        let buf_pos = make_const_u32(dev, pos);
+        let buf_kv_dim = make_const_u32(dev, kv_dim as u32);
+
+        let pipeline = backend.pipeline("kv_cache_scatter").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_k_cache), 0);
+        encoder.set_buffer(1, Some(&buf_v_cache), 0);
+        encoder.set_buffer(2, Some(&buf_k_token), 0);
+        encoder.set_buffer(3, Some(&buf_v_token), 0);
+        encoder.set_buffer(4, Some(&buf_pos), 0);
+        encoder.set_buffer(5, Some(&buf_kv_dim), 0);
+
+        let grid = ::metal::MTLSize::new(kv_dim as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(kv_dim as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let k_result = read_buffer(&buf_k_cache, max_seq * kv_dim);
+        let v_result = read_buffer(&buf_v_cache, max_seq * kv_dim);
+
+        // Verify: positions 5*8..5*8+8 should match token data
+        let offset = (pos as usize) * kv_dim;
+        for i in 0..kv_dim {
+            assert!(
+                (k_result[offset + i] - k_token[i]).abs() < 1e-6,
+                "k_cache[{}]: expected {} got {}",
+                offset + i, k_token[i], k_result[offset + i]
+            );
+            assert!(
+                (v_result[offset + i] - v_token[i]).abs() < 1e-6,
+                "v_cache[{}]: expected {} got {}",
+                offset + i, v_token[i], v_result[offset + i]
+            );
+        }
+
+        // Verify: all other positions should still be zero
+        for i in 0..max_seq * kv_dim {
+            if i >= offset && i < offset + kv_dim {
+                continue;
+            }
+            assert_eq!(
+                k_result[i], 0.0,
+                "k_cache[{i}]: should be 0 but was {}",
+                k_result[i]
+            );
+            assert_eq!(
+                v_result[i], 0.0,
+                "v_cache[{i}]: should be 0 but was {}",
+                v_result[i]
+            );
+        }
+    }
+
+    #[test]
+    fn attention_decode_vs_cpu() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let num_heads: usize = 4;
+        let num_kv_heads: usize = 2;
+        let head_dim: usize = 8;
+        let seq_len: usize = 8;
+        let q_dim = num_heads * head_dim;
+        let kv_dim = num_kv_heads * head_dim;
+
+        let q: Vec<f32> = (0..q_dim).map(|i| pseudo_rand(11, i)).collect();
+        let k_cache: Vec<f32> = (0..seq_len * kv_dim).map(|i| pseudo_rand(22, i)).collect();
+        let v_cache: Vec<f32> = (0..seq_len * kv_dim).map(|i| pseudo_rand(33, i)).collect();
+
+        // CPU reference: per-head attention with GQA
+        let groups = num_heads / num_kv_heads;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+        let mut expected = vec![0.0f32; q_dim];
+        for head in 0..num_heads {
+            let kv_head = head / groups;
+            // Compute scores
+            let mut scores = vec![0.0f32; seq_len];
+            for j in 0..seq_len {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[head * head_dim + d]
+                        * k_cache[j * kv_dim + kv_head * head_dim + d];
+                }
+                scores[j] = dot * scale;
+            }
+            // Softmax
+            let max_s = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let exp_s: Vec<f32> = scores.iter().map(|s| (s - max_s).exp()).collect();
+            let sum_e: f32 = exp_s.iter().sum();
+            let weights: Vec<f32> = exp_s.iter().map(|e| e / sum_e).collect();
+            // Weighted V sum
+            for d in 0..head_dim {
+                let mut val = 0.0f32;
+                for j in 0..seq_len {
+                    val += weights[j]
+                        * v_cache[j * kv_dim + kv_head * head_dim + d];
+                }
+                expected[head * head_dim + d] = val;
+            }
+        }
+
+        let buf_q = make_buffer(dev, &q);
+        let buf_k = make_buffer(dev, &k_cache);
+        let buf_v = make_buffer(dev, &v_cache);
+        let buf_out = make_empty(dev, q_dim);
+        let buf_num_heads = make_const_u32(dev, num_heads as u32);
+        let buf_num_kv_heads = make_const_u32(dev, num_kv_heads as u32);
+        let buf_head_dim = make_const_u32(dev, head_dim as u32);
+        let buf_seq_len = make_const_u32(dev, seq_len as u32);
+        let buf_kv_dim = make_const_u32(dev, kv_dim as u32);
+
+        let pipeline = backend.pipeline("attention_decode").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_q), 0);
+        encoder.set_buffer(1, Some(&buf_k), 0);
+        encoder.set_buffer(2, Some(&buf_v), 0);
+        encoder.set_buffer(3, Some(&buf_out), 0);
+        encoder.set_buffer(4, Some(&buf_num_heads), 0);
+        encoder.set_buffer(5, Some(&buf_num_kv_heads), 0);
+        encoder.set_buffer(6, Some(&buf_head_dim), 0);
+        encoder.set_buffer(7, Some(&buf_seq_len), 0);
+        encoder.set_buffer(8, Some(&buf_kv_dim), 0);
+
+        // One threadgroup per head, 256 threads per threadgroup
+        let threadgroups = ::metal::MTLSize::new(num_heads as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(256, 1, 1);
+        encoder.dispatch_thread_groups(threadgroups, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_out, q_dim);
+        assert_approx(&result, &expected, 1e-3, "attention_decode");
+    }
+
+    #[test]
+    fn headwise_rmsnorm_correctness() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let num_heads: usize = 4;
+        let head_dim: usize = 16;
+        let total = num_heads * head_dim;
+        let eps: f32 = 1e-5;
+
+        let x: Vec<f32> = (0..total).map(|i| pseudo_rand(60, i)).collect();
+        let weight: Vec<f32> = (0..head_dim).map(|i| 1.0 + pseudo_rand(70, i) * 0.5).collect();
+
+        // CPU reference: apply_headwise_rmsnorm from ops::norm
+        let expected = crate::ops::norm::apply_headwise_rmsnorm(
+            &x, &weight, 1, num_heads, head_dim, eps,
+        );
+
+        let buf_x = make_buffer(dev, &x);
+        let buf_w = make_buffer(dev, &weight);
+        let buf_out = make_empty(dev, total);
+        let buf_num_heads = make_const_u32(dev, num_heads as u32);
+        let buf_head_dim = make_const_u32(dev, head_dim as u32);
+        let buf_eps = make_const_f32(dev, eps);
+        let buf_hdw = make_const_u32(dev, head_dim as u32); // head_dim_weight > 0
+
+        let pipeline = backend.pipeline("headwise_rmsnorm").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_x), 0);
+        encoder.set_buffer(1, Some(&buf_w), 0);
+        encoder.set_buffer(2, Some(&buf_out), 0);
+        encoder.set_buffer(3, Some(&buf_num_heads), 0);
+        encoder.set_buffer(4, Some(&buf_head_dim), 0);
+        encoder.set_buffer(5, Some(&buf_eps), 0);
+        encoder.set_buffer(6, Some(&buf_hdw), 0);
+
+        // One threadgroup per head
+        let threadgroups = ::metal::MTLSize::new(num_heads as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(256, 1, 1);
+        encoder.dispatch_thread_groups(threadgroups, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_out, total);
+        assert_approx(&result, &expected, 1e-4, "headwise_rmsnorm");
+    }
+
+    #[test]
+    fn headwise_rmsnorm_identity_when_empty() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let num_heads: usize = 4;
+        let head_dim: usize = 16;
+        let total = num_heads * head_dim;
+
+        let x: Vec<f32> = (0..total).map(|i| pseudo_rand(80, i)).collect();
+        // Dummy weight buffer (won't be accessed when head_dim_weight == 0)
+        let dummy_weight = vec![0.0f32; 1];
+
+        let buf_x = make_buffer(dev, &x);
+        let buf_w = make_buffer(dev, &dummy_weight);
+        let buf_out = make_empty(dev, total);
+        let buf_num_heads = make_const_u32(dev, num_heads as u32);
+        let buf_head_dim = make_const_u32(dev, head_dim as u32);
+        let buf_eps = make_const_f32(dev, 1e-5);
+        let buf_hdw = make_const_u32(dev, 0u32); // head_dim_weight = 0 → identity
+
+        let pipeline = backend.pipeline("headwise_rmsnorm").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_x), 0);
+        encoder.set_buffer(1, Some(&buf_w), 0);
+        encoder.set_buffer(2, Some(&buf_out), 0);
+        encoder.set_buffer(3, Some(&buf_num_heads), 0);
+        encoder.set_buffer(4, Some(&buf_head_dim), 0);
+        encoder.set_buffer(5, Some(&buf_eps), 0);
+        encoder.set_buffer(6, Some(&buf_hdw), 0);
+
+        let threadgroups = ::metal::MTLSize::new(num_heads as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(256, 1, 1);
+        encoder.dispatch_thread_groups(threadgroups, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_out, total);
+        // Output must match input exactly (identity pass-through)
+        for (i, (r, e)) in result.iter().zip(x.iter()).enumerate() {
+            assert_eq!(r, e, "headwise_rmsnorm identity[{i}]: got {r} expected {e}");
+        }
+    }
+
+    // ==================== Integration-style tests ====================
+
+    #[test]
+    fn gpu_int8_quantization_roundtrip() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let k: usize = 64;
+        let n: usize = 32;
+
+        // Create random f32 weights in [K, N] (already transposed layout)
+        let original: Vec<f32> = (0..k * n).map(|i| pseudo_rand(123, i) * 2.0).collect();
+
+        // Quantize using the same function used by MetalLayerWeights
+        let (int8_buf, scale_buf) =
+            super::gpu_buffers::quantize_and_upload_int8_public(dev, &original, k, n);
+
+        // Read back int8 data and scales
+        let int8_data = read_buffer_i8(&int8_buf, k * n);
+        let scales = read_buffer(&scale_buf, n);
+
+        // Dequantize: f32_out[k,j] = int8[k,j] * scale[j]
+        let mut max_rel_error: f32 = 0.0;
+        for i in 0..k {
+            for j in 0..n {
+                let dequantized = (int8_data[i * n + j] as f32) * scales[j];
+                let orig = original[i * n + j];
+                let abs_err = (dequantized - orig).abs();
+                // Relative error (avoid division by near-zero)
+                let rel_err = if orig.abs() > 1e-6 {
+                    abs_err / orig.abs()
+                } else {
+                    abs_err
+                };
+                if rel_err > max_rel_error {
+                    max_rel_error = rel_err;
+                }
+            }
+        }
+        assert!(
+            max_rel_error < 0.02,
+            "INT8 quantization roundtrip max relative error {max_rel_error} exceeds 2%"
+        );
+    }
+
+    #[test]
+    fn gemv_int8_matches_cpu_qgemm() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+
+        let k: usize = 128;
+        let n: usize = 64;
+
+        // Random activations
+        let a_f32: Vec<f32> = (0..k).map(|i| pseudo_rand(200, i)).collect();
+
+        // Create random f32 weights [K, N], quantize to int8
+        let weights_f32: Vec<f32> = (0..k * n).map(|i| pseudo_rand(300, i) * 2.0).collect();
+
+        // Per-column quantization (matching quantize_and_upload_int8 logic)
+        let mut scales = vec![0.0f32; n];
+        let mut int8_data = vec![0i8; k * n];
+        for j in 0..n {
+            let mut max_abs: f32 = 0.0;
+            for i in 0..k {
+                let v = weights_f32[i * n + j].abs();
+                if v > max_abs { max_abs = v; }
+            }
+            let scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
+            scales[j] = scale;
+            let inv_scale = 1.0 / scale;
+            for i in 0..k {
+                let val = weights_f32[i * n + j] * inv_scale;
+                int8_data[i * n + j] = val.round().clamp(-128.0, 127.0) as i8;
+            }
+        }
+
+        // GPU: gemv_int8
+        let buf_a = make_buffer(dev, &a_f32);
+        let buf_b = make_buffer_i8(dev, &int8_data);
+        let buf_scales = make_buffer(dev, &scales);
+        let buf_out = make_empty(dev, n);
+        let buf_n = make_const_u32(dev, n as u32);
+        let buf_k = make_const_u32(dev, k as u32);
+
+        let pipeline = backend.pipeline("gemv_int8").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_a), 0);
+        encoder.set_buffer(1, Some(&buf_b), 0);
+        encoder.set_buffer(2, Some(&buf_scales), 0);
+        encoder.set_buffer(3, Some(&buf_out), 0);
+        encoder.set_buffer(4, Some(&buf_n), 0);
+        encoder.set_buffer(5, Some(&buf_k), 0);
+
+        let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(n.min(256) as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let gpu_result = read_buffer(&buf_out, n);
+
+        // CPU reference: qgemm_int8 with M=1
+        // synapse_core::qgemm_int8 uses layout A_i8[M,K], B_i8[K,N] with
+        // per-row scales_a[M] and per-column scales_b[N].
+        // For our case: A is quantized activation (M=1), B is our int8 weights.
+        // The GPU gemv_int8 computes: out[j] = sum_k(a_f32[k] * i8[k*N+j]) * scale[j]
+        // qgemm_int8 computes: out[j] = scale_a[0] * sum_k(a_i8[k] * b_i8[k*N+j]) * scale_b[j]
+        // These differ (GPU uses f32 activations; CPU quantizes activations too).
+        // So we compare against the same CPU reference as the GPU: f32 activation * int8 weight * scale.
+        let mut cpu_result = vec![0.0f32; n];
+        for j in 0..n {
+            let mut sum = 0.0f32;
+            for ki in 0..k {
+                sum += a_f32[ki] * (int8_data[ki * n + j] as f32);
+            }
+            cpu_result[j] = sum * scales[j];
+        }
+
+        assert_approx(&gpu_result, &cpu_result, 1e-2, "gemv_int8 vs cpu reference");
+    }
 }
