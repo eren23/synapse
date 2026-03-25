@@ -25,7 +25,7 @@ impl ModelBuilder {
 
         // Models that use per-head Q/K norms (e.g. Qwen3).
         // LLaMA and Mistral do not have per-head norms.
-        let has_head_norms = !matches!(config.name.as_str(), "llama" | "mistral" | "phi" | "phi3" | "gemma" | "gemma2" | "qwen2" | "qwen2.5");
+        let has_head_norms = !matches!(config.name.as_str(), "llama" | "mistral" | "phi" | "phi3" | "gemma" | "gemma2" | "qwen2" | "qwen2.5" | "vit");
 
         let rope_style = match &config.position {
             PositionConfig::RoPE { style, .. } => *style,

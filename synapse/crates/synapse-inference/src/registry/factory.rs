@@ -30,6 +30,12 @@ struct SlidingWindowAttention {
     window_size: usize,
 }
 
+#[derive(Debug)]
+struct BidirectionalAttention {
+    num_heads: usize,
+    head_dim: usize,
+}
+
 impl AttentionVariant for GQAAttention {
     fn num_heads(&self) -> usize { self.num_heads }
     fn head_dim(&self) -> usize { self.head_dim }
@@ -57,6 +63,13 @@ impl AttentionVariant for SlidingWindowAttention {
     fn num_kv_heads(&self) -> usize { self.num_kv_heads }
     fn window_size(&self) -> Option<usize> { Some(self.window_size) }
     fn name(&self) -> &str { "SlidingWindow" }
+}
+
+impl AttentionVariant for BidirectionalAttention {
+    fn num_heads(&self) -> usize { self.num_heads }
+    fn head_dim(&self) -> usize { self.head_dim }
+    fn num_kv_heads(&self) -> usize { self.num_heads }
+    fn name(&self) -> &str { "Bidirectional" }
 }
 
 /// Create an attention variant trait object from config.
@@ -87,6 +100,12 @@ pub fn create_attention(config: &AttentionConfig) -> Box<dyn AttentionVariant> {
                 num_kv_heads: *num_kv_heads,
                 head_dim: *head_dim,
                 window_size: *window_size,
+            })
+        }
+        AttentionConfig::Bidirectional { num_heads, head_dim } => {
+            Box::new(BidirectionalAttention {
+                num_heads: *num_heads,
+                head_dim: *head_dim,
             })
         }
     }

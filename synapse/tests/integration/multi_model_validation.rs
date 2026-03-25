@@ -1,10 +1,11 @@
 //! Multi-architecture model validation tests.
 //!
-//! Verifies that all supported model architectures (Qwen3, LLaMA, Mistral, Phi, Gemma)
+//! Verifies that all supported model architectures (Qwen3, LLaMA, Mistral, Phi, Gemma, ViT)
 //! produce correct forward pass results with fake weights. Tests cover:
 //! - Forward pass producing finite logits with correct shape
 //! - Cached decode (prefill + forward_one) consistency
 //! - INT8 quantized forward pass producing finite logits
+//! - ViT forward producing finite embeddings and correct patch embedding shapes
 
 use std::collections::HashMap;
 
@@ -560,5 +561,130 @@ fn test_gemma_quantized_forward_produces_finite_logits() {
     assert!(
         output.logits.iter().all(|v| v.is_finite()),
         "Gemma quantized forward produced non-finite logits"
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// ViT (Vision Transformer)
+// ════════════════════════════════════════════════════════════════════════
+
+use synapse_inference::model::{ViTConfig, ViTModel};
+
+const VIT_IMAGE_SIZE: usize = 8;
+const VIT_PATCH_SIZE: usize = 4;
+const VIT_CHANNELS: usize = 3;
+const VIT_HIDDEN: usize = 32;
+const VIT_LAYERS: usize = 2;
+const VIT_HEADS: usize = 4;
+const VIT_INTER: usize = 64;
+const VIT_CLASSES: usize = 10;
+
+fn vit_config() -> ViTConfig {
+    ViTConfig {
+        image_size: VIT_IMAGE_SIZE,
+        patch_size: VIT_PATCH_SIZE,
+        channels: VIT_CHANNELS,
+        hidden_size: VIT_HIDDEN,
+        num_layers: VIT_LAYERS,
+        num_heads: VIT_HEADS,
+        intermediate_size: VIT_INTER,
+        num_classes: VIT_CLASSES,
+    }
+}
+
+fn build_vit(cfg: &ViTConfig) -> ViTModel {
+    let h = cfg.hidden_size;
+    let patch_dim = cfg.patch_size * cfg.patch_size * cfg.channels;
+    let inter = cfg.intermediate_size;
+    let seq_len = cfg.seq_len();
+
+    let mut model = ViTModel::from_config(cfg);
+
+    // Set weights directly
+    model.patch_proj = AlignedBuffer::from_slice(&gen_weights(h * patch_dim, 1));
+    model.cls_token = AlignedBuffer::from_slice(&gen_weights(h, 2));
+    model.pos_embed = AlignedBuffer::from_slice(&gen_weights(seq_len * h, 3));
+    model.final_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+
+    for (i, layer) in model.layers.iter_mut().enumerate() {
+        let s = (i as u32 + 1) * 100;
+        layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+        layer.w_q = AlignedBuffer::from_slice(&gen_weights(h * h, s + 1));
+        layer.w_k = AlignedBuffer::from_slice(&gen_weights(h * h, s + 2));
+        layer.w_v = AlignedBuffer::from_slice(&gen_weights(h * h, s + 3));
+        layer.w_o = AlignedBuffer::from_slice(&gen_weights(h * h, s + 4));
+        layer.ffn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+        layer.ffn_up = AlignedBuffer::from_slice(&gen_weights(inter * h, s + 5));
+        layer.ffn_down = AlignedBuffer::from_slice(&gen_weights(h * inter, s + 6));
+    }
+
+    if cfg.num_classes > 0 {
+        model.classifier_head =
+            Some(AlignedBuffer::from_slice(&gen_weights(cfg.num_classes * h, 999)));
+    }
+
+    model
+}
+
+#[test]
+fn test_vit_forward_produces_finite_embeddings() {
+    let cfg = vit_config();
+    let model = build_vit(&cfg);
+
+    let image: Vec<f32> = (0..cfg.image_size * cfg.image_size * cfg.channels)
+        .map(|i| (i as f32) / 255.0)
+        .collect();
+
+    let output = model.forward_image(&image, cfg.image_size, cfg.image_size);
+
+    // Embeddings should be [hidden_size] and finite
+    assert_eq!(output.embeddings.len(), VIT_HIDDEN);
+    assert!(
+        output.embeddings.iter().all(|v| v.is_finite()),
+        "ViT forward produced non-finite embeddings"
+    );
+
+    // Logits should be [num_classes] and finite
+    let logits = output.logits.as_ref().expect("expected logits for classification model");
+    assert_eq!(logits.len(), VIT_CLASSES);
+    assert!(
+        logits.iter().all(|v| v.is_finite()),
+        "ViT forward produced non-finite logits"
+    );
+}
+
+#[test]
+fn test_vit_patch_embed_shape() {
+    let cfg = vit_config();
+    let h = cfg.hidden_size;
+    let patch_dim = cfg.patch_size * cfg.patch_size * cfg.channels;
+
+    let image: Vec<f32> = (0..cfg.image_size * cfg.image_size * cfg.channels)
+        .map(|i| (i as f32) / 255.0)
+        .collect();
+
+    let projection = gen_weights(h * patch_dim, 42);
+    let result = synapse_inference::ops::patch_embed::patch_embed(
+        &image,
+        cfg.image_size,
+        cfg.image_size,
+        cfg.channels,
+        cfg.patch_size,
+        &projection,
+        h,
+    );
+
+    let expected_patches = cfg.num_patches();
+    assert_eq!(expected_patches, 4, "8x8 image with 4x4 patches should give 4 patches");
+    assert_eq!(
+        result.len(),
+        expected_patches * h,
+        "Expected {} elements, got {}",
+        expected_patches * h,
+        result.len()
+    );
+    assert!(
+        result.iter().all(|v| v.is_finite()),
+        "Patch embedding produced non-finite values"
     );
 }

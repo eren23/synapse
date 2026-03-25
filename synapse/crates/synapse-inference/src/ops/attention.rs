@@ -226,3 +226,100 @@ pub fn cached_attention_prefill(
 
     attn_output
 }
+
+/// Bidirectional (non-causal) attention for encoder models.
+/// Every position attends to every other — no masking.
+///
+/// Q, K, V: [seq_len * num_heads * head_dim] interleaved.
+/// Returns [seq_len * num_heads * head_dim].
+pub fn bidirectional_attention(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    seq_len: usize,
+    num_heads: usize,
+    head_dim: usize,
+) -> Vec<f32> {
+    let q_dim = num_heads * head_dim;
+    let scale = 1.0 / (head_dim as f32).sqrt();
+    let mut output = vec![0.0f32; seq_len * q_dim];
+
+    for head in 0..num_heads {
+        for t in 0..seq_len {
+            // Q·K^T for ALL positions (no causal mask)
+            let mut scores = vec![0.0f32; seq_len];
+            for s in 0..seq_len {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[t * q_dim + head * head_dim + d]
+                        * k[s * q_dim + head * head_dim + d];
+                }
+                scores[s] = dot * scale;
+            }
+
+            // Softmax
+            softmax_slice(&mut scores);
+
+            // Weighted V sum
+            for d in 0..head_dim {
+                let mut sum = 0.0f32;
+                for s in 0..seq_len {
+                    sum += scores[s] * v[s * q_dim + head * head_dim + d];
+                }
+                output[t * q_dim + head * head_dim + d] = sum;
+            }
+        }
+    }
+
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify bidirectional attention: all positions should have non-zero attention to all others.
+    #[test]
+    fn test_bidirectional_attention_no_mask() {
+        let seq_len = 4;
+        let num_heads = 2;
+        let head_dim = 8;
+        let q_dim = num_heads * head_dim;
+
+        // Generate Q, K, V with distinct values per position
+        let mut q = vec![0.0f32; seq_len * q_dim];
+        let mut k = vec![0.0f32; seq_len * q_dim];
+        let mut v = vec![0.0f32; seq_len * q_dim];
+        for t in 0..seq_len {
+            for h in 0..num_heads {
+                for d in 0..head_dim {
+                    let idx = t * q_dim + h * head_dim + d;
+                    q[idx] = ((t * 7 + h * 3 + d) as f32) * 0.1;
+                    k[idx] = ((t * 5 + h * 2 + d + 1) as f32) * 0.1;
+                    v[idx] = ((t + 1) as f32) * 0.5; // distinct per position
+                }
+            }
+        }
+
+        let output = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+
+        assert_eq!(output.len(), seq_len * q_dim);
+
+        // All outputs should be finite
+        assert!(
+            output.iter().all(|v| v.is_finite()),
+            "Bidirectional attention produced non-finite values"
+        );
+
+        // For bidirectional attention, the output at every position should be a
+        // weighted combination of ALL V values (not just past positions).
+        // Since V values differ per position, every output should be non-zero.
+        for t in 0..seq_len {
+            let row = &output[t * q_dim..(t + 1) * q_dim];
+            assert!(
+                row.iter().any(|v| *v != 0.0),
+                "Position {t} has all-zero output, expected non-zero from all-position attention"
+            );
+        }
+    }
+}

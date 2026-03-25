@@ -106,7 +106,7 @@ impl WeightMapper {
     /// Create a mapper for the given HuggingFace model type.
     ///
     /// Supported: `"qwen3"`, `"llama"`, `"mistral"`, `"phi"` / `"phi3"`,
-    /// `"gemma"` / `"gemma2"`.
+    /// `"gemma"` / `"gemma2"`, `"vit"`.
     pub fn from_model_type(model_type: &str) -> Result<Self, WeightError> {
         match model_type {
             "qwen3" => Ok(Self::qwen3()),
@@ -115,6 +115,7 @@ impl WeightMapper {
             "mistral" => Ok(Self::mistral()),
             "phi" | "phi3" => Ok(Self::phi()),
             "gemma" | "gemma2" => Ok(Self::gemma()),
+            "vit" => Ok(Self::vit()),
             _ => Err(WeightError::InvalidFormat(format!(
                 "Unsupported model type: {model_type}"
             ))),
@@ -209,6 +210,55 @@ impl WeightMapper {
     /// have a separate lm_head.
     pub fn gemma() -> Self {
         Self::llama()
+    }
+
+    /// Create a mapper for HuggingFace ViT (Vision Transformer) weight names.
+    ///
+    /// Maps `google/vit-base-patch16-224` style naming to Synapse internal paths.
+    /// ViT uses LayerNorm, bidirectional attention, and GELU FFN (non-gated).
+    pub fn vit() -> Self {
+        WeightMapper::new(vec![
+            rule(
+                "vit.embeddings.patch_embeddings.projection.weight",
+                "patch_proj",
+            ),
+            rule("vit.embeddings.cls_token", "cls_token"),
+            rule("vit.embeddings.position_embeddings", "pos_embed"),
+            rule(
+                "vit.encoder.layer.{i}.attention.attention.query.weight",
+                "layers[{i}].attention.w_q",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.attention.attention.key.weight",
+                "layers[{i}].attention.w_k",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.attention.attention.value.weight",
+                "layers[{i}].attention.w_v",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.attention.output.dense.weight",
+                "layers[{i}].attention.w_o",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.intermediate.dense.weight",
+                "layers[{i}].ffn.w_up",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.output.dense.weight",
+                "layers[{i}].ffn.w_down",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.layernorm_before.weight",
+                "layers[{i}].attn_norm.weight",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.layernorm_after.weight",
+                "layers[{i}].ffn_norm.weight",
+            ),
+            rule("vit.layernorm.weight", "norm.weight"),
+            rule("classifier.weight", "classifier.weight"),
+        ])
     }
 
     /// Map a single source name. Returns `None` if no rule matches.

@@ -4,5 +4,6 @@ pub mod activation;
 pub mod attention;
 pub mod matmul;
 pub mod norm;
+pub mod patch_embed;
 pub mod rope;
 pub mod vector;

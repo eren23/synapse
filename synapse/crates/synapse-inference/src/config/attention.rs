@@ -27,6 +27,12 @@ pub enum AttentionConfig {
         head_dim: usize,
         window_size: usize,
     },
+    /// Bidirectional (non-causal) attention for encoder models (ViT, BERT, JEPA).
+    /// Every position attends to every other position — no causal mask.
+    Bidirectional {
+        num_heads: usize,
+        head_dim: usize,
+    },
 }
 
 impl AttentionConfig {
@@ -35,7 +41,8 @@ impl AttentionConfig {
             Self::GQA { num_heads, .. }
             | Self::MHA { num_heads, .. }
             | Self::MQA { num_heads, .. }
-            | Self::SlidingWindow { num_heads, .. } => *num_heads,
+            | Self::SlidingWindow { num_heads, .. }
+            | Self::Bidirectional { num_heads, .. } => *num_heads,
         }
     }
 
@@ -44,7 +51,8 @@ impl AttentionConfig {
             Self::GQA { head_dim, .. }
             | Self::MHA { head_dim, .. }
             | Self::MQA { head_dim, .. }
-            | Self::SlidingWindow { head_dim, .. } => *head_dim,
+            | Self::SlidingWindow { head_dim, .. }
+            | Self::Bidirectional { head_dim, .. } => *head_dim,
         }
     }
 
@@ -53,7 +61,7 @@ impl AttentionConfig {
             Self::GQA { num_kv_heads, .. } | Self::SlidingWindow { num_kv_heads, .. } => {
                 *num_kv_heads
             }
-            Self::MHA { num_heads, .. } => *num_heads,
+            Self::MHA { num_heads, .. } | Self::Bidirectional { num_heads, .. } => *num_heads,
             Self::MQA { .. } => 1,
         }
     }
