@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["synapse-wasm"]
 resolver = "2"
 
 [package]
@@ -154,3 +155,15 @@ path = "examples/clip_similarity.rs"
 [[example]]
 name = "jepa_embed"
 path = "examples/jepa_embed.rs"
+
+[[example]]
+name = "world_model_rollout"
+path = "examples/world_model_rollout.rs"
+
+[[example]]
+name = "lewm_demo"
+path = "examples/lewm_demo.rs"
+
+[[example]]
+name = "geometric_attention_demo"
+path = "examples/geometric_attention_demo.rs"

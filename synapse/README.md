@@ -1,6 +1,6 @@
 # Synapse
 
-A modular LLM inference engine built in Rust with Zig SIMD kernels and Metal GPU acceleration.
+A modular ML inference engine built in Rust with Zig SIMD kernels, Metal GPU acceleration, and WebAssembly support. Runs LLMs, Vision Transformers, World Models, and Flow Matching generators — on CPU, GPU, or in the browser.
 
 ## Performance
 

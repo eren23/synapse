@@ -2,6 +2,7 @@
 
 pub mod activation;
 pub mod attention;
+pub mod geometric;
 pub mod matmul;
 pub mod norm;
 pub mod patch_embed;

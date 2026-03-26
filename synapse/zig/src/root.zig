@@ -22,4 +22,5 @@ pub const ops = struct {
     pub const quantize = @import("ops/quantize.zig");
     pub const qmatmul = @import("ops/qmatmul.zig");
     pub const kvcache = @import("ops/kvcache.zig");
+    pub const geometric_attention = @import("ops/geometric_attention.zig");
 };

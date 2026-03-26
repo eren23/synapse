@@ -464,3 +464,82 @@ mod tests {
         );
     }
 }
+
+// ── Real-time Rollout API ────────────────────────────────────────────
+
+/// Real-time world model rollout for robotics and planning.
+///
+/// Maintains a latent state that evolves through action-conditioned
+/// dynamics predictions. Designed for <10ms per step latency.
+///
+/// ```ignore
+/// let mut rollout = RealtimeRollout::new(world_model);
+/// rollout.reset(&image, 224, 224);  // encode initial observation
+///
+/// loop {
+///     let action = controller.get_action(&rollout.state());
+///     let next = rollout.step(&action);
+///     // next.embedding is the predicted latent state
+/// }
+/// ```
+pub struct RealtimeRollout {
+    model: WorldModel,
+    current_state: LatentState,
+    step_count: usize,
+}
+
+impl RealtimeRollout {
+    /// Create a new rollout session from a world model.
+    pub fn new(model: WorldModel) -> Self {
+        let latent_dim = model.config.latent_dim;
+        Self {
+            model,
+            current_state: LatentState {
+                embedding: vec![0.0f32; latent_dim],
+            },
+            step_count: 0,
+        }
+    }
+
+    /// Reset the rollout by encoding a new observation (image).
+    pub fn reset(&mut self, image: &[f32], h: usize, w: usize) {
+        self.current_state = self.model.encode(image, h, w);
+        self.step_count = 0;
+    }
+
+    /// Reset with a pre-encoded latent state.
+    pub fn reset_with_state(&mut self, state: LatentState) {
+        self.current_state = state;
+        self.step_count = 0;
+    }
+
+    /// Single dynamics step: predict next state given current state + action.
+    /// Returns the new latent state. This is the hot path — target <10ms.
+    pub fn step(&mut self, action: &[f32]) -> &LatentState {
+        self.current_state = self.model.predict_next(&self.current_state, action);
+        self.step_count += 1;
+        &self.current_state
+    }
+
+    /// Plan ahead: rollout N steps with given actions without modifying current state.
+    /// Returns predicted trajectory without advancing the internal state.
+    pub fn plan(&self, actions: &[Vec<f32>]) -> Vec<LatentState> {
+        let output = self.model.rollout(&self.current_state, actions);
+        output.states
+    }
+
+    /// Current latent state.
+    pub fn state(&self) -> &LatentState {
+        &self.current_state
+    }
+
+    /// Number of dynamics steps taken since last reset.
+    pub fn steps(&self) -> usize {
+        self.step_count
+    }
+
+    /// Access the underlying world model.
+    pub fn model(&self) -> &WorldModel {
+        &self.model
+    }
+}

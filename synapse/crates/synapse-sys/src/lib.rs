@@ -307,6 +307,14 @@ extern "C" {
 
     /// Q4_0 matrix-vector multiply: C[1,N] = A_f32[1,K] @ dequant(B_q4[N,K]).
     /// K must be a multiple of 32.
+    /// Geometric attention: distance-biased attention for 3D point clouds.
+    pub fn syn_geometric_attention(
+        n: usize, d: usize, pos_dim: usize,
+        q: *const f32, k: *const f32, v: *const f32,
+        positions: *const f32, out: *mut f32,
+        sigma: f32,
+    ) -> syn_status_t;
+
     pub fn syn_q4_0_gemv(
         n: usize, k: usize,
         a: *const f32,

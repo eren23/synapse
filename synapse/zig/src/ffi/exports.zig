@@ -1330,6 +1330,32 @@ pub export fn syn_fused_attention_bidi(
 }
 
 // ============================================================
+// Geometric Attention (distance-biased attention for 3D point clouds)
+// ============================================================
+
+pub export fn syn_geometric_attention(
+    n: usize,
+    d: usize,
+    pos_dim: usize,
+    q: ?[*]const f32,
+    k: ?[*]const f32,
+    v: ?[*]const f32,
+    positions: ?[*]const f32,
+    out: ?[*]f32,
+    sigma: f32,
+) c_int {
+    const q_ptr = q orelse return SYN_ERR_NULL_PTR;
+    const k_ptr = k orelse return SYN_ERR_NULL_PTR;
+    const v_ptr = v orelse return SYN_ERR_NULL_PTR;
+    const pos_ptr = positions orelse return SYN_ERR_NULL_PTR;
+    const o_ptr = out orelse return SYN_ERR_NULL_PTR;
+    if (n == 0 or d == 0) return SYN_OK;
+
+    const geo_attn = @import("synapse").ops.geometric_attention;
+    geo_attn.geometricAttention(n, d, pos_dim, q_ptr, k_ptr, v_ptr, pos_ptr, o_ptr, sigma);
+    return SYN_OK;
+}
+
 // Q4_0 GEMV (4-bit quantized matrix-vector multiply)
 // ============================================================
 

@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Synapse — Browser ML Demos</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'SF Mono', 'Fira Code', monospace; background: #0a0a0a; color: #e0e0e0; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+        h1 { font-size: 22px; margin-bottom: 4px; color: #fff; }
+        h2 { font-size: 15px; color: #4fc3f7; margin-bottom: 10px; }
+        .subtitle { color: #888; font-size: 12px; margin-bottom: 16px; }
+        .tag { display: inline-block; background: #333; color: #4fc3f7; padding: 2px 6px; border-radius: 3px; font-size: 10px; margin-right: 3px; }
+        .card { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+        .row { display: flex; gap: 12px; flex-wrap: wrap; }
+        .col { flex: 1; min-width: 280px; }
+        canvas { border: 1px solid #333; border-radius: 4px; background: #111; display: block; }
+        button { background: #4fc3f7; color: #000; border: none; padding: 7px 14px; border-radius: 4px; cursor: pointer; font-family: inherit; font-weight: bold; font-size: 11px; margin: 2px; }
+        button:hover { background: #81d4fa; }
+        button:disabled { background: #333; color: #666; cursor: not-allowed; }
+        button.active-tab { background: #fff; color: #000; }
+        .tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+        .tabs button { font-size: 13px; padding: 8px 20px; border-radius: 6px 6px 0 0; }
+        .tab-panel { display: none; }
+        .tab-panel.active { display: block; }
+        .metric { display: flex; justify-content: space-between; padding: 3px 0; font-size: 11px; }
+        .metric .label { color: #888; }
+        .metric .value { color: #4caf50; font-weight: bold; }
+        #log { background: #111; border: 1px solid #222; border-radius: 4px; padding: 8px; font-size: 10px; max-height: 80px; overflow-y: auto; white-space: pre-wrap; color: #666; margin-top: 8px; }
+        .loading-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(10,10,10,0.95); z-index: 1000; justify-content: center; align-items: center; flex-direction: column; }
+        .loading-overlay.active { display: flex; }
+        .loading-text { font-size: 16px; color: #4fc3f7; margin-bottom: 12px; }
+        .progress-bar-container { width: 400px; max-width: 90vw; height: 5px; background: #222; border-radius: 3px; overflow: hidden; }
+        .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #4fc3f7, #81d4fa); border-radius: 3px; transition: width 0.2s; }
+        .progress-pct { font-size: 10px; color: #888; margin-top: 4px; }
+        .slider-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 11px; }
+        .slider-row input[type=range] { flex: 1; accent-color: #4fc3f7; }
+        .slider-row .val { color: #4fc3f7; min-width: 40px; text-align: right; }
+        .heatmap-container { overflow-x: auto; }
+        @media (max-width: 700px) { .row { flex-direction: column; } .col { min-width: unset; } }
+    </style>
+</head>
+<body>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-text" id="loading-text">Loading LeWorldModel (69MB)...</div>
+        <div class="progress-bar-container"><div class="progress-bar" id="progress-bar"></div></div>
+        <div class="progress-pct" id="progress-pct">0%</div>
+    </div>
+
+    <div class="container">
+        <h1>Synapse — ML Inference in the Browser</h1>
+        <p class="subtitle">
+            Real models running locally via WASM. No server, no GPU, no cloud.
+            <span class="tag">104KB engine</span>
+            <span class="tag">WASM SIMD</span>
+            <span class="tag">Pure Rust</span>
+        </p>
+
+        <div class="tabs">
+            <button class="active-tab" onclick="switchTab('lewm')">World Model</button>
+            <button onclick="switchTab('vit')">ViT Encoder</button>
+            <button onclick="switchTab('diffusion')">Diffusion</button>
+        </div>
+
+        <!-- ═══════════════ TAB 1: LeWM Latent Playground ═══════════════ -->
+        <div class="tab-panel active" id="tab-lewm">
+            <div class="card">
+                <h2>LeWorldModel — Latent Dynamics</h2>
+                <p style="font-size:11px; color:#888; margin-bottom:10px;">
+                    18M-param world model (JEPA) predicts future states in latent space.
+                    Same starting image + different actions = different predicted futures.
+                </p>
+                <button id="btn-load" onclick="loadModel()">Load Model (69MB)</button>
+                <button onclick="runLatentDemo()" disabled id="btn-run-latent">Run Latent Rollout</button>
+                <button onclick="runRandomActions()" disabled id="btn-random">Random Actions x5</button>
+            </div>
+
+            <div class="row">
+                <div class="col">
+                    <div class="card">
+                        <h2>Action Controls</h2>
+                        <div class="slider-row">
+                            <span style="min-width:30px">dx</span>
+                            <input type="range" id="action-dx" min="-100" max="100" value="50">
+                            <span class="val" id="val-dx">0.50</span>
+                        </div>
+                        <div class="slider-row">
+                            <span style="min-width:30px">dy</span>
+                            <input type="range" id="action-dy" min="-100" max="100" value="0">
+                            <span class="val" id="val-dy">0.00</span>
+                        </div>
+                        <div style="font-size:10px; color:#666; margin-top:6px;">
+                            Presets:
+                            <button onclick="setAction(80,0)" style="font-size:10px;padding:3px 8px;">Right</button>
+                            <button onclick="setAction(-80,0)" style="font-size:10px;padding:3px 8px;">Left</button>
+                            <button onclick="setAction(0,-80)" style="font-size:10px;padding:3px 8px;">Up</button>
+                            <button onclick="setAction(0,80)" style="font-size:10px;padding:3px 8px;">Down</button>
+                            <button onclick="setAction(0,0)" style="font-size:10px;padding:3px 8px;">Stay</button>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h2>Metrics</h2>
+                        <div class="metric"><span class="label">Status</span><span class="value" id="status">Not loaded</span></div>
+                        <div class="metric"><span class="label">Encode</span><span class="value" id="encode-time">&mdash;</span></div>
+                        <div class="metric"><span class="label">Rollout</span><span class="value" id="rollout-time">&mdash;</span></div>
+                        <div class="metric"><span class="label">Steps/sec</span><span class="value" id="steps-sec">&mdash;</span></div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="card">
+                        <h2>Latent Trajectories</h2>
+                        <canvas id="traj-canvas" width="500" height="400"></canvas>
+                        <div style="font-size:10px; color:#666; margin-top:4px;">
+                            192-dim latent projected to 2D (dims 0,1). Each color = different action sequence.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Latent Heatmap (192 dims x 30 steps)</h2>
+                <div class="heatmap-container">
+                    <canvas id="heatmap-canvas" width="900" height="220"></canvas>
+                </div>
+                <div style="font-size:10px; color:#666; margin-top:4px;">
+                    Each row = one latent dimension. Each column = one time step. Color = activation magnitude.
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ TAB 2: ViT Image Understanding ═══════════════ -->
+        <div class="tab-panel" id="tab-vit">
+            <div class="card">
+                <h2>ViT Image Encoder — Similarity & Embeddings</h2>
+                <p style="font-size:11px; color:#888; margin-bottom:10px;">
+                    12-layer Vision Transformer encodes 224x224 images into 192-dim embeddings.
+                    Similar images cluster together. Uses the same ViT from the world model.
+                </p>
+                <button onclick="loadModel()" id="btn-load-vit">Load Model (69MB)</button>
+                <button onclick="runVitDemo()" id="btn-vit-run">Encode All Images</button>
+                <span style="font-size:11px; color:#888; margin-left:8px;" id="vit-status"></span>
+            </div>
+
+            <div class="row">
+                <div class="col">
+                    <div class="card">
+                        <h2>Input Images (6 synthetic scenes)</h2>
+                        <div style="display: flex; flex-wrap: wrap; gap: 6px;" id="vit-thumbs"></div>
+                        <div style="font-size:10px; color:#666; margin-top:6px;">
+                            Each image is 224x224 with distinct patterns. Click "Encode All" to process through ViT.
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h2>Embedding Scatter (PCA 2D)</h2>
+                        <canvas id="vit-scatter" width="400" height="300"></canvas>
+                        <div style="font-size:10px; color:#666; margin-top:4px;">
+                            192-dim embeddings projected to 2D via PCA. Similar images cluster.
+                        </div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="card">
+                        <h2>Cosine Similarity Matrix</h2>
+                        <canvas id="vit-simmatrix" width="400" height="400"></canvas>
+                        <div style="font-size:10px; color:#666; margin-top:4px;">
+                            Green = high similarity. Red = low similarity. Diagonal = 1.0 (self).
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h2>Embedding Dimensions (bar chart)</h2>
+                        <canvas id="vit-bars" width="400" height="150"></canvas>
+                        <div style="font-size:10px; color:#666; margin-top:4px;">
+                            First 50 dimensions of each embedding. Colors match image labels.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ═══════════════ TAB 3: Flow Matching Generation ═══════════════ -->
+        <div class="tab-panel" id="tab-diffusion">
+            <div class="card">
+                <h2>Neo-Unify — Flow Matching Image Generation</h2>
+                <p style="font-size:11px; color:#888; margin-bottom:10px;">
+                    2.4M-param Mixture-of-Transformers model generates 16x16 RGB images via ODE flow matching.
+                    RK2 solver with classifier-free guidance. Runs entirely in WASM.
+                </p>
+                <button onclick="loadDiffusionModel()" id="btn-load-diff">Load Neo-Unify (9.3MB)</button>
+                <button onclick="generateImages()" disabled id="btn-generate">Generate All Classes</button>
+                <button onclick="generateWithSteps()" disabled id="btn-gen-steps">Show Denoising Steps</button>
+                <span style="font-size:11px; color:#888; margin-left:8px;" id="diff-status"></span>
+            </div>
+
+            <div class="row">
+                <div class="col">
+                    <div class="card">
+                        <h2>Controls</h2>
+                        <div class="slider-row">
+                            <span style="min-width:80px">Guidance</span>
+                            <input type="range" id="cfg-scale" min="10" max="50" value="30">
+                            <span class="val" id="val-cfg">3.0</span>
+                        </div>
+                        <div class="slider-row">
+                            <span style="min-width:80px">ODE Steps</span>
+                            <input type="range" id="num-steps" min="5" max="30" value="10">
+                            <span class="val" id="val-steps">10</span>
+                        </div>
+                        <div class="slider-row">
+                            <span style="min-width:80px">Seed</span>
+                            <input type="range" id="diff-seed" min="0" max="9999" value="42">
+                            <span class="val" id="val-seed">42</span>
+                        </div>
+                        <div style="font-size:10px; color:#666; margin-top:6px;">
+                            Classes: 0-5 (6 synthetic shape categories). Higher guidance = stronger class conditioning.
+                        </div>
+                    </div>
+                </div>
+                <div class="col">
+                    <div class="card">
+                        <h2>Generated Images (6 classes)</h2>
+                        <canvas id="gen-grid" width="500" height="200"></canvas>
+                        <div style="font-size:10px; color:#666; margin-top:4px;">
+                            Each column = one class. 16x16 RGB, scaled up 5x for visibility.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Denoising Process (noise → image)</h2>
+                <canvas id="denoise-steps" width="900" height="120"></canvas>
+                <div style="font-size:10px; color:#666; margin-top:4px;">
+                    Left = pure noise. Right = final image. Each step refines the image via ODE integration.
+                </div>
+            </div>
+        </div>
+
+        <div id="log"></div>
+    </div>
+
+    <script type="module">
+        import init, { RealLeWM, NeoUnify } from '../synapse-wasm/pkg/synapse_wasm.js';
+
+        let model = null;
+        let wasmReady = false;
+        let z0 = null; // cached initial latent
+        let allTrajectories = []; // stored for heatmap
+
+        const COLORS = ['#4fc3f7', '#4caf50', '#ff9800', '#e91e63', '#ab47bc', '#26c6da', '#ffee58', '#ef5350'];
+        const STEPS = 30;
+
+        async function ensureWasm() {
+            if (!wasmReady) { await init(); wasmReady = true; }
+        }
+
+        // ── Tab switching ───────────────────────────────────────────
+
+        window.switchTab = function(tab) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active-tab'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            event.target.classList.add('active-tab');
+        };
+
+        // ── Slider updates ──────────────────────────────────────────
+
+        document.getElementById('action-dx').addEventListener('input', e => {
+            document.getElementById('val-dx').textContent = (e.target.value / 100).toFixed(2);
+        });
+        document.getElementById('action-dy').addEventListener('input', e => {
+            document.getElementById('val-dy').textContent = (e.target.value / 100).toFixed(2);
+        });
+
+        window.setAction = function(dx, dy) {
+            document.getElementById('action-dx').value = dx;
+            document.getElementById('action-dy').value = dy;
+            document.getElementById('val-dx').textContent = (dx / 100).toFixed(2);
+            document.getElementById('val-dy').textContent = (dy / 100).toFixed(2);
+        };
+
+        // ── Model Loading ───────────────────────────────────────────
+
+        window.loadModel = async function() {
+            await ensureWasm();
+            const overlay = document.getElementById('loading-overlay');
+            const bar = document.getElementById('progress-bar');
+            const pct = document.getElementById('progress-pct');
+            overlay.classList.add('active');
+
+            try {
+                const resp = await fetch('lewm_weights.bin');
+                const total = parseInt(resp.headers.get('Content-Length') || '72201733');
+                const reader = resp.body.getReader();
+                let received = 0;
+                const chunks = [];
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+                    const p = (received / total * 100).toFixed(1);
+                    bar.style.width = p + '%';
+                    pct.textContent = `${p}% (${(received/1048576).toFixed(1)}MB)`;
+                }
+
+                document.getElementById('loading-text').textContent = 'Parsing weights...';
+                const allBytes = new Uint8Array(received);
+                let off = 0;
+                for (const c of chunks) { allBytes.set(c, off); off += c.length; }
+
+                const t0 = performance.now();
+                model = new RealLeWM(allBytes);
+                const loadMs = (performance.now() - t0).toFixed(0);
+
+                // Encode test image once
+                document.getElementById('loading-text').textContent = 'Encoding initial image...';
+                const pixels = makeTestImage(224, 224);
+                const t1 = performance.now();
+                z0 = model.encode_image(pixels, 224, 224);
+                const encMs = (performance.now() - t1).toFixed(0);
+
+                document.getElementById('status').textContent = `Ready`;
+                document.getElementById('encode-time').textContent = encMs + 'ms';
+                document.getElementById('btn-run-latent').disabled = false;
+                document.getElementById('btn-random').disabled = false;
+                document.getElementById('vit-status').textContent = 'Model loaded — ready to encode';
+                log(`Loaded in ${loadMs}ms. Encoded test image in ${encMs}ms. Latent dim: ${model.latent_dim()}`);
+            } catch(e) {
+                log(`ERROR: ${e.message}`);
+            } finally {
+                overlay.classList.remove('active');
+            }
+        };
+
+        // ── Latent Rollout Demo ─────────────────────────────────────
+
+        window.runLatentDemo = function() {
+            if (!model || !z0) return;
+
+            const dx = parseInt(document.getElementById('action-dx').value) / 100;
+            const dy = parseInt(document.getElementById('action-dy').value) / 100;
+
+            // Build action tensor
+            const actions = new Float32Array(STEPS * 10);
+            for (let s = 0; s < STEPS; s++) {
+                actions[s * 10 + 0] = dx;
+                actions[s * 10 + 1] = dy;
+            }
+
+            const t0 = performance.now();
+            const traj = model.rollout(new Float32Array(z0), actions, STEPS);
+            const ms = performance.now() - t0;
+
+            document.getElementById('rollout-time').textContent = ms.toFixed(0) + `ms (${STEPS} steps)`;
+            document.getElementById('steps-sec').textContent = (1000 * STEPS / ms).toFixed(0);
+
+            // Add to trajectory list
+            allTrajectories.push({
+                traj, label: `dx=${dx.toFixed(2)} dy=${dy.toFixed(2)}`,
+                color: COLORS[allTrajectories.length % COLORS.length]
+            });
+            if (allTrajectories.length > 8) allTrajectories.shift();
+
+            drawAllTrajectories();
+            drawHeatmap(traj);
+            log(`Rollout: dx=${dx.toFixed(2)} dy=${dy.toFixed(2)}, ${ms.toFixed(0)}ms`);
+        };
+
+        window.runRandomActions = function() {
+            if (!model || !z0) return;
+            allTrajectories = [];
+
+            const scenarios = [
+                { dx: 0.8, dy: 0, label: 'Right' },
+                { dx: -0.8, dy: 0, label: 'Left' },
+                { dx: 0, dy: -0.8, label: 'Up' },
+                { dx: 0, dy: 0.8, label: 'Down' },
+                { dx: 0, dy: 0, label: 'Stay' },
+            ];
+
+            let totalMs = 0;
+            for (let i = 0; i < scenarios.length; i++) {
+                const sc = scenarios[i];
+                const actions = new Float32Array(STEPS * 10);
+                for (let s = 0; s < STEPS; s++) {
+                    // Add slight random variation per step
+                    actions[s * 10 + 0] = sc.dx + (Math.random() - 0.5) * 0.1;
+                    actions[s * 10 + 1] = sc.dy + (Math.random() - 0.5) * 0.1;
+                }
+                const t0 = performance.now();
+                const traj = model.rollout(new Float32Array(z0), actions, STEPS);
+                totalMs += performance.now() - t0;
+
+                allTrajectories.push({
+                    traj, label: sc.label,
+                    color: COLORS[i % COLORS.length]
+                });
+            }
+
+            document.getElementById('rollout-time').textContent = totalMs.toFixed(0) + `ms (5x${STEPS})`;
+            document.getElementById('steps-sec').textContent = (1000 * STEPS * 5 / totalMs).toFixed(0);
+
+            drawAllTrajectories();
+            drawHeatmap(allTrajectories[0].traj); // show first in heatmap
+            log(`5 random rollouts in ${totalMs.toFixed(0)}ms`);
+        };
+
+        // ── Drawing ─────────────────────────────────────────────────
+
+        function drawAllTrajectories() {
+            const canvas = document.getElementById('traj-canvas');
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            // Grid
+            ctx.strokeStyle = '#1a1a1a';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= W; i += 50) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, H); ctx.stroke();
+            }
+            for (let i = 0; i <= H; i += 50) {
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(W, i); ctx.stroke();
+            }
+
+            if (allTrajectories.length === 0) return;
+
+            // Compute global bounds
+            let minX = z0[0], maxX = z0[0], minY = z0[1], maxY = z0[1];
+            for (const { traj } of allTrajectories) {
+                for (let s = 0; s < STEPS; s++) {
+                    const x = traj[s * 192 + 0], y = traj[s * 192 + 1];
+                    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                    minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+                }
+            }
+            const rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1;
+            const pad = 40;
+            const toX = v => pad + ((v - minX) / rangeX) * (W - 2 * pad);
+            const toY = v => pad + ((v - minY) / rangeY) * (H - 2 * pad);
+
+            // Start point
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(toX(z0[0]), toY(z0[1]), 7, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#888';
+            ctx.font = '10px monospace';
+            ctx.fillText('z\u2080', toX(z0[0]) + 10, toY(z0[1]) - 6);
+
+            // Draw each trajectory
+            for (const { traj, color, label } of allTrajectories) {
+                // Line
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(toX(z0[0]), toY(z0[1]));
+                for (let s = 0; s < STEPS; s++) {
+                    ctx.lineTo(toX(traj[s * 192 + 0]), toY(traj[s * 192 + 1]));
+                }
+                ctx.stroke();
+
+                // Dots with growing opacity
+                for (let s = 0; s < STEPS; s++) {
+                    const x = toX(traj[s * 192 + 0]), y = toY(traj[s * 192 + 1]);
+                    ctx.globalAlpha = 0.3 + 0.7 * (s / STEPS);
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+
+                // Glowing endpoint
+                const ex = toX(traj[(STEPS - 1) * 192 + 0]);
+                const ey = toY(traj[(STEPS - 1) * 192 + 1]);
+                ctx.shadowColor = color;
+                ctx.shadowBlur = 10;
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+
+                // Label
+                ctx.fillStyle = color;
+                ctx.font = '10px monospace';
+                ctx.fillText(label, ex + 8, ey - 4);
+            }
+        }
+
+        function drawHeatmap(traj) {
+            const canvas = document.getElementById('heatmap-canvas');
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            const dims = 192;
+            const cellW = (W - 40) / STEPS;
+            const cellH = (H - 30) / dims;
+
+            // Find value range
+            let vmin = Infinity, vmax = -Infinity;
+            for (let s = 0; s < STEPS; s++) {
+                for (let d = 0; d < dims; d++) {
+                    const v = traj[s * 192 + d];
+                    vmin = Math.min(vmin, v);
+                    vmax = Math.max(vmax, v);
+                }
+            }
+            const vrange = (vmax - vmin) || 1;
+
+            // Draw cells
+            for (let s = 0; s < STEPS; s++) {
+                for (let d = 0; d < dims; d++) {
+                    const v = (traj[s * 192 + d] - vmin) / vrange; // 0-1
+                    // Blue-white-red colormap
+                    let r, g, b;
+                    if (v < 0.5) {
+                        const t = v * 2;
+                        r = Math.round(10 + t * 245);
+                        g = Math.round(10 + t * 245);
+                        b = Math.round(80 + t * 175);
+                    } else {
+                        const t = (v - 0.5) * 2;
+                        r = Math.round(255 - t * 55);
+                        g = Math.round(255 - t * 200);
+                        b = Math.round(255 - t * 200);
+                    }
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    ctx.fillRect(35 + s * cellW, 5 + d * cellH, cellW + 0.5, cellH + 0.5);
+                }
+            }
+
+            // Labels
+            ctx.fillStyle = '#666';
+            ctx.font = '9px monospace';
+            ctx.fillText('dim 0', 0, 12);
+            ctx.fillText('dim 191', 0, H - 22);
+            ctx.fillText('step 0', 35, H - 5);
+            ctx.fillText(`step ${STEPS}`, W - 50, H - 5);
+
+            // Color scale
+            for (let i = 0; i < 60; i++) {
+                const t = i / 60;
+                let r, g, b;
+                if (t < 0.5) { r = Math.round(10 + t*2*245); g = r; b = Math.round(80 + t*2*175); }
+                else { const u = (t-0.5)*2; r = Math.round(255-u*55); g = Math.round(255-u*200); b = g; }
+                ctx.fillStyle = `rgb(${r},${g},${b})`;
+                ctx.fillRect(W - 15, 5 + i * 3, 10, 3);
+            }
+            ctx.fillStyle = '#666';
+            ctx.fillText(vmax.toFixed(1), W - 30, 12);
+            ctx.fillText(vmin.toFixed(1), W - 30, H - 22);
+        }
+
+        // ── Helpers ─────────────────────────────────────────────────
+
+        function makeTestImage(h, w) {
+            const pixels = new Float32Array(h * w * 3);
+            const mean = [0.485, 0.456, 0.406];
+            const std = [0.229, 0.224, 0.225];
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = (y * w + x) * 3;
+                    const inT = (y < h * 0.3 && x > w * 0.2 && x < w * 0.8) ||
+                                (y >= h * 0.3 && y < h * 0.7 && x > w * 0.35 && x < w * 0.65);
+                    const raw0 = inT ? 0.8 : 0.2;
+                    const raw1 = inT ? 0.3 : 0.7;
+                    const raw2 = inT ? 0.2 : 0.5;
+                    pixels[idx] = (raw0 - mean[0]) / std[0];
+                    pixels[idx + 1] = (raw1 - mean[1]) / std[1];
+                    pixels[idx + 2] = (raw2 - mean[2]) / std[2];
+                }
+            }
+            return pixels;
+        }
+
+        function log(msg) {
+            const el = document.getElementById('log');
+            el.textContent += (el.textContent ? '\n' : '') + msg;
+            el.scrollTop = el.scrollHeight;
+        }
+
+        // ── ViT Image Comparison Demo ────────────────────────────────
+
+        const VIT_IMAGES = [
+            { name: 'Red Circle', color: [0.8, 0.2, 0.2], shape: 'circle' },
+            { name: 'Red Square', color: [0.7, 0.15, 0.15], shape: 'square' },
+            { name: 'Blue Circle', color: [0.2, 0.3, 0.8], shape: 'circle' },
+            { name: 'Green Scene', color: [0.2, 0.7, 0.3], shape: 'triangle' },
+            { name: 'Yellow Cross', color: [0.8, 0.8, 0.2], shape: 'cross' },
+            { name: 'Dark Stripes', color: [0.3, 0.3, 0.3], shape: 'stripes' },
+        ];
+
+        function generateScene(desc, h, w) {
+            const pixels = new Float32Array(h * w * 3);
+            const mean = [0.485, 0.456, 0.406];
+            const std = [0.229, 0.224, 0.225];
+            const cx = w / 2, cy = h / 2;
+
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const idx = (y * w + x) * 3;
+                    let inShape = false;
+                    const dx = x - cx, dy = y - cy;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+
+                    if (desc.shape === 'circle') inShape = dist < 70;
+                    else if (desc.shape === 'square') inShape = Math.abs(dx) < 60 && Math.abs(dy) < 60;
+                    else if (desc.shape === 'triangle') inShape = dy > -60 && dy < 60 && Math.abs(dx) < (60 - dy) * 0.8;
+                    else if (desc.shape === 'cross') inShape = (Math.abs(dx) < 20 && Math.abs(dy) < 60) || (Math.abs(dy) < 20 && Math.abs(dx) < 60);
+                    else if (desc.shape === 'stripes') inShape = Math.floor(y / 20) % 2 === 0;
+
+                    const bg = [0.9, 0.9, 0.9];
+                    const c = inShape ? desc.color : bg;
+                    pixels[idx] = (c[0] - mean[0]) / std[0];
+                    pixels[idx + 1] = (c[1] - mean[1]) / std[1];
+                    pixels[idx + 2] = (c[2] - mean[2]) / std[2];
+                }
+            }
+            return pixels;
+        }
+
+        function renderThumb(desc, canvas) {
+            const ctx = canvas.getContext('2d');
+            const w = canvas.width, h = canvas.height;
+            ctx.fillStyle = '#e5e5e5';
+            ctx.fillRect(0, 0, w, h);
+            const cx = w/2, cy = h/2;
+            ctx.fillStyle = `rgb(${desc.color.map(v => Math.round(v*255)).join(',')})`;
+            if (desc.shape === 'circle') { ctx.beginPath(); ctx.arc(cx, cy, 25, 0, Math.PI*2); ctx.fill(); }
+            else if (desc.shape === 'square') { ctx.fillRect(cx-22, cy-22, 44, 44); }
+            else if (desc.shape === 'triangle') { ctx.beginPath(); ctx.moveTo(cx, cy-25); ctx.lineTo(cx+25, cy+20); ctx.lineTo(cx-25, cy+20); ctx.closePath(); ctx.fill(); }
+            else if (desc.shape === 'cross') { ctx.fillRect(cx-7, cy-22, 14, 44); ctx.fillRect(cx-22, cy-7, 44, 14); }
+            else if (desc.shape === 'stripes') { for (let i = 0; i < h; i += 10) ctx.fillRect(0, i, w, 5); }
+            ctx.fillStyle = '#333'; ctx.font = '9px monospace';
+            ctx.fillText(desc.name, 3, h - 4);
+        }
+
+        function initVitThumbs() {
+            const container = document.getElementById('vit-thumbs');
+            while (container.firstChild) container.removeChild(container.firstChild);
+            for (let i = 0; i < VIT_IMAGES.length; i++) {
+                const c = document.createElement('canvas');
+                c.width = 70; c.height = 70;
+                c.style.borderRadius = '4px'; c.style.border = '1px solid #444';
+                renderThumb(VIT_IMAGES[i], c);
+                container.appendChild(c);
+            }
+        }
+        initVitThumbs();
+
+        function cosineSim(a, b) {
+            let dot = 0, na = 0, nb = 0;
+            for (let i = 0; i < a.length; i++) { dot += a[i]*b[i]; na += a[i]*a[i]; nb += b[i]*b[i]; }
+            return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-8);
+        }
+
+        window.runVitDemo = async function() {
+            if (!model) { alert('Load model first (World Model tab)'); return; }
+            const embeddings = [];
+            const N = VIT_IMAGES.length;
+            for (let i = 0; i < N; i++) {
+                document.getElementById('vit-status').textContent = `Encoding ${i+1}/${N}: ${VIT_IMAGES[i].name}...`;
+                await new Promise(r => setTimeout(r, 10));
+                const pixels = generateScene(VIT_IMAGES[i], 224, 224);
+                const emb = model.encode_image(pixels, 224, 224);
+                embeddings.push(Array.from(emb));
+            }
+            document.getElementById('vit-status').textContent = `Done — ${N} images encoded`;
+            log(`ViT: encoded ${N} images`);
+            drawSimMatrix(embeddings, N);
+            drawScatter(embeddings, N);
+            drawBars(embeddings, N);
+        };
+
+        function drawSimMatrix(embeddings, N) {
+            const canvas = document.getElementById('vit-simmatrix');
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+            const margin = 80, cellW = (W - margin - 10) / N, cellH = (H - margin - 10) / N;
+            for (let i = 0; i < N; i++) {
+                for (let j = 0; j < N; j++) {
+                    const sim = cosineSim(embeddings[i], embeddings[j]);
+                    let r, g, b;
+                    if (sim < 0.5) { r = 220; g = Math.round(sim*2*200); b = 50; }
+                    else { r = Math.round((1-sim)*2*220); g = 180; b = 50; }
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    ctx.fillRect(margin + j*cellW, 10 + i*cellH, cellW-1, cellH-1);
+                    ctx.fillStyle = sim > 0.6 ? '#000' : '#fff';
+                    ctx.font = 'bold 11px monospace';
+                    ctx.fillText(sim.toFixed(2), margin + j*cellW + cellW/2 - 14, 10 + i*cellH + cellH/2 + 4);
+                }
+            }
+            ctx.fillStyle = '#ccc'; ctx.font = '9px monospace';
+            for (let i = 0; i < N; i++) {
+                ctx.save(); ctx.translate(margin + i*cellW + cellW/2, H-5); ctx.rotate(-Math.PI/4);
+                ctx.fillText(VIT_IMAGES[i].name, 0, 0); ctx.restore();
+                ctx.fillText(VIT_IMAGES[i].name, 2, 10 + i*cellH + cellH/2 + 3);
+            }
+        }
+
+        function drawScatter(embeddings, N) {
+            const canvas = document.getElementById('vit-scatter');
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+            const xs = embeddings.map(e => e[0]), ys = embeddings.map(e => e[1]);
+            const minX = Math.min(...xs), maxX = Math.max(...xs);
+            const minY = Math.min(...ys), maxY = Math.max(...ys);
+            const rX = (maxX-minX)||1, rY = (maxY-minY)||1;
+            const pad = 50;
+            ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(pad, H-pad); ctx.lineTo(W-10, H-pad); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(pad, H-pad); ctx.lineTo(pad, 10); ctx.stroke();
+            ctx.fillStyle = '#666'; ctx.font = '9px monospace';
+            ctx.fillText('PC1', W-30, H-pad+14); ctx.fillText('PC2', pad-20, 16);
+            const colors = ['#e53935','#c62828','#1e88e5','#43a047','#fdd835','#757575'];
+            for (let i = 0; i < N; i++) {
+                const x = pad + ((xs[i]-minX)/rX)*(W-pad-20);
+                const y = (H-pad) - ((ys[i]-minY)/rY)*(H-pad-20);
+                ctx.shadowColor = colors[i]; ctx.shadowBlur = 10;
+                ctx.fillStyle = colors[i];
+                ctx.beginPath(); ctx.arc(x, y, 8, 0, Math.PI*2); ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.fillStyle = '#fff'; ctx.font = '10px monospace';
+                ctx.fillText(VIT_IMAGES[i].name, x+12, y+4);
+            }
+        }
+
+        function drawBars(embeddings, N) {
+            const canvas = document.getElementById('vit-bars');
+            const ctx = canvas.getContext('2d');
+            const W = canvas.width, H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+            const dims = 50, barW = (W-30)/dims;
+            const colors = ['#e53935','#c62828','#1e88e5','#43a047','#fdd835','#757575'];
+            let vmin = Infinity, vmax = -Infinity;
+            for (const e of embeddings) for (let d = 0; d < dims; d++) { vmin = Math.min(vmin,e[d]); vmax = Math.max(vmax,e[d]); }
+            const vr = (vmax-vmin)||1;
+            for (let i = 0; i < N; i++) {
+                ctx.strokeStyle = colors[i]; ctx.lineWidth = 1; ctx.globalAlpha = 0.7;
+                ctx.beginPath();
+                for (let d = 0; d < dims; d++) {
+                    const x = 20 + d*barW;
+                    const v = (embeddings[i][d]-vmin)/vr;
+                    const y = H-10-v*(H-20);
+                    if (d === 0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+                }
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = '#666'; ctx.font = '9px monospace';
+            ctx.fillText('dim 0', 20, H-2); ctx.fillText('dim '+dims, W-40, H-2);
+        }
+
+        // ── Diffusion / Flow Matching Demo ───────────────────────────
+
+        let diffModel = null;
+
+        document.getElementById('cfg-scale').addEventListener('input', e => {
+            document.getElementById('val-cfg').textContent = (e.target.value / 10).toFixed(1);
+        });
+        document.getElementById('num-steps').addEventListener('input', e => {
+            document.getElementById('val-steps').textContent = e.target.value;
+        });
+        document.getElementById('diff-seed').addEventListener('input', e => {
+            document.getElementById('val-seed').textContent = e.target.value;
+        });
+
+        window.loadDiffusionModel = async function() {
+            await ensureWasm();
+            const overlay = document.getElementById('loading-overlay');
+            const bar = document.getElementById('progress-bar');
+            const pct = document.getElementById('progress-pct');
+            document.getElementById('loading-text').textContent = 'Loading Neo-Unify (9.3MB)...';
+            overlay.classList.add('active');
+
+            try {
+                const resp = await fetch('neo_unify_weights.bin');
+                const total = parseInt(resp.headers.get('Content-Length') || '9733058');
+                const reader = resp.body.getReader();
+                let received = 0;
+                const chunks = [];
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+                    const p = (received / total * 100).toFixed(1);
+                    bar.style.width = p + '%';
+                    pct.textContent = `${p}% (${(received/1048576).toFixed(1)}MB)`;
+                }
+                document.getElementById('loading-text').textContent = 'Parsing weights...';
+                const allBytes = new Uint8Array(received);
+                let off = 0;
+                for (const c of chunks) { allBytes.set(c, off); off += c.length; }
+
+                const t0 = performance.now();
+                diffModel = new NeoUnify(allBytes);
+                const ms = (performance.now() - t0).toFixed(0);
+
+                document.getElementById('diff-status').textContent = `Loaded (${ms}ms)`;
+                document.getElementById('btn-generate').disabled = false;
+                document.getElementById('btn-gen-steps').disabled = false;
+                log(`Neo-Unify loaded in ${ms}ms. 2.4M params, 16x16 RGB, 6 classes.`);
+            } catch(e) {
+                log(`ERROR: ${e.message}`);
+                document.getElementById('diff-status').textContent = `Error: ${e.message}`;
+            } finally {
+                overlay.classList.remove('active');
+            }
+        };
+
+        function drawImage16(ctx, data, x, y, scale) {
+            // data is CHW [3, 16, 16], draw at (x, y) scaled up
+            for (let py = 0; py < 16; py++) {
+                for (let px = 0; px < 16; px++) {
+                    const r = Math.round(data[0 * 256 + py * 16 + px] * 255);
+                    const g = Math.round(data[1 * 256 + py * 16 + px] * 255);
+                    const b = Math.round(data[2 * 256 + py * 16 + px] * 255);
+                    ctx.fillStyle = `rgb(${Math.max(0,Math.min(255,r))},${Math.max(0,Math.min(255,g))},${Math.max(0,Math.min(255,b))})`;
+                    ctx.fillRect(x + px * scale, y + py * scale, scale, scale);
+                }
+            }
+        }
+
+        window.generateImages = async function() {
+            if (!diffModel) return;
+            const cfg = parseInt(document.getElementById('cfg-scale').value) / 10;
+            const steps = parseInt(document.getElementById('num-steps').value);
+            const seed = parseInt(document.getElementById('diff-seed').value);
+
+            const canvas = document.getElementById('gen-grid');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#111'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const scale = 5;
+            const imgW = 16 * scale; // 80
+            const gap = 3;
+
+            for (let cls = 0; cls < 6; cls++) {
+                document.getElementById('diff-status').textContent = `Generating class ${cls}...`;
+                await new Promise(r => setTimeout(r, 10));
+
+                const t0 = performance.now();
+                const img = diffModel.generate(cls, cfg, steps, seed + cls * 1000);
+                const ms = (performance.now() - t0).toFixed(0);
+
+                const x = cls * (imgW + gap) + 5;
+                drawImage16(ctx, img, x, 10, scale);
+
+                // Label
+                ctx.fillStyle = '#888'; ctx.font = '10px monospace';
+                ctx.fillText(`Class ${cls}`, x + 15, 16 * scale + 25);
+                ctx.fillStyle = '#555'; ctx.font = '9px monospace';
+                ctx.fillText(`${ms}ms`, x + 20, 16 * scale + 38);
+            }
+            document.getElementById('diff-status').textContent = 'Done';
+            log(`Generated 6 images (cfg=${cfg}, steps=${steps}, seed=${seed})`);
+        };
+
+        window.generateWithSteps = async function() {
+            if (!diffModel) return;
+            const cfg = parseInt(document.getElementById('cfg-scale').value) / 10;
+            const steps = parseInt(document.getElementById('num-steps').value);
+            const seed = parseInt(document.getElementById('diff-seed').value);
+            const cls = 0; // show class 0
+
+            document.getElementById('diff-status').textContent = 'Generating with steps...';
+            await new Promise(r => setTimeout(r, 10));
+
+            const t0 = performance.now();
+            const allSteps = diffModel.generate_with_steps(cls, cfg, steps, seed);
+            const ms = (performance.now() - t0).toFixed(0);
+
+            const canvas = document.getElementById('denoise-steps');
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#111'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const numFrames = steps + 1;
+            const scale = 5;
+            const imgW = 16 * scale;
+            const maxShow = Math.min(numFrames, 10); // show up to 10 steps
+            const stepSize = Math.max(1, Math.floor(numFrames / maxShow));
+            const gap = 3;
+
+            let shown = 0;
+            for (let s = 0; s < numFrames && shown < maxShow; s += stepSize) {
+                const frameData = allSteps.slice(s * 768, (s + 1) * 768);
+                const x = shown * (imgW + gap) + 5;
+                drawImage16(ctx, frameData, x, 5, scale);
+
+                ctx.fillStyle = '#666'; ctx.font = '9px monospace';
+                ctx.fillText(s === 0 ? 'noise' : `t=${(s/steps).toFixed(1)}`, x + 20, 16 * scale + 15);
+                shown++;
+            }
+            // Always show final
+            if (shown < 11) {
+                const frameData = allSteps.slice((numFrames - 1) * 768, numFrames * 768);
+                const x = shown * (imgW + gap) + 5;
+                drawImage16(ctx, frameData, x, 5, scale);
+                ctx.fillStyle = '#4caf50'; ctx.font = '9px monospace';
+                ctx.fillText('final', x + 22, 16 * scale + 15);
+            }
+
+            document.getElementById('diff-status').textContent = `Done (${ms}ms for ${steps} steps)`;
+            log(`Denoising steps: class ${cls}, ${steps} steps in ${ms}ms`);
+        };
+
+        ensureWasm().then(() => log('WASM ready.'));
+    </script>
+</body>
+</html>
