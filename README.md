@@ -1,25 +1,49 @@
 # Synapse
 
-High-performance LLM inference engine built from scratch in Rust + Zig + Metal.
+Edge-native inference stack built from scratch in Rust + Zig + Metal.
 
-Synapse is a modular inference engine with SIMD-vectorized kernels (Zig/ARM NEON), Apple Metal GPU compute shaders, INT8 quantization, KV-cache, and a pluggable component registry that supports multiple model architectures from a single engine.
+Synapse is a modular local inference engine with native SIMD kernels, optional Metal acceleration, an embeddable C boundary, and a pure-Rust WASM runtime for browser demos. The strongest near-term wedge is local inference across native and browser targets, not generic framework sprawl.
 
-**~53,000 lines** across Rust (36k), Zig (17k), and Metal (300).
+## Positioning Snapshot
 
-## Current State
+<!-- status:root-positioning:start -->
+Edge-native inference stack for local ML across native and browser targets.
 
-Reference model: **Qwen3-0.6B** (596M params, loaded from HuggingFace safetensors).
+- Native builds use Rust orchestration with Zig SIMD kernels and optional Metal acceleration.
+- Browser builds use a pure-Rust WASM runtime for portability and client-side demos.
+- Verified benchmark baseline is Qwen3-0.6B (596M params) on Apple M5.
+<!-- status:root-positioning:end -->
 
-### Benchmark (Apple M5, 2026-03-23)
+## Benchmark Snapshot
 
-| Metric | Synapse (CPU+SIMD) | llama.cpp (Metal) |
-|--------|:------------------:|:-----------------:|
-| Prefill tok/s (pp128) | 86 | 5,368 |
-| Decode tok/s (KV-cache) | 2.5 | 82 |
-| INT8 decode tok/s | 1.4 | — |
-| Model memory (f32) | 1,938 MB | 1,138 MB (BF16) |
+<!-- status:root-benchmark:start -->
+| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
+|---------------|-----------------|----------------|---------|-------|
+| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
+| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
+| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
+| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
+| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+<!-- status:root-benchmark:end -->
 
-Gap is ~60x — primarily because Metal GPU shaders are built but not yet wired into the forward path. CPU SIMD path went from 5 to 86 tok/s prefill after Phase 4 optimization.
+## Runtime Profiles
+
+<!-- status:root-profiles:start -->
+| Runtime Profile | Support | Targets | Backends | Quantization |
+|-----------------|---------|---------|----------|--------------|
+| Native Performance | Stable | aarch64-apple-darwin, x86_64-unknown-linux-gnu | cpu_simd, metal | f32, f16, int8, q4_0, q4_k, q6_k, q8_0 |
+| ARM Compact | Beta | aarch64-unknown-linux-musl, aarch64-unknown-linux-gnu | cpu_simd | f32, int8, q4_0, q4_k |
+| WASM Portable | Stable | wasm32-unknown-unknown | pure_rust_wasm | f32 |
+<!-- status:root-profiles:end -->
+
+## Artifact Budgets
+
+<!-- status:root-artifacts:start -->
+| Artifact | Current | Budget | Status |
+|----------|---------|--------|--------|
+| WASM core | ~158 KB | ~160 KB | ok |
+| WASM JS wrapper | ~20 KB | ~32 KB | ok |
+<!-- status:root-artifacts:end -->
 
 ## Architecture
 
@@ -105,11 +129,11 @@ cargo test --test inference_e2e
   - Likely: attention masking, RoPE application, or weight loading order bug
   - Test: compare logits at each layer against HuggingFace reference implementation
 
-### Performance (Phase 4.5 — wire Metal into hot path)
-- [ ] Route decoder layer matmuls through Metal GPU backend (shaders already written)
-- [ ] Metal dispatch heuristic: large matrices → GPU, small → CPU SIMD
-- [ ] Double-buffered Metal pipeline (overlap compute layer N with data transfer N+1)
-- [ ] Target: 20+ tok/s decode, 500+ tok/s prefill
+### Performance (Phase 4.5 — tighten native path)
+- [ ] Improve Metal/native path consistency with the published benchmark surface
+- [ ] Add reproducible benchmark generation so public numbers come from a single manifest
+- [ ] Keep browser and native claims explicitly separated in docs and site copy
+- [ ] Target: make the edge/native story coherent before chasing broad parity claims
 
 ### Multi-Model Support (Phase 3.5)
 - [ ] Generic weight mappers for LLaMA 3.2, Mistral 7B, Phi-3

@@ -111,6 +111,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "synapse", .module = lib_mod },
             .{ .name = "arena", .module = arena_mod },
             .{ .name = "pool", .module = pool_mod },
+            .{ .name = "dispatch", .module = dispatch_mod },
         },
     });
 

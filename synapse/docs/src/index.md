@@ -1,28 +1,29 @@
 # Synapse
 
-Synapse is a modular LLM inference engine built in Rust with Zig SIMD kernels and Metal GPU acceleration. It loads HuggingFace checkpoints directly and runs transformer models on Apple Silicon and x86 hardware.
+Synapse is an edge-native local inference stack built in Rust, Zig, and Metal, with a separate pure-Rust WASM runtime for browser delivery. It loads common model formats on native targets and runs browser demos entirely client-side.
 
 ## Key Features
 
-- **Zig SIMD kernels** -- hand-tuned GEMV for NEON (ARM) and AVX2 (x86), including fused attention
-- **Quantization** -- INT8 per-channel symmetric, Q4_0 native 4-bit GEMV, GGUF format support (Q4_K, Q6_K, Q8_0, etc.)
-- **Metal GPU** -- GPU-accelerated prefill with pre-transposed weight caching
-- **5 model families** -- Qwen3, LLaMA 3.2, Mistral, Phi-3, Gemma
-- **Chat templates** -- minijinja-based rendering loaded from `tokenizer_config.json`
-- **Speculative decoding** -- draft-model-free speculative generation
-- **9-crate workspace** -- clean separation of inference, training, autograd, data loading, and graph IR
+<!-- status:docs-index-features:start -->
+- **Zig SIMD kernels** (Stable) — Native kernels target NEON and AVX2 through a C ABI layer.
+- **Metal GPU** (Beta) — Apple Silicon acceleration is available behind the metal feature.
+- **Pure Rust WASM runtime** (Stable) — The browser path avoids Zig FFI and runs entirely client-side.
+- **GGUF + safetensors loading** (Stable) — Native runtime loads common checkpoint formats.
+- **Speculative decoding** (Experimental) — Self-speculative decode path with KV rollback is available but not a headline stability claim.
+- **Training workspace** (Beta) — Autograd, NN, data, graph, and training crates remain available in the workspace.
+<!-- status:docs-index-features:end -->
 
 ## Performance
 
-On Qwen3-0.6B (596M params), Apple M5:
-
-| Configuration | Prefill | Decode |
-|---------------|---------|--------|
-| f32 CPU | 18 tok/s | 6.6 tok/s |
-| INT8 CPU | 31 tok/s | **14.6 tok/s** |
-| Metal f32 | 19 tok/s | 6.5 tok/s |
-
-INT8 decode reaches **6.3x improvement** over the 2.3 tok/s baseline.
+<!-- status:docs-index-benchmark:start -->
+| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
+|---------------|-----------------|----------------|---------|-------|
+| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
+| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
+| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
+| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
+| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+<!-- status:docs-index-benchmark:end -->
 
 ## Quick Start
 

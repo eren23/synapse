@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 
+use synapse_inference::capabilities::CapabilityReport;
 use synapse_inference::chat_template::ChatMessage;
 use synapse_inference::config::*;
 use synapse_inference::engine::InferenceEngine;
@@ -45,17 +46,50 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     w.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h], 1));
     for i in 0..nl {
         let s = (i as u32 + 1) * 100;
-        w.insert(format!("model.layers.{i}.input_layernorm.weight"), fake(vec![h], s));
-        w.insert(format!("model.layers.{i}.self_attn.q_proj.weight"), fake(vec![q_dim, h], s + 1));
-        w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h], s + 2));
-        w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h], s + 3));
-        w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim], s + 4));
-        w.insert(format!("model.layers.{i}.self_attn.q_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 5));
-        w.insert(format!("model.layers.{i}.self_attn.k_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 6));
-        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 7));
-        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 8));
-        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 9));
-        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 10));
+        w.insert(
+            format!("model.layers.{i}.input_layernorm.weight"),
+            fake(vec![h], s),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.q_proj.weight"),
+            fake(vec![q_dim, h], s + 1),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.k_proj.weight"),
+            fake(vec![kv_dim, h], s + 2),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.v_proj.weight"),
+            fake(vec![kv_dim, h], s + 3),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.o_proj.weight"),
+            fake(vec![h, q_dim], s + 4),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.q_norm.weight"),
+            fake(vec![cfg.attention.head_dim()], s + 5),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.k_norm.weight"),
+            fake(vec![cfg.attention.head_dim()], s + 6),
+        );
+        w.insert(
+            format!("model.layers.{i}.post_attention_layernorm.weight"),
+            fake(vec![h], s + 7),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.gate_proj.weight"),
+            fake(vec![inter, h], s + 8),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.up_proj.weight"),
+            fake(vec![inter, h], s + 9),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.down_proj.weight"),
+            fake(vec![h, inter], s + 10),
+        );
     }
     w.insert("model.norm.weight".into(), fake(vec![h], 9999));
     w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
@@ -88,9 +122,19 @@ fn demo_engine() -> InferenceEngine {
     let mut model = ModelBuilder::from_config(&cfg);
     let weights = generate_fake_hf_weights(&cfg);
     let mapper = WeightMapper::qwen3();
-    let result = model.load_weights(weights, &mapper).expect("Demo weights should load");
-    assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
-    assert!(result.unexpected.is_empty(), "Unexpected keys: {:?}", result.unexpected);
+    let result = model
+        .load_weights(weights, &mapper)
+        .expect("Demo weights should load");
+    assert!(
+        result.missing.is_empty(),
+        "Missing keys: {:?}",
+        result.missing
+    );
+    assert!(
+        result.unexpected.is_empty(),
+        "Unexpected keys: {:?}",
+        result.unexpected
+    );
 
     InferenceEngine {
         model,
@@ -107,8 +151,13 @@ fn demo_engine() -> InferenceEngine {
 
 enum Mode {
     Demo,
-    Chat { dir: PathBuf, quantize: bool, speculative: bool },
+    Chat {
+        dir: PathBuf,
+        quantize: bool,
+        speculative: bool,
+    },
     Verify(PathBuf),
+    Capabilities(Option<PathBuf>),
 }
 
 fn parse_args() -> Result<Mode, String> {
@@ -117,11 +166,13 @@ fn parse_args() -> Result<Mode, String> {
     let mut verify = false;
     let mut quantize = false;
     let mut speculative = false;
+    let mut capabilities = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => return Ok(Mode::Demo),
             "--verify" => verify = true,
+            "--capabilities" => capabilities = true,
             "--quantize" | "-q" => quantize = true,
             "--speculative" | "-s" => speculative = true,
             "--model-dir" => {
@@ -132,9 +183,17 @@ fn parse_args() -> Result<Mode, String> {
             }
             "--help" | "-h" => {
                 println!("Usage:");
-                println!("  cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B");
-                println!("  cargo run --example qwen3_chat --release -- --model-dir /path --verify");
-                println!("  cargo run --example qwen3_chat --release -- --model-dir /path --quantize");
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B"
+                );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --verify"
+                );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --quantize"
+                );
+                println!("  cargo run --example qwen3_chat --release -- --capabilities");
+                println!("  cargo run --example qwen3_chat --release -- --capabilities --model-dir /path");
                 println!("  cargo run --example qwen3_chat --release -- --demo");
                 std::process::exit(0);
             }
@@ -142,9 +201,17 @@ fn parse_args() -> Result<Mode, String> {
         }
     }
 
+    if capabilities {
+        return Ok(Mode::Capabilities(model_dir));
+    }
+
     match (model_dir, verify) {
         (Some(dir), true) => Ok(Mode::Verify(dir)),
-        (Some(dir), false) => Ok(Mode::Chat { dir, quantize, speculative }),
+        (Some(dir), false) => Ok(Mode::Chat {
+            dir,
+            quantize,
+            speculative,
+        }),
         (None, _) => Ok(Mode::Demo),
     }
 }
@@ -154,10 +221,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match mode {
         Mode::Verify(dir) => run_verify(dir)?,
-        Mode::Chat { dir, quantize, speculative } => run_pretrained_chat(dir, quantize, speculative)?,
+        Mode::Chat {
+            dir,
+            quantize,
+            speculative,
+        } => run_pretrained_chat(dir, quantize, speculative)?,
+        Mode::Capabilities(dir) => run_capabilities(dir)?,
         Mode::Demo => run_demo_chat(),
     }
 
+    Ok(())
+}
+
+fn run_capabilities(model_dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    let report = if let Some(dir) = model_dir {
+        let engine = InferenceEngine::from_pretrained(&dir)?;
+        engine.capability_report()
+    } else {
+        CapabilityReport::for_current_build()
+    };
+    println!("{}", report.to_json()?);
     Ok(())
 }
 
@@ -177,9 +260,15 @@ fn run_verify(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Embedding - compare first 8 values at positions 0 and last
     let id0 = tokens[0] as usize;
-    println!("\nEmbed[0,:8]:  {:?}", &engine.model.embed_tokens[id0 * h..id0 * h + 8]);
+    println!(
+        "\nEmbed[0,:8]:  {:?}",
+        &engine.model.embed_tokens[id0 * h..id0 * h + 8]
+    );
     let id_last = *tokens.last().unwrap() as usize;
-    println!("Embed[-1,:8]: {:?}", &engine.model.embed_tokens[id_last * h..id_last * h + 8]);
+    println!(
+        "Embed[-1,:8]: {:?}",
+        &engine.model.embed_tokens[id_last * h..id_last * h + 8]
+    );
 
     // Full forward for logits
     let output = engine.model.forward(&tokens);
@@ -209,7 +298,11 @@ fn run_verify(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn run_pretrained_chat(
+    model_dir: PathBuf,
+    quantize: bool,
+    speculative: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     print!("Loading checkpoint from {}...", model_dir.display());
     io::stdout().flush()?;
     let mut engine = InferenceEngine::from_pretrained(&model_dir)?;
@@ -223,7 +316,10 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) ->
     }
     println!("Type 'quit' to exit.");
 
-    let tokenizer = engine.tokenizer().expect("pretrained engine has tokenizer").clone();
+    let tokenizer = engine
+        .tokenizer()
+        .expect("pretrained engine has tokenizer")
+        .clone();
     let stop_sequences = tokenizer.encode("<|im_end|>").unwrap_or_default();
     let eos_token_id = tokenizer.eos_token_id();
     let stdin = io::stdin();
@@ -264,8 +360,15 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) ->
             #[cfg(feature = "metal")]
             {
                 if let Some(ref bufs_cell) = engine.metal_model_bufs_cell {
-                    if let synapse_inference::metal::ComputeBackend::Metal { ref backend, .. } = engine.backend {
-                        GenerationPipeline::with_gpu_resident(&engine.model, &engine.backend, bufs_cell, backend)
+                    if let synapse_inference::metal::ComputeBackend::Metal { ref backend, .. } =
+                        engine.backend
+                    {
+                        GenerationPipeline::with_gpu_resident(
+                            &engine.model,
+                            &engine.backend,
+                            bufs_cell,
+                            backend,
+                        )
                     } else {
                         GenerationPipeline::with_backend(&engine.model, &engine.backend)
                     }
@@ -283,8 +386,14 @@ fn run_pretrained_chat(model_dir: PathBuf, quantize: bool, speculative: bool) ->
 
         // Qwen3 generates <think>...</think> before the answer.
         // Show "thinking..." while hidden, then stream the actual answer.
-        let think_id = tokenizer.encode("<think>").ok().and_then(|v| v.first().copied());
-        let end_think_id = tokenizer.encode("</think>").ok().and_then(|v| v.first().copied());
+        let think_id = tokenizer
+            .encode("<think>")
+            .ok()
+            .and_then(|v| v.first().copied());
+        let end_think_id = tokenizer
+            .encode("</think>")
+            .ok()
+            .and_then(|v| v.first().copied());
         let in_think = std::cell::Cell::new(false);
         let think_shown = std::cell::Cell::new(false);
 

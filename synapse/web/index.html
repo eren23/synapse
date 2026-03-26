@@ -50,12 +50,17 @@
 
     <div class="container">
         <h1>Synapse — ML Inference in the Browser</h1>
-        <p class="subtitle">
-            Real models running locally via WASM. No server, no GPU, no cloud.
-            <span class="tag">104KB engine</span>
-            <span class="tag">WASM SIMD</span>
-            <span class="tag">Pure Rust</span>
-        </p>
+        <!-- status:web-subtitle:start -->
+<p class="subtitle">
+    Real models running locally via WASM. No server, no GPU, no cloud.
+    <span class="tag">~158 KB WASM core</span>
+    <span class="tag">WASM SIMD</span>
+    <span class="tag">Pure Rust runtime</span>
+</p>
+<p class="subtitle" style="margin-top:-8px;">
+    Browser demos use the pure-Rust WASM path. Native builds use Rust + Zig SIMD kernels with optional Metal acceleration.
+</p>
+<!-- status:web-subtitle:end -->
 
         <div class="tabs">
             <button class="active-tab" onclick="switchTab('lewm')">World Model</button>

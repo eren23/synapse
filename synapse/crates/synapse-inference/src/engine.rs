@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::capabilities::CapabilityReport;
 use crate::chat_template::{ChatMessage, ChatTemplate};
 use crate::config::ModelConfig;
 use crate::generation::{GenerationConfig, GenerationOutput, GenerationPipeline};
@@ -7,7 +8,9 @@ use crate::kv_cache::KVCache;
 use crate::model::{CausalLM, ModelBuilder, ModelOutput};
 use crate::quantization::{quantize_model, QuantizedCausalLM};
 use crate::tokenizer::{Tokenizer, TokenizerError};
-use crate::weight_loading::{load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper};
+use crate::weight_loading::{
+    load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper,
+};
 
 #[cfg(feature = "metal")]
 use std::cell::RefCell;
@@ -87,9 +90,13 @@ impl InferenceEngine {
         let backend = crate::metal::ComputeBackend::auto();
         #[cfg(feature = "metal")]
         let metal_model_bufs_cell = match &backend {
-            crate::metal::ComputeBackend::Metal { backend: ref mb, .. } => {
+            crate::metal::ComputeBackend::Metal {
+                backend: ref mb, ..
+            } => {
                 let max_seq = config.position.max_position_embeddings();
-                Some(RefCell::new(crate::metal::MetalModelBuffers::from_causal_lm(&model, max_seq, &mb.device)))
+                Some(RefCell::new(
+                    crate::metal::MetalModelBuffers::from_causal_lm(&model, max_seq, &mb.device),
+                ))
             }
             _ => None,
         };
@@ -182,10 +189,18 @@ impl InferenceEngine {
         self.tokenizer.as_ref()
     }
 
+    /// Return the current build/runtime capability report, annotated with the loaded model name.
+    pub fn capability_report(&self) -> CapabilityReport {
+        CapabilityReport::for_model_name(Some(&self.config.name))
+    }
+
     /// Format a list of chat messages into a prompt string using the loaded
     /// chat template.  Falls back to the default Qwen3 / ChatML format if
     /// no template was loaded from `tokenizer_config.json`.
-    pub fn format_chat(&self, messages: &[ChatMessage]) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn format_chat(
+        &self,
+        messages: &[ChatMessage],
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let tmpl = self
             .chat_template
             .as_ref()
@@ -195,7 +210,10 @@ impl InferenceEngine {
     }
 
     /// Create a KV cache sized for this model's architecture.
-    pub fn create_kv_cache(&self, max_seq_len: usize) -> Result<KVCache, Box<dyn std::error::Error>> {
+    pub fn create_kv_cache(
+        &self,
+        max_seq_len: usize,
+    ) -> Result<KVCache, Box<dyn std::error::Error>> {
         let cache = KVCache::new(
             self.config.architecture.num_layers,
             max_seq_len,
@@ -230,11 +248,16 @@ impl InferenceEngine {
             #[cfg(feature = "metal")]
             {
                 // Use GPU-resident path if MetalModelBuffers are available
-                if let (Some(ref bufs_cell), crate::metal::ComputeBackend::Metal { ref backend, .. }) =
-                    (&self.metal_model_bufs_cell, &self.backend)
+                if let (
+                    Some(ref bufs_cell),
+                    crate::metal::ComputeBackend::Metal { ref backend, .. },
+                ) = (&self.metal_model_bufs_cell, &self.backend)
                 {
                     GenerationPipeline::with_gpu_resident(
-                        &self.model, &self.backend, bufs_cell, backend,
+                        &self.model,
+                        &self.backend,
+                        bufs_cell,
+                        backend,
                     )
                 } else {
                     GenerationPipeline::with_backend(&self.model, &self.backend)

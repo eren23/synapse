@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 synapse-sys = { path = "../synapse-sys" }
+
+[dev-dependencies]
+serde_json = "1"

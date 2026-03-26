@@ -1,0 +1,195 @@
+{
+  "manifest_version": 1,
+  "last_verified": "2026-03-26",
+  "positioning": {
+    "headline": "Edge-native inference stack for local ML across native and browser targets.",
+    "native_runtime": "Native builds use Rust orchestration with Zig SIMD kernels and optional Metal acceleration.",
+    "wasm_runtime": "Browser builds use a pure-Rust WASM runtime for portability and client-side demos."
+  },
+  "benchmarks": {
+    "device": "Apple M5",
+    "model": "Qwen3-0.6B (596M params)",
+    "baseline_decode_tps": 2.3,
+    "configs": [
+      {
+        "id": "f32_cpu",
+        "label": "f32 CPU",
+        "prefill_tps": 18.0,
+        "decode_tps": 6.6,
+        "support": "stable",
+        "notes": "CPU SIMD path"
+      },
+      {
+        "id": "int8_cpu",
+        "label": "INT8 CPU",
+        "prefill_tps": 31.0,
+        "decode_tps": 14.6,
+        "support": "stable",
+        "notes": "Quantized CPU decode"
+      },
+      {
+        "id": "metal_f32",
+        "label": "Metal f32",
+        "prefill_tps": 19.0,
+        "decode_tps": 8.0,
+        "support": "beta",
+        "notes": "Metal-enabled native build"
+      },
+      {
+        "id": "metal_int8_gpu",
+        "label": "Metal INT8 GPU",
+        "prefill_tps": 30.0,
+        "decode_tps": 14.5,
+        "support": "beta",
+        "notes": "GPU-resident decode on Apple Silicon"
+      }
+    ],
+    "reference": {
+      "label": "llama.cpp Q4_K_M",
+      "prefill_tps": 5518.0,
+      "decode_tps": 173.0,
+      "notes": "Reference only, not a parity claim"
+    }
+  },
+  "runtime_profiles": [
+    {
+      "id": "native_perf",
+      "label": "Native Performance",
+      "support": "stable",
+      "summary": "Primary native runtime for Apple Silicon and desktop-class local inference.",
+      "targets": [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu"
+      ],
+      "backends": [
+        "cpu_simd",
+        "metal"
+      ],
+      "quantization": [
+        "f32",
+        "f16",
+        "int8",
+        "q4_0",
+        "q4_k",
+        "q6_k",
+        "q8_0"
+      ]
+    },
+    {
+      "id": "arm_compact",
+      "label": "ARM Compact",
+      "support": "beta",
+      "summary": "Small-device ARM64 profile focused on NEON, low memory, and compact artifacts.",
+      "targets": [
+        "aarch64-unknown-linux-musl",
+        "aarch64-unknown-linux-gnu"
+      ],
+      "backends": [
+        "cpu_simd"
+      ],
+      "quantization": [
+        "f32",
+        "int8",
+        "q4_0",
+        "q4_k"
+      ]
+    },
+    {
+      "id": "wasm_portable",
+      "label": "WASM Portable",
+      "support": "stable",
+      "summary": "Pure-Rust browser/client-side runtime for local demos and portable inference.",
+      "targets": [
+        "wasm32-unknown-unknown"
+      ],
+      "backends": [
+        "pure_rust_wasm"
+      ],
+      "quantization": [
+        "f32"
+      ]
+    }
+  ],
+  "model_families": [
+    {
+      "id": "qwen3",
+      "label": "Qwen3",
+      "status": "validated",
+      "notes": "Logits verified"
+    },
+    {
+      "id": "llama_3_2",
+      "label": "LLaMA 3.2",
+      "status": "config_ready",
+      "notes": "Config and weight mapper path present"
+    },
+    {
+      "id": "mistral_7b",
+      "label": "Mistral 7B",
+      "status": "config_ready",
+      "notes": "Sliding-window config path present"
+    },
+    {
+      "id": "phi_3",
+      "label": "Phi-3",
+      "status": "config_ready",
+      "notes": "Weight-mapper support in progress"
+    },
+    {
+      "id": "gemma",
+      "label": "Gemma",
+      "status": "config_ready",
+      "notes": "Same core transformer path"
+    }
+  ],
+  "features": [
+    {
+      "id": "zig_simd_kernels",
+      "label": "Zig SIMD kernels",
+      "support": "stable",
+      "details": "Native kernels target NEON and AVX2 through a C ABI layer."
+    },
+    {
+      "id": "metal_gpu",
+      "label": "Metal GPU",
+      "support": "beta",
+      "details": "Apple Silicon acceleration is available behind the metal feature."
+    },
+    {
+      "id": "pure_rust_wasm",
+      "label": "Pure Rust WASM runtime",
+      "support": "stable",
+      "details": "The browser path avoids Zig FFI and runs entirely client-side."
+    },
+    {
+      "id": "gguf_and_safetensors",
+      "label": "GGUF + safetensors loading",
+      "support": "stable",
+      "details": "Native runtime loads common checkpoint formats."
+    },
+    {
+      "id": "speculative_decoding",
+      "label": "Speculative decoding",
+      "support": "experimental",
+      "details": "Self-speculative decode path with KV rollback is available but not a headline stability claim."
+    },
+    {
+      "id": "training_workspace",
+      "label": "Training workspace",
+      "support": "beta",
+      "details": "Autograd, NN, data, graph, and training crates remain available in the workspace."
+    }
+  ],
+  "artifact_budgets": [
+    {
+      "id": "wasm_core",
+      "label": "WASM core",
+      "max_bytes": 163840
+    },
+    {
+      "id": "wasm_wrapper_js",
+      "label": "WASM JS wrapper",
+      "max_bytes": 32768
+    }
+  ]
+}

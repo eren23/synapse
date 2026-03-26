@@ -1,16 +1,18 @@
 # Supported Models
 
-Synapse supports 5 model families through architecture-specific weight mappers and config parsers.
+Synapse currently tracks 5 model families through architecture-specific config and weight-mapper paths. Only validated status should be treated as end-to-end confirmed.
 
 ## Model Matrix
 
-| Model | Config File | Weight Mapper | Validated | Notes |
-|-------|-------------|---------------|-----------|-------|
-| Qwen3 | `qwen3_0.6b.json` | `qwen3()` | Yes (logits verified) | Per-head Q/K norms |
-| LLaMA 3.2 | `llama3.2_1b.json` | `llama()` | Config only | `rope_scaling` support |
-| Mistral 7B | `mistral_7b.json` | `mistral()` | Config only | Sliding window attention |
-| Phi-3 | -- | `phi()` | Config only | Fused projections not yet supported |
-| Gemma | -- | `gemma()` | Config only | Same as LLaMA weight naming |
+<!-- status:docs-model-matrix:start -->
+| Model Family | Status | Notes |
+|--------------|--------|-------|
+| Qwen3 | Validated | Logits verified |
+| LLaMA 3.2 | Config Ready | Config and weight mapper path present |
+| Mistral 7B | Config Ready | Sliding-window config path present |
+| Phi-3 | Config Ready | Weight-mapper support in progress |
+| Gemma | Config Ready | Same core transformer path |
+<!-- status:docs-model-matrix:end -->
 
 **Validated** means end-to-end logit comparison against HuggingFace Transformers using `scripts/verify_logits.py`.
 

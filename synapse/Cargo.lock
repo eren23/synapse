@@ -789,6 +789,7 @@ version = "0.1.0"
 name = "synapse-core"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "synapse-sys",
 ]
 

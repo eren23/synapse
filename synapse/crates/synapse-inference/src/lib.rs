@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod chat_template;
 pub mod config;
 #[cfg(feature = "diffusion")]
@@ -15,24 +16,28 @@ pub mod tokenizer;
 pub mod weight_loading;
 
 pub mod prelude {
+    pub use crate::capabilities::{
+        ArtifactBudget, CapabilityReport, FeatureStatus, ModelProfile, ModelSupportLevel,
+        NativeKernelInfo, RuntimeProfile, SupportLevel,
+    };
     pub use crate::config::{
         ArchitectureConfig, AttentionConfig, FFNConfig, ModelConfig, NormConfig, PositionConfig,
         QuantConfig,
     };
     pub use crate::engine::InferenceEngine;
-    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput};
     pub use crate::generation::{
         CombinedSampler, GenerationConfig, GenerationOutput, GenerationPipeline, GreedySampler,
         RepetitionPenalty, Sampler, StopChecker, StopCondition, TemperatureSampler, TopKSampler,
         TopPSampler,
     };
-    pub use crate::registry::{
-        create_attention, create_ffn, create_norm, create_position, AttentionVariant, FFNVariant,
-        NormVariant, PositionVariant,
-    };
+    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput};
     pub use crate::quantization::{
         f32_model_memory_bytes, quantize_model, MinMaxCalibration, PercentileCalibration,
         QuantizedCausalLM, QuantizedDecoderLayer, QuantizedLinear,
+    };
+    pub use crate::registry::{
+        create_attention, create_ffn, create_norm, create_position, AttentionVariant, FFNVariant,
+        NormVariant, PositionVariant,
     };
     pub use crate::tokenizer::{Tokenizer, TokenizerError};
 }
@@ -209,14 +214,20 @@ mod tests {
 
     #[test]
     fn factory_ffn_variants() {
-        let swiglu = registry::create_ffn(&FFNConfig::SwiGLU { intermediate_size: 3072 });
+        let swiglu = registry::create_ffn(&FFNConfig::SwiGLU {
+            intermediate_size: 3072,
+        });
         assert_eq!(swiglu.name(), "SwiGLU");
         assert_eq!(swiglu.intermediate_size(), 3072);
 
-        let gelu = registry::create_ffn(&FFNConfig::GELU { intermediate_size: 4096 });
+        let gelu = registry::create_ffn(&FFNConfig::GELU {
+            intermediate_size: 4096,
+        });
         assert_eq!(gelu.name(), "GELU");
 
-        let geglu = registry::create_ffn(&FFNConfig::GeGLU { intermediate_size: 2048 });
+        let geglu = registry::create_ffn(&FFNConfig::GeGLU {
+            intermediate_size: 2048,
+        });
         assert_eq!(geglu.name(), "GeGLU");
     }
 
@@ -386,9 +397,13 @@ mod model_tests {
             + kv_dim * h      // w_k
             + kv_dim * h      // w_v
             + h * q_dim       // w_o
-            + 3 * inter * h;  // SwiGLU: gate + up + down
+            + 3 * inter * h; // SwiGLU: gate + up + down
         let norm = h;
-        let lm_head = if cfg.architecture.tie_word_embeddings { 0 } else { vocab * h };
+        let lm_head = if cfg.architecture.tie_word_embeddings {
+            0
+        } else {
+            vocab * h
+        };
 
         embed + nl * per_layer + norm + lm_head
     }
@@ -411,16 +426,28 @@ mod model_tests {
         };
 
         let mut w = HashMap::new();
-        w.insert(
-            "model.embed_tokens.weight".into(),
-            fake(vec![vocab, h]),
-        );
+        w.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h]));
         for i in 0..nl {
-            w.insert(format!("model.layers.{i}.input_layernorm.weight"), fake(vec![h]));
-            w.insert(format!("model.layers.{i}.self_attn.q_proj.weight"), fake(vec![q_dim, h]));
-            w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h]));
-            w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h]));
-            w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim]));
+            w.insert(
+                format!("model.layers.{i}.input_layernorm.weight"),
+                fake(vec![h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.q_proj.weight"),
+                fake(vec![q_dim, h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_proj.weight"),
+                fake(vec![kv_dim, h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.v_proj.weight"),
+                fake(vec![kv_dim, h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.o_proj.weight"),
+                fake(vec![h, q_dim]),
+            );
             w.insert(
                 format!("model.layers.{i}.self_attn.q_norm.weight"),
                 fake(vec![cfg.attention.head_dim()]),
@@ -429,10 +456,22 @@ mod model_tests {
                 format!("model.layers.{i}.self_attn.k_norm.weight"),
                 fake(vec![cfg.attention.head_dim()]),
             );
-            w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h]));
-            w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h]));
-            w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h]));
-            w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter]));
+            w.insert(
+                format!("model.layers.{i}.post_attention_layernorm.weight"),
+                fake(vec![h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.gate_proj.weight"),
+                fake(vec![inter, h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.up_proj.weight"),
+                fake(vec![inter, h]),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.down_proj.weight"),
+                fake(vec![h, inter]),
+            );
         }
         w.insert("model.norm.weight".into(), fake(vec![h]));
         w.insert("lm_head.weight".into(), fake(vec![vocab, h]));
@@ -519,10 +558,7 @@ mod model_tests {
 
         // Output shape [1, seq_len, vocab_size]
         assert_eq!(output.shape, [1, seq_len, cfg.architecture.vocab_size]);
-        assert_eq!(
-            output.logits.len(),
-            seq_len * cfg.architecture.vocab_size
-        );
+        assert_eq!(output.logits.len(), seq_len * cfg.architecture.vocab_size);
 
         // Logits should contain finite values
         assert!(
@@ -589,8 +625,8 @@ mod model_tests {
 #[cfg(test)]
 mod quantization_tests {
     use crate::config::*;
-    use crate::ops::matmul::matmul_t;
     use crate::model::ModelBuilder;
+    use crate::ops::matmul::matmul_t;
     use crate::quantization::*;
 
     fn tiny_config() -> ModelConfig {
@@ -661,16 +697,19 @@ mod quantization_tests {
         let inter = cfg.ffn.intermediate_size();
 
         model.embed_tokens = gen_weights(vocab * h, 1);
-        model.final_norm_weight = crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
+        model.final_norm_weight =
+            crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
 
         for (i, layer) in model.layers.iter_mut().enumerate() {
             let s = (i as u32 + 1) * 100;
-            layer.attn_norm_weight = crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
+            layer.attn_norm_weight =
+                crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
             layer.w_q = gen_weights(q_dim * h, s + 1);
             layer.w_k = gen_weights(kv_dim * h, s + 2);
             layer.w_v = gen_weights(kv_dim * h, s + 3);
             layer.w_o = gen_weights(h * q_dim, s + 4);
-            layer.ffn_norm_weight = crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
+            layer.ffn_norm_weight =
+                crate::weight_loading::AlignedBuffer::from_slice(&vec![1.0f32; h]);
             layer.ffn_gate = gen_weights(inter * h, s + 5);
             layer.ffn_up = gen_weights(inter * h, s + 6);
             layer.ffn_down = gen_weights(h * inter, s + 7);
@@ -683,7 +722,7 @@ mod quantization_tests {
     fn minmax_calibration_correct_scales() {
         let weights = vec![
             1.0, -2.0, 3.0, -0.5, // Channel 0: max_abs = 3.0
-            0.5, -1.0, 0.0, 2.0,  // Channel 1: max_abs = 2.0
+            0.5, -1.0, 0.0, 2.0, // Channel 1: max_abs = 2.0
         ];
         let scales = MinMaxCalibration::compute_scales(&weights, 2, 4);
         assert_eq!(scales.len(), 2);
@@ -737,10 +776,7 @@ mod quantization_tests {
 
         assert_eq!(f32_output.len(), q_output.len());
         let err = nrmse(&f32_output, &q_output);
-        assert!(
-            err < 0.01,
-            "Normalized RMSE {err:.6} exceeds 1%"
-        );
+        assert!(err < 0.01, "Normalized RMSE {err:.6} exceeds 1%");
     }
 
     #[test]
@@ -757,10 +793,7 @@ mod quantization_tests {
         let q_output = ql.forward(&x, m);
 
         let err = nrmse(&f32_output, &q_output);
-        assert!(
-            err < 0.01,
-            "Normalized RMSE {err:.6} exceeds 1%"
-        );
+        assert!(err < 0.01, "Normalized RMSE {err:.6} exceeds 1%");
     }
 
     // ── Test 3: Quantize model, verify INT8 weights and scales ──────
@@ -781,7 +814,11 @@ mod quantization_tests {
             let h = cfg.architecture.hidden_size;
             let inter = cfg.ffn.intermediate_size();
 
-            assert_eq!(layer.w_q.weights_int8.len(), q_dim * h, "Layer {i} w_q size");
+            assert_eq!(
+                layer.w_q.weights_int8.len(),
+                q_dim * h,
+                "Layer {i} w_q size"
+            );
             assert_eq!(layer.w_q.scales.len(), q_dim, "Layer {i} w_q scales");
             assert_eq!(layer.w_k.weights_int8.len(), kv_dim * h);
             assert_eq!(layer.w_k.scales.len(), kv_dim);
@@ -865,9 +902,6 @@ mod quantization_tests {
         assert_eq!(f32_output.logits.len(), q_output.logits.len());
 
         let err = nrmse(&f32_output.logits, &q_output.logits);
-        assert!(
-            err < 0.02,
-            "Quantized model NRMSE {err:.6} exceeds 2%"
-        );
+        assert!(err < 0.02, "Quantized model NRMSE {err:.6} exceeds 2%");
     }
 }

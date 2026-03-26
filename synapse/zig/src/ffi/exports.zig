@@ -8,7 +8,9 @@
 //! and vec_ops.zig which depend on named modules.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const synapse = @import("synapse");
+const dispatch = @import("dispatch");
 
 // --- Internal type aliases (from synapse module) ---
 const Storage = synapse.tensor.storage.Storage;
@@ -58,6 +60,50 @@ pub const SYN_ERR_INVALID_AXIS: c_int = 6;
 pub const SYN_ERR_INVALID_DIMENSIONS: c_int = 7;
 pub const SYN_ERR_INTERNAL: c_int = 8;
 
+pub const SYN_ARCH_UNKNOWN: u32 = 0;
+pub const SYN_ARCH_AARCH64: u32 = 1;
+pub const SYN_ARCH_X86_64: u32 = 2;
+pub const SYN_ARCH_WASM32: u32 = 3;
+
+pub const SYN_OS_UNKNOWN: u32 = 0;
+pub const SYN_OS_MACOS: u32 = 1;
+pub const SYN_OS_LINUX: u32 = 2;
+pub const SYN_OS_WINDOWS: u32 = 3;
+pub const SYN_OS_WASM: u32 = 4;
+
+pub const SYN_BACKEND_SCALAR: u32 = 0;
+pub const SYN_BACKEND_NEON: u32 = 1;
+pub const SYN_BACKEND_AVX2: u32 = 2;
+
+pub const SYN_RUNTIME_NATIVE_PERF: u32 = 1;
+pub const SYN_RUNTIME_ARM_COMPACT: u32 = 2;
+pub const SYN_RUNTIME_WASM_PORTABLE: u32 = 3;
+
+pub const SYN_SUPPORT_STABLE: u32 = 1;
+pub const SYN_SUPPORT_BETA: u32 = 2;
+pub const SYN_SUPPORT_EXPERIMENTAL: u32 = 3;
+
+pub const SYN_FEATURE_SGEMM: u64 = 1 << 0;
+pub const SYN_FEATURE_LAYERNORM: u64 = 1 << 1;
+pub const SYN_FEATURE_RMSNORM: u64 = 1 << 2;
+pub const SYN_FEATURE_FUSED_ATTENTION: u64 = 1 << 3;
+pub const SYN_FEATURE_INT8_QUANT: u64 = 1 << 4;
+pub const SYN_FEATURE_Q4_0_GEMV: u64 = 1 << 5;
+pub const SYN_FEATURE_KV_CACHE: u64 = 1 << 6;
+pub const SYN_FEATURE_GEOMETRIC_ATTENTION: u64 = 1 << 7;
+
+pub const SYN_CAPABILITY_ABI_VERSION: u32 = 1;
+
+pub const syn_capability_summary_t = extern struct {
+    abi_version: u32,
+    target_arch: u32,
+    target_os: u32,
+    simd_backend: u32,
+    runtime_profile: u32,
+    support_level: u32,
+    feature_bits: u64,
+};
+
 // ============================================================
 // Internal wrapper (Tensor is a value type in Zig; we heap-box it)
 // ============================================================
@@ -84,6 +130,58 @@ fn mapError(err: anyerror) c_int {
         error.CacheFull => SYN_ERR_INVALID_ARG,
         else => SYN_ERR_INTERNAL,
     };
+}
+
+fn targetArchValue() u32 {
+    return switch (builtin.cpu.arch) {
+        .aarch64 => SYN_ARCH_AARCH64,
+        .x86_64 => SYN_ARCH_X86_64,
+        .wasm32 => SYN_ARCH_WASM32,
+        else => SYN_ARCH_UNKNOWN,
+    };
+}
+
+fn targetOsValue() u32 {
+    return switch (builtin.os.tag) {
+        .macos => SYN_OS_MACOS,
+        .linux => SYN_OS_LINUX,
+        .windows => SYN_OS_WINDOWS,
+        .freestanding => if (builtin.cpu.arch == .wasm32) SYN_OS_WASM else SYN_OS_UNKNOWN,
+        else => SYN_OS_UNKNOWN,
+    };
+}
+
+fn simdBackendValue() u32 {
+    return switch (dispatch.detectBackend()) {
+        .scalar => SYN_BACKEND_SCALAR,
+        .neon => SYN_BACKEND_NEON,
+        .avx2 => SYN_BACKEND_AVX2,
+    };
+}
+
+fn runtimeProfileValue() u32 {
+    if (builtin.cpu.arch == .wasm32) return SYN_RUNTIME_WASM_PORTABLE;
+    if (builtin.cpu.arch == .aarch64 and builtin.os.tag != .macos) return SYN_RUNTIME_ARM_COMPACT;
+    return SYN_RUNTIME_NATIVE_PERF;
+}
+
+fn supportLevelValue(runtime_profile: u32) u32 {
+    return switch (runtime_profile) {
+        SYN_RUNTIME_ARM_COMPACT => SYN_SUPPORT_BETA,
+        SYN_RUNTIME_WASM_PORTABLE => SYN_SUPPORT_STABLE,
+        else => SYN_SUPPORT_STABLE,
+    };
+}
+
+fn featureBits() u64 {
+    return SYN_FEATURE_SGEMM |
+        SYN_FEATURE_LAYERNORM |
+        SYN_FEATURE_RMSNORM |
+        SYN_FEATURE_FUSED_ATTENTION |
+        SYN_FEATURE_INT8_QUANT |
+        SYN_FEATURE_Q4_0_GEMV |
+        SYN_FEATURE_KV_CACHE |
+        SYN_FEATURE_GEOMETRIC_ATTENTION;
 }
 
 // ============================================================
@@ -120,6 +218,117 @@ fn wrapTensor(t: TensorF32, out_ptr: *?*anyopaque) c_int {
     tw.tensor = t;
     out_ptr.* = @ptrCast(tw);
     return SYN_OK;
+}
+
+// ============================================================
+// Capability reporting
+// ============================================================
+
+pub export fn syn_capability_summary(out: ?*syn_capability_summary_t) c_int {
+    const out_ptr = out orelse return SYN_ERR_NULL_PTR;
+    const runtime_profile = runtimeProfileValue();
+    out_ptr.* = .{
+        .abi_version = SYN_CAPABILITY_ABI_VERSION,
+        .target_arch = targetArchValue(),
+        .target_os = targetOsValue(),
+        .simd_backend = simdBackendValue(),
+        .runtime_profile = runtime_profile,
+        .support_level = supportLevelValue(runtime_profile),
+        .feature_bits = featureBits(),
+    };
+    return SYN_OK;
+}
+
+pub export fn syn_runtime_capabilities_json(out_ptr: ?*?[*]u8, out_len: ?*usize) c_int {
+    const out_buf_ptr = out_ptr orelse return SYN_ERR_NULL_PTR;
+    const out_len_ptr = out_len orelse return SYN_ERR_NULL_PTR;
+
+    const runtime_profile = runtimeProfileValue();
+    const payload = .{
+        .abi_version = SYN_CAPABILITY_ABI_VERSION,
+        .target_arch = archName(targetArchValue()),
+        .target_os = osName(targetOsValue()),
+        .simd_backend = backendName(simdBackendValue()),
+        .runtime_profile = runtimeProfileName(runtime_profile),
+        .support_level = supportLevelName(supportLevelValue(runtime_profile)),
+        .feature_bits = featureBits(),
+        .features = [_][]const u8{
+            "sgemm",
+            "layernorm",
+            "rmsnorm",
+            "fused_attention",
+            "int8_quant",
+            "q4_0_gemv",
+            "kvcache",
+            "geometric_attention",
+        },
+    };
+
+    var out: std.io.Writer.Allocating = .init(ffi_allocator);
+    defer out.deinit();
+    std.json.Stringify.value(payload, .{}, &out.writer) catch |err| {
+        return mapError(err);
+    };
+    const json_bytes = out.written();
+
+    const owned = ffi_allocator.alloc(u8, json_bytes.len + 1) catch |err| {
+        return mapError(err);
+    };
+    @memcpy(owned[0..json_bytes.len], json_bytes);
+    owned[json_bytes.len] = 0;
+
+    out_buf_ptr.* = owned.ptr;
+    out_len_ptr.* = json_bytes.len;
+    return SYN_OK;
+}
+
+pub export fn syn_runtime_capabilities_free(ptr: ?[*]u8, len: usize) c_int {
+    const buf = ptr orelse return SYN_ERR_NULL_PTR;
+    ffi_allocator.free(buf[0 .. len + 1]);
+    return SYN_OK;
+}
+
+fn archName(value: u32) []const u8 {
+    return switch (value) {
+        SYN_ARCH_AARCH64 => "aarch64",
+        SYN_ARCH_X86_64 => "x86_64",
+        SYN_ARCH_WASM32 => "wasm32",
+        else => "unknown",
+    };
+}
+
+fn osName(value: u32) []const u8 {
+    return switch (value) {
+        SYN_OS_MACOS => "macos",
+        SYN_OS_LINUX => "linux",
+        SYN_OS_WINDOWS => "windows",
+        SYN_OS_WASM => "wasm",
+        else => "unknown",
+    };
+}
+
+fn backendName(value: u32) []const u8 {
+    return switch (value) {
+        SYN_BACKEND_NEON => "neon",
+        SYN_BACKEND_AVX2 => "avx2",
+        else => "scalar",
+    };
+}
+
+fn runtimeProfileName(value: u32) []const u8 {
+    return switch (value) {
+        SYN_RUNTIME_ARM_COMPACT => "arm_compact",
+        SYN_RUNTIME_WASM_PORTABLE => "wasm_portable",
+        else => "native_perf",
+    };
+}
+
+fn supportLevelName(value: u32) []const u8 {
+    return switch (value) {
+        SYN_SUPPORT_BETA => "beta",
+        SYN_SUPPORT_EXPERIMENTAL => "experimental",
+        else => "stable",
+    };
 }
 
 // ============================================================
@@ -1183,19 +1392,27 @@ pub export fn syn_fused_attention(
         const tqs = @min(TILE_Q, seq_q - tq);
 
         // Zero S_tile
-        @memset(s_tile[0..tqs * seq_k], 0);
+        @memset(s_tile[0 .. tqs * seq_k], 0);
 
         // S_tile = Q_tile @ K^T  (K is [seq_k, d_head], transposed)
         matmul_ops2.sgemmTiled(
-            tqs, seq_k, d_head,
-            q_ptr + tq * d_head, d_head, false,
-            k_ptr, d_head, true,
-            s_tile.ptr, seq_k,
-            pa.ptr, pb.ptr,
+            tqs,
+            seq_k,
+            d_head,
+            q_ptr + tq * d_head,
+            d_head,
+            false,
+            k_ptr,
+            d_head,
+            true,
+            s_tile.ptr,
+            seq_k,
+            pa.ptr,
+            pb.ptr,
         );
 
         // Scale
-        for (s_tile[0..tqs * seq_k]) |*val| val.* *= scale;
+        for (s_tile[0 .. tqs * seq_k]) |*val| val.* *= scale;
 
         // Causal mask
         for (0..tqs) |i| {
@@ -1230,11 +1447,19 @@ pub export fn syn_fused_attention(
             @memset((o_ptr + (tq + i) * d_head)[0..d_head], 0);
         }
         matmul_ops2.sgemmTiled(
-            tqs, d_head, seq_k,
-            s_tile.ptr, seq_k, false,
-            v_ptr, d_head, false,
-            o_ptr + tq * d_head, d_head,
-            pa.ptr, pb.ptr,
+            tqs,
+            d_head,
+            seq_k,
+            s_tile.ptr,
+            seq_k,
+            false,
+            v_ptr,
+            d_head,
+            false,
+            o_ptr + tq * d_head,
+            d_head,
+            pa.ptr,
+            pb.ptr,
         );
     }
 
@@ -1281,17 +1506,25 @@ pub export fn syn_fused_attention_bidi(
     var tq: usize = 0;
     while (tq < seq_q) : (tq += TILE_Q) {
         const tqs = @min(TILE_Q, seq_q - tq);
-        @memset(s_tile[0..tqs * seq_k], 0);
+        @memset(s_tile[0 .. tqs * seq_k], 0);
 
         matmul_ops2.sgemmTiled(
-            tqs, seq_k, d_head,
-            q_ptr + tq * d_head, d_head, false,
-            k_ptr, d_head, true,
-            s_tile.ptr, seq_k,
-            pa.ptr, pb.ptr,
+            tqs,
+            seq_k,
+            d_head,
+            q_ptr + tq * d_head,
+            d_head,
+            false,
+            k_ptr,
+            d_head,
+            true,
+            s_tile.ptr,
+            seq_k,
+            pa.ptr,
+            pb.ptr,
         );
 
-        for (s_tile[0..tqs * seq_k]) |*val| val.* *= scale;
+        for (s_tile[0 .. tqs * seq_k]) |*val| val.* *= scale;
 
         // NO causal mask — bidirectional: all positions attend to all
 
@@ -1318,11 +1551,19 @@ pub export fn syn_fused_attention_bidi(
             @memset((o_ptr + (tq + i) * d_head)[0..d_head], 0);
         }
         matmul_ops2.sgemmTiled(
-            tqs, d_head, seq_k,
-            s_tile.ptr, seq_k, false,
-            v_ptr, d_head, false,
-            o_ptr + tq * d_head, d_head,
-            pa.ptr, pb.ptr,
+            tqs,
+            d_head,
+            seq_k,
+            s_tile.ptr,
+            seq_k,
+            false,
+            v_ptr,
+            d_head,
+            false,
+            o_ptr + tq * d_head,
+            d_head,
+            pa.ptr,
+            pb.ptr,
         );
     }
 

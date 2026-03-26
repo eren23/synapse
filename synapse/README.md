@@ -1,17 +1,18 @@
 # Synapse
 
-A modular ML inference engine built in Rust with Zig SIMD kernels, Metal GPU acceleration, and WebAssembly support. Runs LLMs, Vision Transformers, World Models, and Flow Matching generators — on CPU, GPU, or in the browser.
+A modular local inference engine built in Rust with Zig SIMD kernels, optional Metal acceleration, and a separate pure-Rust WASM runtime for browser delivery. Runs LLMs, Vision Transformers, World Models, and small generative systems across native and browser targets.
 
 ## Performance
 
-Qwen3-0.6B on Apple M5:
-
-| Config | Prefill | Decode | vs Baseline |
-|--------|---------|--------|-------------|
-| f32 CPU | 18 tok/s | 6.6 tok/s | 2.9x |
-| INT8 CPU | 31 tok/s | 14.6 tok/s | **6.3x** |
-| Metal INT8 GPU | 30 tok/s | 14.5 tok/s | 6.3x |
-| llama.cpp Q4_K_M (ref) | 5518 tok/s | 173 tok/s | — |
+<!-- status:synapse-benchmark:start -->
+| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
+|---------------|-----------------|----------------|---------|-------|
+| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
+| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
+| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
+| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
+| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+<!-- status:synapse-benchmark:end -->
 
 ## GPU Acceleration (Metal)
 
@@ -27,17 +28,14 @@ The Metal path keeps all 28 decoder layers on GPU in a single command buffer -- 
 
 ## Features
 
-- **SIMD-optimized kernels** — f32, INT8, and Q4 GEMV kernels with NEON/AVX2 dispatch
-- **Metal GPU** — Accelerated prefill with weight caching (no per-call transpose)
-- **5 model families** — Qwen3, LLaMA 3.2, Mistral, Phi-3, Gemma
-- **GGUF + safetensors** — Loads Q4_0, Q4_1, Q4_K, Q6_K, Q8_0, F16, F32
-- **Sharded checkpoints** — Models >5GB via `model.safetensors.index.json`
-- **Chat templates** — minijinja-based, auto-loaded from `tokenizer_config.json`
-- **KV cache** — Batched prefill + cached decode with sliding window support
-- **Speculative decoding** — Self-speculative framework with KV cache rollback
-- **Fused attention** — Tiled SIMD attention with online softmax
-- **RoPE variants** — RotateHalf, Interleaved, Linear/Dynamic scaling
-- **225+ tests** — Correctness, performance benchmarks, multi-architecture validation
+<!-- status:synapse-features:start -->
+- **Zig SIMD kernels** (Stable) — Native kernels target NEON and AVX2 through a C ABI layer.
+- **Metal GPU** (Beta) — Apple Silicon acceleration is available behind the metal feature.
+- **Pure Rust WASM runtime** (Stable) — The browser path avoids Zig FFI and runs entirely client-side.
+- **GGUF + safetensors loading** (Stable) — Native runtime loads common checkpoint formats.
+- **Speculative decoding** (Experimental) — Self-speculative decode path with KV rollback is available but not a headline stability claim.
+- **Training workspace** (Beta) — Autograd, NN, data, graph, and training crates remain available in the workspace.
+<!-- status:synapse-features:end -->
 
 ## Quick Start
 
@@ -81,13 +79,15 @@ synapse/
 
 ## Supported Models
 
-| Model | Status | Attention | Notes |
-|-------|--------|-----------|-------|
-| Qwen3 | Validated | GQA | Per-head Q/K norms |
-| LLaMA 3.2 | Config ready | GQA | rope_scaling (Linear/Dynamic) |
-| Mistral 7B | Config ready | Sliding Window | 4096-token window |
-| Phi-3 | Config ready | GQA | Separate projections |
-| Gemma | Config ready | MHA | Same as LLaMA naming |
+<!-- status:synapse-models:start -->
+| Model Family | Status | Notes |
+|--------------|--------|-------|
+| Qwen3 | Validated | Logits verified |
+| LLaMA 3.2 | Config Ready | Config and weight mapper path present |
+| Mistral 7B | Config Ready | Sliding-window config path present |
+| Phi-3 | Config Ready | Weight-mapper support in progress |
+| Gemma | Config Ready | Same core transformer path |
+<!-- status:synapse-models:end -->
 
 ## Quantization Formats
 

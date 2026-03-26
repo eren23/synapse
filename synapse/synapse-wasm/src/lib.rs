@@ -8,10 +8,13 @@
 //!
 //! All ops in PURE RUST — no Zig FFI, fully WASM-compatible.
 
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
 // ── Constants ────────────────────────────────────────────────────────
+
+const STATUS_MANIFEST_JSON: &str = include_str!("../../status/public_status.json");
 
 const HIDDEN: usize = 192;
 const ENCODER_LAYERS: usize = 12;
@@ -59,8 +62,8 @@ fn layernorm(x: &[f32], weight: &[f32], bias: &[f32], n: usize) -> Vec<f32> {
         let var: f32 = slice.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n as f32;
         let scale = 1.0 / (var + 1e-6).sqrt();
         for j in 0..n {
-            out[off + j] = (slice[j] - mean) * scale * weight[j]
-                + if j < bias.len() { bias[j] } else { 0.0 };
+            out[off + j] =
+                (slice[j] - mean) * scale * weight[j] + if j < bias.len() { bias[j] } else { 0.0 };
         }
     }
     out
@@ -84,9 +87,7 @@ fn layernorm_no_bias(x: &[f32], weight: &[f32], n: usize) -> Vec<f32> {
 }
 
 fn gelu(x: f32) -> f32 {
-    0.5 * x
-        * (1.0
-            + ((2.0f32 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
+    0.5 * x * (1.0 + ((2.0f32 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
 }
 
 fn softmax(x: &mut [f32]) {
@@ -121,8 +122,7 @@ fn bidirectional_attention(
             for s in 0..seq_len {
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
-                    dot +=
-                        q[t * q_dim + head * head_dim + d] * k[s * q_dim + head * head_dim + d];
+                    dot += q[t * q_dim + head * head_dim + d] * k[s * q_dim + head * head_dim + d];
                 }
                 scores[s] = dot * scale;
             }
@@ -192,6 +192,37 @@ fn patch_embed(
     result
 }
 
+#[wasm_bindgen]
+pub fn capability_report_json() -> String {
+    let manifest: Value =
+        serde_json::from_str(STATUS_MANIFEST_JSON).expect("status manifest should parse");
+    let profile = manifest["runtime_profiles"]
+        .as_array()
+        .and_then(|profiles| {
+            profiles
+                .iter()
+                .find(|profile| profile["id"].as_str() == Some("wasm_portable"))
+        })
+        .cloned()
+        .expect("wasm runtime profile should exist in status manifest");
+
+    serde_json::to_string_pretty(&json!({
+        "manifest_version": manifest["manifest_version"],
+        "last_verified": manifest["last_verified"],
+        "runtime_profile": "wasm_portable",
+        "target": "wasm32-unknown-unknown",
+        "summary": manifest["positioning"]["wasm_runtime"],
+        "backends": profile["backends"],
+        "quantization": profile["quantization"],
+        "loaded_model": Value::Null,
+        "model_families": manifest["model_families"],
+        "features": manifest["features"],
+        "artifact_budgets": manifest["artifact_budgets"],
+        "native_kernel": Value::Null,
+    }))
+    .expect("capability report should serialize")
+}
+
 // ── Weight structures ───────────────────────────────────────────────
 
 struct ViTLayerWeights {
@@ -216,7 +247,7 @@ struct ViTLayerWeights {
 struct AdaLNWeights {
     adaln_w: Vec<f32>,     // [1152, 192]
     adaln_b: Vec<f32>,     // [1152]
-    to_qkv_w: Vec<f32>,   // [3072, 192]
+    to_qkv_w: Vec<f32>,    // [3072, 192]
     attn_out_w: Vec<f32>,  // [192, 1024]
     attn_out_b: Vec<f32>,  // [192]
     attn_norm_w: Vec<f32>, // [192]
@@ -234,36 +265,36 @@ struct AdaLNWeights {
 #[wasm_bindgen]
 pub struct RealLeWM {
     // Encoder (ViT)
-    encoder_patch_proj: Vec<f32>,      // [HIDDEN, PATCH_DIM] = [192, 588]
+    encoder_patch_proj: Vec<f32>, // [HIDDEN, PATCH_DIM] = [192, 588]
     encoder_patch_proj_bias: Vec<f32>, // [192]
-    encoder_cls_token: Vec<f32>,       // [192]
-    encoder_pos_embed: Vec<f32>,       // [257, 192]
+    encoder_cls_token: Vec<f32>,  // [192]
+    encoder_pos_embed: Vec<f32>,  // [257, 192]
     encoder_layers: Vec<ViTLayerWeights>,
-    encoder_norm_w: Vec<f32>,          // [192]
-    encoder_norm_b: Vec<f32>,          // [192]
+    encoder_norm_w: Vec<f32>, // [192]
+    encoder_norm_b: Vec<f32>, // [192]
 
     // Predictor (6 adaLN layers)
-    predictor_pos_embed: Vec<f32>,     // [3, 192]
+    predictor_pos_embed: Vec<f32>, // [3, 192]
     predictor_layers: Vec<AdaLNWeights>,
-    predictor_norm_w: Vec<f32>,        // [192]
-    predictor_norm_b: Vec<f32>,        // [192]
+    predictor_norm_w: Vec<f32>, // [192]
+    predictor_norm_b: Vec<f32>, // [192]
 
     // Action encoder
-    action_conv_w: Vec<f32>,           // [10, 10, 1] = [100] (1D conv)
-    action_conv_b: Vec<f32>,           // [10]
-    action_mlp1_w: Vec<f32>,           // [768, 10]
-    action_mlp1_b: Vec<f32>,           // [768]
-    action_mlp2_w: Vec<f32>,           // [192, 768]
-    action_mlp2_b: Vec<f32>,           // [192]
+    action_conv_w: Vec<f32>, // [10, 10, 1] = [100] (1D conv)
+    action_conv_b: Vec<f32>, // [10]
+    action_mlp1_w: Vec<f32>, // [768, 10]
+    action_mlp1_b: Vec<f32>, // [768]
+    action_mlp2_w: Vec<f32>, // [192, 768]
+    action_mlp2_b: Vec<f32>, // [192]
 
     // Projector (encoder -> predictor space): 3 linear layers
     // net.0: [2048, 192], net.1: BatchNorm(2048), net.3: [192, 2048]
     projector_layers: Vec<(Vec<f32>, Vec<f32>)>,
     // BatchNorm params for projector
-    projector_bn_weight: Vec<f32>,     // [2048]
-    projector_bn_bias: Vec<f32>,       // [2048]
-    projector_bn_mean: Vec<f32>,       // [2048]
-    projector_bn_var: Vec<f32>,        // [2048]
+    projector_bn_weight: Vec<f32>, // [2048]
+    projector_bn_bias: Vec<f32>,   // [2048]
+    projector_bn_mean: Vec<f32>,   // [2048]
+    projector_bn_var: Vec<f32>,    // [2048]
 
     // Pred_proj (predictor -> output space): 3 linear layers
     // net.0: [2048, 192], net.1: BatchNorm(2048), net.3: [192, 2048]
@@ -408,7 +439,12 @@ impl RealLeWM {
 
         // 5. Final norm on CLS token (position 0)
         let cls_hidden = &x[..HIDDEN];
-        let embeddings = layernorm(cls_hidden, &self.encoder_norm_w, &self.encoder_norm_b, HIDDEN);
+        let embeddings = layernorm(
+            cls_hidden,
+            &self.encoder_norm_w,
+            &self.encoder_norm_b,
+            HIDDEN,
+        );
 
         embeddings
     }
@@ -645,12 +681,7 @@ impl RealLeWM {
         }
 
         // 5. Final norm
-        let normed = layernorm(
-            &seq,
-            &self.predictor_norm_w,
-            &self.predictor_norm_b,
-            HIDDEN,
-        );
+        let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
 
         // 6. Extract target position (index 2)
         let target = &normed[2 * HIDDEN..3 * HIDDEN];
@@ -681,8 +712,7 @@ impl RealLeWM {
         }
 
         // 1. Read header length
-        let header_len =
-            u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+        let header_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
 
         if data.len() < 4 + header_len {
             return Err(JsError::new("Data too short for header"));
@@ -699,15 +729,12 @@ impl RealLeWM {
         let get = |name: &str| -> Result<Vec<f32>, JsError> {
             Self::get_tensor(&header, data, data_start, name)
         };
-        let get_opt = |name: &str| -> Vec<f32> {
-            Self::get_tensor_opt(&header, data, data_start, name)
-        };
+        let get_opt =
+            |name: &str| -> Vec<f32> { Self::get_tensor_opt(&header, data, data_start, name) };
 
         // 3. Load encoder weights
-        let encoder_patch_proj =
-            get("encoder.embeddings.patch_embeddings.projection.weight")?;
-        let encoder_patch_proj_bias =
-            get("encoder.embeddings.patch_embeddings.projection.bias")?;
+        let encoder_patch_proj = get("encoder.embeddings.patch_embeddings.projection.weight")?;
+        let encoder_patch_proj_bias = get("encoder.embeddings.patch_embeddings.projection.bias")?;
         let encoder_cls_token = get("encoder.embeddings.cls_token")?;
         let encoder_pos_embed = get("encoder.embeddings.position_embeddings")?;
         let encoder_norm_w = get("encoder.layernorm.weight")?;
@@ -771,14 +798,8 @@ impl RealLeWM {
 
         // 6. Load projector weights (net.0 = linear, net.1 = BN, net.3 = linear)
         let projector_layers = vec![
-            (
-                get("projector.net.0.weight")?,
-                get("projector.net.0.bias")?,
-            ),
-            (
-                get("projector.net.3.weight")?,
-                get("projector.net.3.bias")?,
-            ),
+            (get("projector.net.0.weight")?, get("projector.net.0.bias")?),
+            (get("projector.net.3.weight")?, get("projector.net.3.bias")?),
         ];
         let projector_bn_weight = get_opt("projector.net.1.weight");
         let projector_bn_bias = get_opt("projector.net.1.bias");
@@ -787,14 +808,8 @@ impl RealLeWM {
 
         // 7. Load pred_proj weights
         let pred_proj_layers = vec![
-            (
-                get("pred_proj.net.0.weight")?,
-                get("pred_proj.net.0.bias")?,
-            ),
-            (
-                get("pred_proj.net.3.weight")?,
-                get("pred_proj.net.3.bias")?,
-            ),
+            (get("pred_proj.net.0.weight")?, get("pred_proj.net.0.bias")?),
+            (get("pred_proj.net.3.weight")?, get("pred_proj.net.3.bias")?),
         ];
         let pred_proj_bn_weight = get_opt("pred_proj.net.1.weight");
         let pred_proj_bn_bias = get_opt("pred_proj.net.1.bias");
@@ -996,8 +1011,7 @@ impl WasmWorldModel {
             let mut v_vec = vec![0.0f32; seq_len * h];
             for t in 0..seq_len {
                 q_vec[t * h..(t + 1) * h].copy_from_slice(&qkv[t * 3 * h..t * 3 * h + h]);
-                k_vec[t * h..(t + 1) * h]
-                    .copy_from_slice(&qkv[t * 3 * h + h..t * 3 * h + 2 * h]);
+                k_vec[t * h..(t + 1) * h].copy_from_slice(&qkv[t * 3 * h + h..t * 3 * h + 2 * h]);
                 v_vec[t * h..(t + 1) * h]
                     .copy_from_slice(&qkv[t * 3 * h + 2 * h..t * 3 * h + 3 * h]);
             }
@@ -1186,7 +1200,7 @@ impl NeoUnify {
         let mut off = 0;
 
         let read_u32 = |o: &mut usize| -> u32 {
-            let v = u32::from_le_bytes([data[*o], data[*o+1], data[*o+2], data[*o+3]]);
+            let v = u32::from_le_bytes([data[*o], data[*o + 1], data[*o + 2], data[*o + 3]]);
             *o += 4;
             v
         };
@@ -1194,20 +1208,25 @@ impl NeoUnify {
         let num_tensors = read_u32(&mut off) as usize;
         for _ in 0..num_tensors {
             let name_len = read_u32(&mut off) as usize;
-            let name = std::str::from_utf8(&data[off..off+name_len])
+            let name = std::str::from_utf8(&data[off..off + name_len])
                 .map_err(|e| JsError::new(&format!("Invalid UTF-8: {}", e)))?
                 .to_string();
             off += name_len;
 
             let ndims = read_u32(&mut off) as usize;
-            for _ in 0..ndims { let _ = read_u32(&mut off); } // skip shape
+            for _ in 0..ndims {
+                let _ = read_u32(&mut off);
+            } // skip shape
 
             let data_len = read_u32(&mut off) as usize;
             let num_floats = data_len / 4;
             let mut tensor = vec![0.0f32; num_floats];
             for i in 0..num_floats {
                 tensor[i] = f32::from_le_bytes([
-                    data[off + i*4], data[off + i*4+1], data[off + i*4+2], data[off + i*4+3]
+                    data[off + i * 4],
+                    data[off + i * 4 + 1],
+                    data[off + i * 4 + 2],
+                    data[off + i * 4 + 3],
                 ]);
             }
             off += data_len;
@@ -1305,9 +1324,13 @@ impl NeoUnify {
                             let img_y = ph * p + py;
                             let img_x = pw * p + px;
                             // CHW layout input
-                            let img_idx = c * NU_IMAGE_SIZE * NU_IMAGE_SIZE + img_y * NU_IMAGE_SIZE + img_x;
-                            patches[patch_idx * NU_PATCH_DIM + off] =
-                                if img_idx < image.len() { image[img_idx] } else { 0.0 };
+                            let img_idx =
+                                c * NU_IMAGE_SIZE * NU_IMAGE_SIZE + img_y * NU_IMAGE_SIZE + img_x;
+                            patches[patch_idx * NU_PATCH_DIM + off] = if img_idx < image.len() {
+                                image[img_idx]
+                            } else {
+                                0.0
+                            };
                             off += 1;
                         }
                     }
@@ -1333,7 +1356,8 @@ impl NeoUnify {
                         for c in 0..NU_CHANNELS {
                             let img_y = ph * p + py;
                             let img_x = pw * p + px;
-                            let img_idx = c * NU_IMAGE_SIZE * NU_IMAGE_SIZE + img_y * NU_IMAGE_SIZE + img_x;
+                            let img_idx =
+                                c * NU_IMAGE_SIZE * NU_IMAGE_SIZE + img_y * NU_IMAGE_SIZE + img_x;
                             image[img_idx] = patches[patch_idx * NU_PATCH_DIM + off];
                             off += 1;
                         }
@@ -1359,7 +1383,8 @@ impl NeoUnify {
         let q_slice = &qkv[..seq * d];
         let k_slice = &qkv[seq * d..2 * seq * d];
         let v_slice = &qkv[2 * seq * d..3 * seq * d];
-        let attn_out = bidirectional_attention(q_slice, k_slice, v_slice, seq, NU_HEADS, NU_HEAD_DIM);
+        let attn_out =
+            bidirectional_attention(q_slice, k_slice, v_slice, seq, NU_HEADS, NU_HEAD_DIM);
         let mut proj = matmul_t(&attn_out, &block.proj_w, seq, d, d);
         add_bias(&mut proj, &block.proj_b, seq, d);
 
@@ -1369,9 +1394,13 @@ impl NeoUnify {
         // 2. Generation FFN with adaLN modulation
         // Modulation: SiLU -> Linear -> [shift, scale, gate]
         let mut mod_in = cond.to_vec();
-        for v in mod_in.iter_mut() { *v = silu(*v); }
+        for v in mod_in.iter_mut() {
+            *v = silu(*v);
+        }
         let mut mod_out = matmul_t(&mod_in, &block.gen_mod_w, 1, d, 3 * d);
-        for j in 0..3 * d { mod_out[j] += block.gen_mod_b[j]; }
+        for j in 0..3 * d {
+            mod_out[j] += block.gen_mod_b[j];
+        }
         let shift = &mod_out[..d];
         let scale = &mod_out[d..2 * d];
         let gate = &mod_out[2 * d..3 * d];
@@ -1388,7 +1417,9 @@ impl NeoUnify {
         // FFN: up -> GELU -> down
         let mut up = matmul_t(&modulated, &block.ffn_gen_up_w, seq, d, NU_INTER);
         add_bias(&mut up, &block.ffn_gen_up_b, seq, NU_INTER);
-        for v in up.iter_mut() { *v = gelu(*v); }
+        for v in up.iter_mut() {
+            *v = gelu(*v);
+        }
         let mut down = matmul_t(&up, &block.ffn_gen_down_w, seq, NU_INTER, d);
         add_bias(&mut down, &block.ffn_gen_down_b, seq, d);
 
@@ -1442,7 +1473,13 @@ impl NeoUnify {
 
     /// Generate an image using RK2 ODE solver with classifier-free guidance.
     /// Returns CHW f32 array [3, 16, 16] = 768 floats.
-    pub fn generate(&self, class_label: usize, guidance_scale: f32, num_steps: usize, seed: u32) -> Vec<f32> {
+    pub fn generate(
+        &self,
+        class_label: usize,
+        guidance_scale: f32,
+        num_steps: usize,
+        seed: u32,
+    ) -> Vec<f32> {
         let size = NU_CHANNELS * NU_IMAGE_SIZE * NU_IMAGE_SIZE; // 768
         let null_class = NU_NUM_CLASSES; // 6 = null class for CFG
 
@@ -1505,7 +1542,13 @@ impl NeoUnify {
 
     /// Generate and return all intermediate steps for visualization.
     /// Returns [num_steps+1, 3, 16, 16] flattened.
-    pub fn generate_with_steps(&self, class_label: usize, guidance_scale: f32, num_steps: usize, seed: u32) -> Vec<f32> {
+    pub fn generate_with_steps(
+        &self,
+        class_label: usize,
+        guidance_scale: f32,
+        num_steps: usize,
+        seed: u32,
+    ) -> Vec<f32> {
         let size = NU_CHANNELS * NU_IMAGE_SIZE * NU_IMAGE_SIZE;
         let null_class = NU_NUM_CLASSES;
 
@@ -1557,6 +1600,30 @@ impl NeoUnify {
         all_steps
     }
 
-    pub fn image_size(&self) -> usize { NU_IMAGE_SIZE }
-    pub fn num_classes(&self) -> usize { NU_NUM_CLASSES }
+    pub fn image_size(&self) -> usize {
+        NU_IMAGE_SIZE
+    }
+    pub fn num_classes(&self) -> usize {
+        NU_NUM_CLASSES
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::capability_report_json;
+    use serde_json::Value;
+
+    #[test]
+    fn capability_report_json_identifies_wasm_runtime() {
+        let report: Value =
+            serde_json::from_str(&capability_report_json()).expect("report should be valid json");
+        assert_eq!(report["runtime_profile"], "wasm_portable");
+        assert_eq!(report["target"], "wasm32-unknown-unknown");
+        assert_eq!(report["native_kernel"], Value::Null);
+        assert!(report["backends"]
+            .as_array()
+            .expect("backends should be an array")
+            .iter()
+            .any(|backend| backend.as_str() == Some("pure_rust_wasm")));
+    }
 }

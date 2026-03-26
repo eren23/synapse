@@ -32,7 +32,63 @@ pub type syn_kvcache_t = std::ffi::c_void;
 
 pub type syn_status_t = c_int;
 
+pub const SYN_ARCH_UNKNOWN: u32 = 0;
+pub const SYN_ARCH_AARCH64: u32 = 1;
+pub const SYN_ARCH_X86_64: u32 = 2;
+pub const SYN_ARCH_WASM32: u32 = 3;
+
+pub const SYN_OS_UNKNOWN: u32 = 0;
+pub const SYN_OS_MACOS: u32 = 1;
+pub const SYN_OS_LINUX: u32 = 2;
+pub const SYN_OS_WINDOWS: u32 = 3;
+pub const SYN_OS_WASM: u32 = 4;
+
+pub const SYN_BACKEND_SCALAR: u32 = 0;
+pub const SYN_BACKEND_NEON: u32 = 1;
+pub const SYN_BACKEND_AVX2: u32 = 2;
+
+pub const SYN_RUNTIME_NATIVE_PERF: u32 = 1;
+pub const SYN_RUNTIME_ARM_COMPACT: u32 = 2;
+pub const SYN_RUNTIME_WASM_PORTABLE: u32 = 3;
+
+pub const SYN_SUPPORT_STABLE: u32 = 1;
+pub const SYN_SUPPORT_BETA: u32 = 2;
+pub const SYN_SUPPORT_EXPERIMENTAL: u32 = 3;
+
+pub const SYN_FEATURE_SGEMM: u64 = 1 << 0;
+pub const SYN_FEATURE_LAYERNORM: u64 = 1 << 1;
+pub const SYN_FEATURE_RMSNORM: u64 = 1 << 2;
+pub const SYN_FEATURE_FUSED_ATTENTION: u64 = 1 << 3;
+pub const SYN_FEATURE_INT8_QUANT: u64 = 1 << 4;
+pub const SYN_FEATURE_Q4_0_GEMV: u64 = 1 << 5;
+pub const SYN_FEATURE_KV_CACHE: u64 = 1 << 6;
+pub const SYN_FEATURE_GEOMETRIC_ATTENTION: u64 = 1 << 7;
+
+pub const SYN_CAPABILITY_ABI_VERSION: u32 = 1;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct syn_capability_summary_t {
+    pub abi_version: u32,
+    pub target_arch: u32,
+    pub target_os: u32,
+    pub simd_backend: u32,
+    pub runtime_profile: u32,
+    pub support_level: u32,
+    pub feature_bits: u64,
+}
+
 extern "C" {
+    // ------------------------------------------------------------------
+    // Runtime capability reporting
+    // ------------------------------------------------------------------
+    pub fn syn_capability_summary(out: *mut syn_capability_summary_t) -> syn_status_t;
+    pub fn syn_runtime_capabilities_json(
+        out_ptr: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> syn_status_t;
+    pub fn syn_runtime_capabilities_free(ptr: *mut u8, len: usize) -> syn_status_t;
+
     // ------------------------------------------------------------------
     // Storage
     // ------------------------------------------------------------------
@@ -66,10 +122,8 @@ extern "C" {
 
     pub fn syn_tensor_is_contiguous(t: *mut syn_tensor_t, out: *mut i32) -> syn_status_t;
 
-    pub fn syn_tensor_contiguous(
-        t: *mut syn_tensor_t,
-        out: *mut *mut syn_tensor_t,
-    ) -> syn_status_t;
+    pub fn syn_tensor_contiguous(t: *mut syn_tensor_t, out: *mut *mut syn_tensor_t)
+        -> syn_status_t;
 
     // ------------------------------------------------------------------
     // Arena allocator
@@ -88,10 +142,17 @@ extern "C" {
     // SGEMM
     // ------------------------------------------------------------------
     pub fn syn_sgemm(
-        m: usize, n: usize, k: usize,
-        a: *const f32, lda: usize, trans_a: c_int,
-        b: *const f32, ldb: usize, trans_b: c_int,
-        c: *mut f32, ldc: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+        a: *const f32,
+        lda: usize,
+        trans_a: c_int,
+        b: *const f32,
+        ldb: usize,
+        trans_b: c_int,
+        c: *mut f32,
+        ldc: usize,
     ) -> syn_status_t;
 
     // ------------------------------------------------------------------
@@ -114,17 +175,23 @@ extern "C" {
     // Tensor reductions
     // ------------------------------------------------------------------
     pub fn syn_reduce_sum(
-        t: *mut syn_tensor_t, axis: usize, keepdim: c_int,
+        t: *mut syn_tensor_t,
+        axis: usize,
+        keepdim: c_int,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
     pub fn syn_reduce_max(
-        t: *mut syn_tensor_t, axis: usize, keepdim: c_int,
+        t: *mut syn_tensor_t,
+        axis: usize,
+        keepdim: c_int,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
     pub fn syn_reduce_mean(
-        t: *mut syn_tensor_t, axis: usize, keepdim: c_int,
+        t: *mut syn_tensor_t,
+        axis: usize,
+        keepdim: c_int,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
@@ -132,7 +199,8 @@ extern "C" {
     // Softmax
     // ------------------------------------------------------------------
     pub fn syn_softmax(
-        input: *mut syn_tensor_t, axis: usize,
+        input: *mut syn_tensor_t,
+        axis: usize,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
@@ -140,7 +208,9 @@ extern "C" {
     // Batch normalization
     // ------------------------------------------------------------------
     pub fn syn_batchnorm(
-        input: *mut syn_tensor_t, num_features: usize, eps: f32,
+        input: *mut syn_tensor_t,
+        num_features: usize,
+        eps: f32,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
@@ -148,9 +218,12 @@ extern "C" {
     // Conv2d
     // ------------------------------------------------------------------
     pub fn syn_conv2d(
-        input: *mut syn_tensor_t, kernel: *mut syn_tensor_t,
-        stride_h: usize, stride_w: usize,
-        pad_h: usize, pad_w: usize,
+        input: *mut syn_tensor_t,
+        kernel: *mut syn_tensor_t,
+        stride_h: usize,
+        stride_w: usize,
+        pad_h: usize,
+        pad_w: usize,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
@@ -159,25 +232,26 @@ extern "C" {
     // ------------------------------------------------------------------
     pub fn syn_maxpool2d(
         input: *mut syn_tensor_t,
-        kernel_h: usize, kernel_w: usize,
-        stride_h: usize, stride_w: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
     pub fn syn_avgpool2d(
         input: *mut syn_tensor_t,
-        kernel_h: usize, kernel_w: usize,
-        stride_h: usize, stride_w: usize,
+        kernel_h: usize,
+        kernel_w: usize,
+        stride_h: usize,
+        stride_w: usize,
         out: *mut *mut syn_tensor_t,
     ) -> syn_status_t;
 
     // ------------------------------------------------------------------
     // Transpose
     // ------------------------------------------------------------------
-    pub fn syn_transpose(
-        input: *mut syn_tensor_t,
-        out: *mut *mut syn_tensor_t,
-    ) -> syn_status_t;
+    pub fn syn_transpose(input: *mut syn_tensor_t, out: *mut *mut syn_tensor_t) -> syn_status_t;
 
     // ------------------------------------------------------------------
     // Raw SIMD vector ops
@@ -185,7 +259,11 @@ extern "C" {
     pub fn syn_vadd(dst: *mut f32, a: *const f32, b: *const f32, len: usize) -> syn_status_t;
     pub fn syn_vmul(dst: *mut f32, a: *const f32, b: *const f32, len: usize) -> syn_status_t;
     pub fn syn_vfma(
-        dst: *mut f32, a: *const f32, b: *const f32, c: *const f32, len: usize,
+        dst: *mut f32,
+        a: *const f32,
+        b: *const f32,
+        c: *const f32,
+        len: usize,
     ) -> syn_status_t;
     pub fn syn_vreduce_sum(src: *const f32, len: usize, out: *mut f32) -> syn_status_t;
     pub fn syn_vreduce_max(src: *const f32, len: usize, out: *mut f32) -> syn_status_t;
@@ -250,9 +328,7 @@ extern "C" {
     // ------------------------------------------------------------------
     // Fused SwiGLU
     // ------------------------------------------------------------------
-    pub fn syn_swiglu(
-        dst: *mut f32, gate: *const f32, up: *const f32, len: usize,
-    ) -> syn_status_t;
+    pub fn syn_swiglu(dst: *mut f32, gate: *const f32, up: *const f32, len: usize) -> syn_status_t;
 
     // ------------------------------------------------------------------
     // Per-channel INT8 quantization / dequantization
@@ -277,10 +353,15 @@ extern "C" {
     // INT8 quantized GEMM
     // ------------------------------------------------------------------
     pub fn syn_qgemm_int8(
-        m: usize, n: usize, k: usize,
-        a: *const i8, lda: usize,
-        b: *const i8, ldb: usize,
-        c: *mut f32, ldc: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+        a: *const i8,
+        lda: usize,
+        b: *const i8,
+        ldb: usize,
+        c: *mut f32,
+        ldc: usize,
         scales_a: *const f32,
         scales_b: *const f32,
     ) -> syn_status_t;
@@ -300,8 +381,12 @@ extern "C" {
 
     /// Bidirectional fused attention (no causal mask). For ViT/JEPA/CLIP encoders.
     pub fn syn_fused_attention_bidi(
-        seq_q: usize, seq_k: usize, d_head: usize,
-        q: *const f32, k: *const f32, v: *const f32,
+        seq_q: usize,
+        seq_k: usize,
+        d_head: usize,
+        q: *const f32,
+        k: *const f32,
+        v: *const f32,
         out: *mut f32,
     ) -> syn_status_t;
 
@@ -309,14 +394,20 @@ extern "C" {
     /// K must be a multiple of 32.
     /// Geometric attention: distance-biased attention for 3D point clouds.
     pub fn syn_geometric_attention(
-        n: usize, d: usize, pos_dim: usize,
-        q: *const f32, k: *const f32, v: *const f32,
-        positions: *const f32, out: *mut f32,
+        n: usize,
+        d: usize,
+        pos_dim: usize,
+        q: *const f32,
+        k: *const f32,
+        v: *const f32,
+        positions: *const f32,
+        out: *mut f32,
         sigma: f32,
     ) -> syn_status_t;
 
     pub fn syn_q4_0_gemv(
-        n: usize, k: usize,
+        n: usize,
+        k: usize,
         a: *const f32,
         b_q4: *const u8,
         c: *mut f32,
@@ -326,7 +417,9 @@ extern "C" {
     // KV-Cache
     // ------------------------------------------------------------------
     pub fn syn_kvcache_create(
-        max_seq: usize, n_kv_heads: usize, head_dim: usize,
+        max_seq: usize,
+        n_kv_heads: usize,
+        head_dim: usize,
         out: *mut *mut syn_kvcache_t,
     ) -> syn_status_t;
 

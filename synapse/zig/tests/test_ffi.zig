@@ -43,6 +43,34 @@ test "storage: null pointer errors" {
 }
 
 // ============================================================
+// Capability reporting
+// ============================================================
+
+test "capabilities: summary reports stable ABI fields" {
+    var summary: ffi.syn_capability_summary_t = undefined;
+    try expectEqual(ffi.SYN_OK, ffi.syn_capability_summary(&summary));
+    try expectEqual(@as(u32, ffi.SYN_CAPABILITY_ABI_VERSION), summary.abi_version);
+    try expect(summary.feature_bits & ffi.SYN_FEATURE_SGEMM != 0);
+    try expect(summary.feature_bits & ffi.SYN_FEATURE_KV_CACHE != 0);
+    try expect(summary.simd_backend == ffi.SYN_BACKEND_SCALAR or summary.simd_backend == ffi.SYN_BACKEND_NEON or summary.simd_backend == ffi.SYN_BACKEND_AVX2);
+}
+
+test "capabilities: json payload is valid and releasable" {
+    var json_ptr: ?[*]u8 = null;
+    var json_len: usize = 0;
+    try expectEqual(ffi.SYN_OK, ffi.syn_runtime_capabilities_json(&json_ptr, &json_len));
+    defer _ = ffi.syn_runtime_capabilities_free(json_ptr, json_len);
+
+    try expect(json_ptr != null);
+    try expect(json_len > 0);
+
+    const bytes = json_ptr.?[0..json_len];
+    try expect(std.mem.indexOf(u8, bytes, "\"abi_version\":1") != null);
+    try expect(std.mem.indexOf(u8, bytes, "\"simd_backend\"") != null);
+    try expect(std.mem.indexOf(u8, bytes, "\"runtime_profile\"") != null);
+}
+
+// ============================================================
 // Tensor round-trip
 // ============================================================
 

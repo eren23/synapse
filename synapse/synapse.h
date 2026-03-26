@@ -43,6 +43,50 @@ typedef struct syn_arena_s    syn_arena_t;
 typedef struct syn_pool_s     syn_pool_t;
 typedef struct syn_kvcache_s  syn_kvcache_t;
 
+typedef struct syn_capability_summary_t {
+    uint32_t abi_version;
+    uint32_t target_arch;
+    uint32_t target_os;
+    uint32_t simd_backend;
+    uint32_t runtime_profile;
+    uint32_t support_level;
+    uint64_t feature_bits;
+} syn_capability_summary_t;
+
+#define SYN_ARCH_UNKNOWN 0
+#define SYN_ARCH_AARCH64 1
+#define SYN_ARCH_X86_64  2
+#define SYN_ARCH_WASM32  3
+
+#define SYN_OS_UNKNOWN 0
+#define SYN_OS_MACOS   1
+#define SYN_OS_LINUX   2
+#define SYN_OS_WINDOWS 3
+#define SYN_OS_WASM    4
+
+#define SYN_BACKEND_SCALAR 0
+#define SYN_BACKEND_NEON   1
+#define SYN_BACKEND_AVX2   2
+
+#define SYN_RUNTIME_NATIVE_PERF  1
+#define SYN_RUNTIME_ARM_COMPACT  2
+#define SYN_RUNTIME_WASM_PORTABLE 3
+
+#define SYN_SUPPORT_STABLE       1
+#define SYN_SUPPORT_BETA         2
+#define SYN_SUPPORT_EXPERIMENTAL 3
+
+#define SYN_FEATURE_SGEMM               (1ULL << 0)
+#define SYN_FEATURE_LAYERNORM           (1ULL << 1)
+#define SYN_FEATURE_RMSNORM             (1ULL << 2)
+#define SYN_FEATURE_FUSED_ATTENTION     (1ULL << 3)
+#define SYN_FEATURE_INT8_QUANT          (1ULL << 4)
+#define SYN_FEATURE_Q4_0_GEMV           (1ULL << 5)
+#define SYN_FEATURE_KV_CACHE            (1ULL << 6)
+#define SYN_FEATURE_GEOMETRIC_ATTENTION (1ULL << 7)
+
+#define SYN_CAPABILITY_ABI_VERSION 1
+
 /* ------------------------------------------------------------------ */
 /* Storage (ref-counted, 64-byte aligned f32 buffer)                   */
 /* ------------------------------------------------------------------ */
@@ -61,6 +105,22 @@ syn_status_t syn_storage_data(syn_storage_t *s, float **out);
 
 /** Get the number of float elements. */
 syn_status_t syn_storage_len(syn_storage_t *s, size_t *out);
+
+/* ------------------------------------------------------------------ */
+/* Runtime capability reporting                                        */
+/* ------------------------------------------------------------------ */
+
+/** Fill a stable, fixed-size summary of the current Zig runtime. */
+syn_status_t syn_capability_summary(syn_capability_summary_t *out);
+
+/**
+ * Allocate a NUL-terminated UTF-8 JSON capability payload.
+ * `out_len` excludes the trailing NUL byte.
+ */
+syn_status_t syn_runtime_capabilities_json(uint8_t **out_ptr, size_t *out_len);
+
+/** Release a payload returned by `syn_runtime_capabilities_json`. */
+syn_status_t syn_runtime_capabilities_free(uint8_t *ptr, size_t len);
 
 /* ------------------------------------------------------------------ */
 /* Tensor (N-D view over storage)                                      */

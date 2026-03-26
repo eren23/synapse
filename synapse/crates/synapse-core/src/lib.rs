@@ -16,6 +16,7 @@ use synapse_sys as ffi;
 pub enum SynapseError {
     NullPointer,
     InvalidArg,
+    InvalidCapabilityValue(&'static str, u32),
     OutOfMemory,
     ShapeMismatch,
     NotContiguous,
@@ -30,6 +31,9 @@ impl fmt::Display for SynapseError {
         match self {
             SynapseError::NullPointer => write!(f, "null pointer"),
             SynapseError::InvalidArg => write!(f, "invalid argument"),
+            SynapseError::InvalidCapabilityValue(field, value) => {
+                write!(f, "invalid capability value for {field}: {value}")
+            }
             SynapseError::OutOfMemory => write!(f, "out of memory"),
             SynapseError::ShapeMismatch => write!(f, "shape mismatch"),
             SynapseError::NotContiguous => write!(f, "tensor not contiguous"),
@@ -55,6 +59,260 @@ fn check_status(status: ffi::syn_status_t) -> Result<(), SynapseError> {
         ffi::SYN_ERR_INVALID_DIMENSIONS => Err(SynapseError::InvalidDimensions),
         ffi::SYN_ERR_INTERNAL => Err(SynapseError::Internal),
         code => Err(SynapseError::Unknown(code)),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetArch {
+    Unknown,
+    Aarch64,
+    X86_64,
+    Wasm32,
+}
+
+impl TargetArch {
+    fn from_ffi(value: u32) -> Result<Self, SynapseError> {
+        match value {
+            ffi::SYN_ARCH_UNKNOWN => Ok(Self::Unknown),
+            ffi::SYN_ARCH_AARCH64 => Ok(Self::Aarch64),
+            ffi::SYN_ARCH_X86_64 => Ok(Self::X86_64),
+            ffi::SYN_ARCH_WASM32 => Ok(Self::Wasm32),
+            _ => Err(SynapseError::InvalidCapabilityValue("target_arch", value)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Aarch64 => "aarch64",
+            Self::X86_64 => "x86_64",
+            Self::Wasm32 => "wasm32",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetOs {
+    Unknown,
+    Macos,
+    Linux,
+    Windows,
+    Wasm,
+}
+
+impl TargetOs {
+    fn from_ffi(value: u32) -> Result<Self, SynapseError> {
+        match value {
+            ffi::SYN_OS_UNKNOWN => Ok(Self::Unknown),
+            ffi::SYN_OS_MACOS => Ok(Self::Macos),
+            ffi::SYN_OS_LINUX => Ok(Self::Linux),
+            ffi::SYN_OS_WINDOWS => Ok(Self::Windows),
+            ffi::SYN_OS_WASM => Ok(Self::Wasm),
+            _ => Err(SynapseError::InvalidCapabilityValue("target_os", value)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Macos => "macos",
+            Self::Linux => "linux",
+            Self::Windows => "windows",
+            Self::Wasm => "wasm",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimdBackend {
+    Scalar,
+    Neon,
+    Avx2,
+}
+
+impl SimdBackend {
+    fn from_ffi(value: u32) -> Result<Self, SynapseError> {
+        match value {
+            ffi::SYN_BACKEND_SCALAR => Ok(Self::Scalar),
+            ffi::SYN_BACKEND_NEON => Ok(Self::Neon),
+            ffi::SYN_BACKEND_AVX2 => Ok(Self::Avx2),
+            _ => Err(SynapseError::InvalidCapabilityValue("simd_backend", value)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Scalar => "scalar",
+            Self::Neon => "neon",
+            Self::Avx2 => "avx2",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityRuntimeProfile {
+    NativePerf,
+    ArmCompact,
+    WasmPortable,
+}
+
+impl CapabilityRuntimeProfile {
+    fn from_ffi(value: u32) -> Result<Self, SynapseError> {
+        match value {
+            ffi::SYN_RUNTIME_NATIVE_PERF => Ok(Self::NativePerf),
+            ffi::SYN_RUNTIME_ARM_COMPACT => Ok(Self::ArmCompact),
+            ffi::SYN_RUNTIME_WASM_PORTABLE => Ok(Self::WasmPortable),
+            _ => Err(SynapseError::InvalidCapabilityValue(
+                "runtime_profile",
+                value,
+            )),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NativePerf => "native_perf",
+            Self::ArmCompact => "arm_compact",
+            Self::WasmPortable => "wasm_portable",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilitySupportLevel {
+    Stable,
+    Beta,
+    Experimental,
+}
+
+impl CapabilitySupportLevel {
+    fn from_ffi(value: u32) -> Result<Self, SynapseError> {
+        match value {
+            ffi::SYN_SUPPORT_STABLE => Ok(Self::Stable),
+            ffi::SYN_SUPPORT_BETA => Ok(Self::Beta),
+            ffi::SYN_SUPPORT_EXPERIMENTAL => Ok(Self::Experimental),
+            _ => Err(SynapseError::InvalidCapabilityValue("support_level", value)),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Beta => "beta",
+            Self::Experimental => "experimental",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CapabilitySummary {
+    pub abi_version: u32,
+    pub target_arch: TargetArch,
+    pub target_os: TargetOs,
+    pub simd_backend: SimdBackend,
+    pub runtime_profile: CapabilityRuntimeProfile,
+    pub support_level: CapabilitySupportLevel,
+    pub feature_bits: u64,
+}
+
+impl CapabilitySummary {
+    pub fn has_feature(&self, feature_bit: u64) -> bool {
+        self.feature_bits & feature_bit != 0
+    }
+
+    pub fn feature_names(&self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.has_feature(ffi::SYN_FEATURE_SGEMM) {
+            names.push("sgemm");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_LAYERNORM) {
+            names.push("layernorm");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_RMSNORM) {
+            names.push("rmsnorm");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_FUSED_ATTENTION) {
+            names.push("fused_attention");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_INT8_QUANT) {
+            names.push("int8_quant");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_Q4_0_GEMV) {
+            names.push("q4_0_gemv");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_KV_CACHE) {
+            names.push("kvcache");
+        }
+        if self.has_feature(ffi::SYN_FEATURE_GEOMETRIC_ATTENTION) {
+            names.push("geometric_attention");
+        }
+        names
+    }
+}
+
+pub fn capability_summary() -> Result<CapabilitySummary, SynapseError> {
+    let mut raw = ffi::syn_capability_summary_t {
+        abi_version: 0,
+        target_arch: 0,
+        target_os: 0,
+        simd_backend: 0,
+        runtime_profile: 0,
+        support_level: 0,
+        feature_bits: 0,
+    };
+    unsafe {
+        check_status(ffi::syn_capability_summary(&mut raw))?;
+    }
+    Ok(CapabilitySummary {
+        abi_version: raw.abi_version,
+        target_arch: TargetArch::from_ffi(raw.target_arch)?,
+        target_os: TargetOs::from_ffi(raw.target_os)?,
+        simd_backend: SimdBackend::from_ffi(raw.simd_backend)?,
+        runtime_profile: CapabilityRuntimeProfile::from_ffi(raw.runtime_profile)?,
+        support_level: CapabilitySupportLevel::from_ffi(raw.support_level)?,
+        feature_bits: raw.feature_bits,
+    })
+}
+
+pub fn runtime_capabilities_json() -> Result<String, SynapseError> {
+    struct CapabilityJsonGuard {
+        ptr: *mut u8,
+        len: usize,
+    }
+
+    impl Drop for CapabilityJsonGuard {
+        fn drop(&mut self) {
+            if !self.ptr.is_null() {
+                unsafe {
+                    let _ = ffi::syn_runtime_capabilities_free(self.ptr, self.len);
+                }
+            }
+        }
+    }
+
+    let mut ptr_out: *mut u8 = ptr::null_mut();
+    let mut len_out: usize = 0;
+    unsafe {
+        check_status(ffi::syn_runtime_capabilities_json(
+            &mut ptr_out,
+            &mut len_out,
+        ))?;
+        if ptr_out.is_null() {
+            return if len_out == 0 {
+                Ok(String::new())
+            } else {
+                Err(SynapseError::NullPointer)
+            };
+        }
+
+        let json = CapabilityJsonGuard {
+            ptr: ptr_out,
+            len: len_out,
+        };
+        let bytes = std::slice::from_raw_parts(json.ptr, json.len);
+        Ok(std::str::from_utf8(bytes)
+            .map_err(|_| SynapseError::InvalidArg)?
+            .to_owned())
     }
 }
 
@@ -162,7 +420,11 @@ impl Tensor {
         let mut dims = [0usize; 8];
         let mut ndim: usize = 0;
         unsafe {
-            check_status(ffi::syn_tensor_shape(self.ptr, dims.as_mut_ptr(), &mut ndim))?;
+            check_status(ffi::syn_tensor_shape(
+                self.ptr,
+                dims.as_mut_ptr(),
+                &mut ndim,
+            ))?;
         }
         Ok(dims[..ndim].to_vec())
     }
@@ -313,13 +575,7 @@ impl Tensor {
 /// In-place SiLU activation: `dst[i] = src[i] / (1 + exp(-src[i]))`.
 pub fn silu(dst: &mut [f32], src: &[f32]) -> Result<(), SynapseError> {
     assert_eq!(dst.len(), src.len());
-    unsafe {
-        check_status(ffi::syn_silu(
-            dst.as_mut_ptr(),
-            src.as_ptr(),
-            src.len(),
-        ))
-    }
+    unsafe { check_status(ffi::syn_silu(dst.as_mut_ptr(), src.as_ptr(), src.len())) }
 }
 
 /// Fused SwiGLU: `dst[i] = silu(gate[i]) * up[i]`.
@@ -416,10 +672,15 @@ pub fn qgemm_int8(
     let mut c = vec![0.0f32; m * n];
     unsafe {
         check_status(ffi::syn_qgemm_int8(
-            m, n, k,
-            a.as_ptr(), k,
-            b.as_ptr(), n,
-            c.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            b.as_ptr(),
+            n,
+            c.as_mut_ptr(),
+            n,
             scales_a.as_ptr(),
             scales_b.as_ptr(),
         ))?;
@@ -445,7 +706,9 @@ pub fn fused_attention(
     let mut out = vec![0.0f32; seq_q * d_head];
     unsafe {
         check_status(ffi::syn_fused_attention(
-            seq_q, seq_k, d_head,
+            seq_q,
+            seq_k,
+            d_head,
             q.as_ptr(),
             k.as_ptr(),
             v.as_ptr(),
@@ -472,7 +735,9 @@ pub fn fused_attention_bidi(
     let mut out = vec![0.0f32; seq_q * d_head];
     unsafe {
         check_status(ffi::syn_fused_attention_bidi(
-            seq_q, seq_k, d_head,
+            seq_q,
+            seq_k,
+            d_head,
             q.as_ptr(),
             k.as_ptr(),
             v.as_ptr(),
@@ -486,12 +751,7 @@ pub fn fused_attention_bidi(
 ///
 /// `a` is `[K]` f32 input, `b_q4` is raw Q4_0 block data for `[N, K]` matrix,
 /// returns `[N]` f32 output. K must be a multiple of 32.
-pub fn q4_0_gemv(
-    n: usize,
-    k: usize,
-    a: &[f32],
-    b_q4: &[u8],
-) -> Result<Vec<f32>, SynapseError> {
+pub fn q4_0_gemv(n: usize, k: usize, a: &[f32], b_q4: &[u8]) -> Result<Vec<f32>, SynapseError> {
     if n == 0 || k == 0 {
         return Ok(vec![0.0f32; n]);
     }
@@ -504,7 +764,8 @@ pub fn q4_0_gemv(
     let mut c = vec![0.0f32; n];
     unsafe {
         check_status(ffi::syn_q4_0_gemv(
-            n, k,
+            n,
+            k,
             a.as_ptr(),
             b_q4.as_ptr(),
             c.as_mut_ptr(),
@@ -548,7 +809,10 @@ impl KvCache {
                 max_seq, n_kv_heads, head_dim, &mut ptr,
             ))?;
         }
-        Ok(KvCache { ptr, stride: n_kv_heads * head_dim })
+        Ok(KvCache {
+            ptr,
+            stride: n_kv_heads * head_dim,
+        })
     }
 
     /// Append K/V vectors for a single token.
@@ -658,11 +922,7 @@ mod tests {
     #[test]
     fn test_layernorm_roundtrip() {
         // input: [2, 4], normalize over last dim (normalized_dim=1)
-        let input = Tensor::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            &[2, 4],
-        )
-        .unwrap();
+        let input = Tensor::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4]).unwrap();
 
         let gamma = Tensor::from_data(&[1.0, 1.0, 1.0, 1.0], &[4]).unwrap();
         let beta = Tensor::from_data(&[0.0, 0.0, 0.0, 0.0], &[4]).unwrap();
@@ -685,21 +945,13 @@ mod tests {
     #[test]
     fn test_attention_roundtrip() {
         // [batch=1, heads=1, seq=2, d_head=4]
-        let q = Tensor::from_data(
-            &[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            &[1, 1, 2, 4],
-        )
-        .unwrap();
+        let q =
+            Tensor::from_data(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0], &[1, 1, 2, 4]).unwrap();
         let k = q.clone_tensor().unwrap();
-        let v = Tensor::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            &[1, 1, 2, 4],
-        )
-        .unwrap();
+        let v =
+            Tensor::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[1, 1, 2, 4]).unwrap();
 
-        let (output, weights) = q
-            .scaled_dot_product_attention(&k, &v, 0.5, false)
-            .unwrap();
+        let (output, weights) = q.scaled_dot_product_attention(&k, &v, 0.5, false).unwrap();
 
         assert_eq!(output.shape().unwrap(), &[1, 1, 2, 4]);
         assert!(weights.is_some());
@@ -831,9 +1083,7 @@ mod tests {
             let q = Tensor::from_data(&[1.0, 0.0, 0.0, 1.0], &[1, 1, 1, 4]).unwrap();
             let k = Tensor::from_data(&[1.0, 0.0, 0.0, 1.0], &[1, 1, 1, 4]).unwrap();
             let v = Tensor::from_data(&[1.0, 2.0, 3.0, 4.0], &[1, 1, 1, 4]).unwrap();
-            let (_out, _w) = q
-                .scaled_dot_product_attention(&k, &v, 0.5, false)
-                .unwrap();
+            let (_out, _w) = q.scaled_dot_product_attention(&k, &v, 0.5, false).unwrap();
         }
     }
 
@@ -865,11 +1115,7 @@ mod tests {
     #[test]
     fn test_rmsnorm_roundtrip() {
         // input: [2, 4], normalize over last dim
-        let input = Tensor::from_data(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            &[2, 4],
-        )
-        .unwrap();
+        let input = Tensor::from_data(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], &[2, 4]).unwrap();
         let gamma = Tensor::from_data(&[1.0, 1.0, 1.0, 1.0], &[4]).unwrap();
 
         let result = input.rmsnorm(&gamma, 1, 1e-5).unwrap();
@@ -974,13 +1220,19 @@ mod tests {
         assert_eq!(quantized.len(), 8);
         assert_eq!(scales.len(), 2);
 
-        let dequantized = dequantize_per_channel_int8(&quantized, channels, channel_size, &scales).unwrap();
+        let dequantized =
+            dequantize_per_channel_int8(&quantized, channels, channel_size, &scales).unwrap();
         assert_eq!(dequantized.len(), 8);
 
         // Dequantized should be close to original (quantization error < scale)
         for (orig, deq) in data.iter().zip(dequantized.iter()) {
             let err = (orig - deq).abs();
-            assert!(err < 0.1, "quantization error too large: {} vs {}", orig, deq);
+            assert!(
+                err < 0.1,
+                "quantization error too large: {} vs {}",
+                orig,
+                deq
+            );
         }
     }
 
@@ -1101,7 +1353,7 @@ mod tests {
     #[test]
     fn test_kvcache_shape_mismatch() {
         let mut cache = KvCache::new(16, 2, 4).unwrap(); // stride = 8
-        // Wrong stride (4 instead of 8)
+                                                         // Wrong stride (4 instead of 8)
         let err = cache.append(&[1.0; 4], &[2.0; 4]);
         assert!(err.is_err());
         assert_eq!(err.unwrap_err(), SynapseError::ShapeMismatch);
@@ -1155,6 +1407,23 @@ mod tests {
         for _ in 0..10_000 {
             let _c = qgemm_int8(2, 2, 2, &a, &b, &sa, &sb).unwrap();
         }
+    }
+
+    #[test]
+    fn test_capability_summary_roundtrip() {
+        let summary = capability_summary().expect("capability summary should succeed");
+        assert_eq!(summary.abi_version, ffi::SYN_CAPABILITY_ABI_VERSION);
+        assert!(summary.has_feature(ffi::SYN_FEATURE_SGEMM));
+        assert!(!summary.feature_names().is_empty());
+    }
+
+    #[test]
+    fn test_runtime_capabilities_json_roundtrip() {
+        let json = runtime_capabilities_json().expect("json capability report should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("json capability report should parse");
+        assert_eq!(parsed["abi_version"].as_u64(), Some(1));
+        assert!(parsed["simd_backend"].as_str().is_some());
     }
 }
 

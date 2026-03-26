@@ -1,16 +1,20 @@
 # Performance
 
-All benchmarks measured on Qwen3-0.6B (596M parameters) running on Apple M5.
+<!-- status:docs-performance-note:start -->
+Measured against Qwen3-0.6B (596M params) on Apple M5. Last verified: 2026-03-26.
+<!-- status:docs-performance-note:end -->
 
 ## End-to-End Throughput
 
-| Configuration | Prefill (tok/s) | Decode (tok/s) | vs Baseline |
-|---------------|-----------------|----------------|-------------|
-| f32 CPU | 18 | 6.6 | 2.9x |
-| INT8 CPU | 31 | 14.6 | 6.3x |
-| Metal f32 | 19 | 8.0 | -- |
-| Metal INT8 GPU | 30 | 14.5 | 6.3x |
-| llama.cpp Q4_K_M | 5,518 | 173 | reference |
+<!-- status:docs-performance-benchmark:start -->
+| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
+|---------------|-----------------|----------------|---------|-------|
+| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
+| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
+| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
+| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
+| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+<!-- status:docs-performance-benchmark:end -->
 
 **Baseline**: 2.3 tok/s (initial unoptimized implementation).
 
@@ -90,3 +94,12 @@ Compare against llama.cpp:
 ```bash
 bash bench_vs_llamacpp.sh /path/to/model.gguf
 ```
+
+## Artifact Budgets
+
+<!-- status:docs-performance-artifacts:start -->
+| Artifact | Current | Budget | Status |
+|----------|---------|--------|--------|
+| WASM core | ~158 KB | ~160 KB | ok |
+| WASM JS wrapper | ~20 KB | ~32 KB | ok |
+<!-- status:docs-performance-artifacts:end -->
