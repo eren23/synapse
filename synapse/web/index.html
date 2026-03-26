@@ -245,7 +245,10 @@
     </div>
 
     <script type="module">
-        import init, { RealLeWM, NeoUnify } from '../synapse-wasm/pkg/synapse_wasm.js';
+        const wasmModulePath = window.location.pathname.includes('/web/')
+            ? '../synapse-wasm/pkg/synapse_wasm.js'
+            : './synapse-wasm/pkg/synapse_wasm.js';
+        const { default: init, RealLeWM, NeoUnify } = await import(wasmModulePath);
 
         let model = null;
         let wasmReady = false;
