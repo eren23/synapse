@@ -241,33 +241,32 @@ pub fn bidirectional_attention(
     head_dim: usize,
 ) -> Vec<f32> {
     let q_dim = num_heads * head_dim;
-    let scale = 1.0 / (head_dim as f32).sqrt();
     let mut output = vec![0.0f32; seq_len * q_dim];
 
     for head in 0..num_heads {
+        // Gather Q, K, V for this head: [seq_len, head_dim]
+        let mut q_head = vec![0.0f32; seq_len * head_dim];
+        let mut k_head = vec![0.0f32; seq_len * head_dim];
+        let mut v_head = vec![0.0f32; seq_len * head_dim];
         for t in 0..seq_len {
-            // Q·K^T for ALL positions (no causal mask)
-            let mut scores = vec![0.0f32; seq_len];
-            for s in 0..seq_len {
-                let mut dot = 0.0f32;
-                for d in 0..head_dim {
-                    dot += q[t * q_dim + head * head_dim + d]
-                        * k[s * q_dim + head * head_dim + d];
-                }
-                scores[s] = dot * scale;
-            }
+            let src = t * q_dim + head * head_dim;
+            q_head[t * head_dim..(t + 1) * head_dim].copy_from_slice(&q[src..src + head_dim]);
+            k_head[t * head_dim..(t + 1) * head_dim].copy_from_slice(&k[src..src + head_dim]);
+            v_head[t * head_dim..(t + 1) * head_dim].copy_from_slice(&v[src..src + head_dim]);
+        }
 
-            // Softmax
-            softmax_slice(&mut scores);
+        // Fused tiled attention: Q·K^T → scale → softmax → ·V in one pass.
+        // Uses Zig SIMD with TILE_Q=32 tiling and online softmax.
+        let head_out = synapse_core::fused_attention_bidi(
+            seq_len, seq_len, head_dim, &q_head, &k_head, &v_head,
+        )
+        .expect("fused bidirectional attention failed");
 
-            // Weighted V sum
-            for d in 0..head_dim {
-                let mut sum = 0.0f32;
-                for s in 0..seq_len {
-                    sum += scores[s] * v[s * q_dim + head * head_dim + d];
-                }
-                output[t * q_dim + head * head_dim + d] = sum;
-            }
+        // Scatter back to interleaved output
+        for t in 0..seq_len {
+            let dst = t * q_dim + head * head_dim;
+            output[dst..dst + head_dim]
+                .copy_from_slice(&head_out[t * head_dim..(t + 1) * head_dim]);
         }
     }
 

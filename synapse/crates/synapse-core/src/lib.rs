@@ -455,6 +455,33 @@ pub fn fused_attention(
     Ok(out)
 }
 
+/// Bidirectional fused attention (no causal mask).
+/// Q: [seq_q, d_head], K: [seq_k, d_head], V: [seq_k, d_head].
+/// Returns [seq_q, d_head]. Uses tiled SIMD with online softmax.
+pub fn fused_attention_bidi(
+    seq_q: usize,
+    seq_k: usize,
+    d_head: usize,
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+) -> Result<Vec<f32>, SynapseError> {
+    if seq_q == 0 || seq_k == 0 || d_head == 0 {
+        return Ok(vec![0.0f32; seq_q * d_head]);
+    }
+    let mut out = vec![0.0f32; seq_q * d_head];
+    unsafe {
+        check_status(ffi::syn_fused_attention_bidi(
+            seq_q, seq_k, d_head,
+            q.as_ptr(),
+            k.as_ptr(),
+            v.as_ptr(),
+            out.as_mut_ptr(),
+        ))?;
+    }
+    Ok(out)
+}
+
 /// Q4_0 matrix-vector multiply: C[1,N] = A_f32[1,K] @ dequant(B_q4[N,K]).
 ///
 /// `a` is `[K]` f32 input, `b_q4` is raw Q4_0 block data for `[N, K]` matrix,

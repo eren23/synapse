@@ -4,11 +4,13 @@
 //! The predictor takes context embeddings and predicts target embeddings
 //! in embedding space — no decoder, no token sampling.
 
+use std::collections::HashMap;
+
 use crate::config::{AttentionConfig, FFNConfig, NormConfig};
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::apply_norm;
 use crate::registry::{create_attention, create_ffn, create_norm, NormVariant};
-use crate::weight_loading::AlignedBuffer;
+use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError, WeightMapper};
 
 use super::vit::{EncoderLayer, ViTConfig, ViTModel};
 
@@ -90,6 +92,14 @@ impl JEPAModel {
                 ffn_norm_weight: AlignedBuffer::new_zeroed(0),
                 ffn_up: AlignedBuffer::new_zeroed(0),
                 ffn_down: AlignedBuffer::new_zeroed(0),
+                q_bias: AlignedBuffer::new_zeroed(0),
+                k_bias: AlignedBuffer::new_zeroed(0),
+                v_bias: AlignedBuffer::new_zeroed(0),
+                o_bias: AlignedBuffer::new_zeroed(0),
+                ffn_up_bias: AlignedBuffer::new_zeroed(0),
+                ffn_down_bias: AlignedBuffer::new_zeroed(0),
+                attn_norm_bias: AlignedBuffer::new_zeroed(0),
+                ffn_norm_bias: AlignedBuffer::new_zeroed(0),
             });
         }
 
@@ -107,6 +117,19 @@ impl JEPAModel {
             predictor_embed_proj: AlignedBuffer::new_zeroed(0),
             predictor_output_proj: AlignedBuffer::new_zeroed(0),
         }
+    }
+
+    /// Load weights into the ViT encoder from source tensors using a name mapper.
+    ///
+    /// Delegates to `ViTModel::load_weights()` which already handles the full
+    /// ViT weight loading pattern. Use `WeightMapper::dinov2()` for DINOv2
+    /// or `WeightMapper::vit()` for standard ViT checkpoints.
+    pub fn load_encoder_weights(
+        &mut self,
+        weights: HashMap<String, RawTensor>,
+        mapper: &WeightMapper,
+    ) -> Result<super::LoadResult, WeightError> {
+        self.encoder.load_weights(weights, mapper)
     }
 
     /// Forward pass: encode image, then predict target embeddings from context patches.
@@ -385,6 +408,78 @@ mod tests {
         assert!(
             output.predicted_embeddings.iter().all(|v| v.is_finite()),
             "JEPA predicted embeddings contain non-finite values"
+        );
+    }
+
+    #[test]
+    fn test_jepa_load_encoder_weights() {
+        use crate::weight_loading::{RawTensor, WeightMapper};
+
+        let cfg = test_jepa_config();
+        let mut model = JEPAModel::from_config(&cfg);
+        let enc_h = cfg.encoder.hidden_size;
+        let enc_inter = cfg.encoder.intermediate_size;
+        let patch_dim = cfg.encoder.patch_size * cfg.encoder.patch_size * cfg.encoder.channels;
+        let enc_seq_len = cfg.encoder.seq_len();
+
+        // Build fake weight dict with DINOv2 naming
+        let mut weights: HashMap<String, RawTensor> = HashMap::new();
+
+        let rt = |len: usize, seed: u32| -> RawTensor {
+            RawTensor {
+                data: AlignedBuffer::from_slice(&gen_weights(len, seed)),
+                shape: vec![len],
+            }
+        };
+        let ones = |len: usize| -> RawTensor {
+            RawTensor {
+                data: AlignedBuffer::from_slice(&vec![1.0f32; len]),
+                shape: vec![len],
+            }
+        };
+
+        weights.insert("embeddings.patch_embeddings.projection.weight".into(), rt(enc_h * patch_dim, 1));
+        weights.insert("embeddings.patch_embeddings.projection.bias".into(), rt(enc_h, 2));
+        weights.insert("embeddings.cls_token".into(), rt(enc_h, 3));
+        weights.insert("embeddings.position_embeddings".into(), rt(enc_seq_len * enc_h, 4));
+        weights.insert("layernorm.weight".into(), ones(enc_h));
+        weights.insert("layernorm.bias".into(), rt(enc_h, 6));
+
+        for i in 0..cfg.encoder.num_layers {
+            let s = (i as u32 + 1) * 100;
+            weights.insert(format!("encoder.layer.{i}.attention.attention.query.weight"), rt(enc_h * enc_h, s + 1));
+            weights.insert(format!("encoder.layer.{i}.attention.attention.query.bias"), rt(enc_h, s + 2));
+            weights.insert(format!("encoder.layer.{i}.attention.attention.key.weight"), rt(enc_h * enc_h, s + 3));
+            weights.insert(format!("encoder.layer.{i}.attention.attention.key.bias"), rt(enc_h, s + 4));
+            weights.insert(format!("encoder.layer.{i}.attention.attention.value.weight"), rt(enc_h * enc_h, s + 5));
+            weights.insert(format!("encoder.layer.{i}.attention.attention.value.bias"), rt(enc_h, s + 6));
+            weights.insert(format!("encoder.layer.{i}.attention.output.dense.weight"), rt(enc_h * enc_h, s + 7));
+            weights.insert(format!("encoder.layer.{i}.attention.output.dense.bias"), rt(enc_h, s + 8));
+            weights.insert(format!("encoder.layer.{i}.intermediate.dense.weight"), rt(enc_inter * enc_h, s + 9));
+            weights.insert(format!("encoder.layer.{i}.intermediate.dense.bias"), rt(enc_inter, s + 10));
+            weights.insert(format!("encoder.layer.{i}.output.dense.weight"), rt(enc_h * enc_inter, s + 11));
+            weights.insert(format!("encoder.layer.{i}.output.dense.bias"), rt(enc_h, s + 12));
+            weights.insert(format!("encoder.layer.{i}.norm1.weight"), ones(enc_h));
+            weights.insert(format!("encoder.layer.{i}.norm1.bias"), rt(enc_h, s + 14));
+            weights.insert(format!("encoder.layer.{i}.norm2.weight"), ones(enc_h));
+            weights.insert(format!("encoder.layer.{i}.norm2.bias"), rt(enc_h, s + 16));
+        }
+
+        let mapper = WeightMapper::dinov2();
+        let result = model.load_encoder_weights(weights, &mapper).expect("load failed");
+
+        // Verify encoder weights loaded
+        assert!(!model.encoder.patch_proj.is_empty(), "encoder patch_proj should be loaded");
+        assert!(!model.encoder.cls_token.is_empty(), "encoder cls_token should be loaded");
+        assert!(!model.encoder.pos_embed.is_empty(), "encoder pos_embed should be loaded");
+        assert!(!model.encoder.final_norm_weight.is_empty(), "encoder final_norm should be loaded");
+        assert!(!model.encoder.layers[0].w_q.is_empty(), "encoder layer 0 w_q should be loaded");
+
+        // Some keys will be missing (patch_proj_bias is provided but classifier is not expected)
+        assert!(
+            result.unexpected.is_empty(),
+            "Should have no unmapped keys, got: {:?}",
+            result.unexpected
         );
     }
 }

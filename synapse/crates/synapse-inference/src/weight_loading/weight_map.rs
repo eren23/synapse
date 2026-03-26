@@ -106,7 +106,7 @@ impl WeightMapper {
     /// Create a mapper for the given HuggingFace model type.
     ///
     /// Supported: `"qwen3"`, `"llama"`, `"mistral"`, `"phi"` / `"phi3"`,
-    /// `"gemma"` / `"gemma2"`, `"vit"`.
+    /// `"gemma"` / `"gemma2"`, `"vit"`, `"clip"`, `"dinov2"`.
     pub fn from_model_type(model_type: &str) -> Result<Self, WeightError> {
         match model_type {
             "qwen3" => Ok(Self::qwen3()),
@@ -116,6 +116,8 @@ impl WeightMapper {
             "phi" | "phi3" => Ok(Self::phi()),
             "gemma" | "gemma2" => Ok(Self::gemma()),
             "vit" => Ok(Self::vit()),
+            "clip" => Ok(Self::clip()),
+            "dinov2" => Ok(Self::dinov2()),
             _ => Err(WeightError::InvalidFormat(format!(
                 "Unsupported model type: {model_type}"
             ))),
@@ -212,52 +214,353 @@ impl WeightMapper {
         Self::llama()
     }
 
+    /// Create a mapper for HuggingFace CLIP (openai/clip-vit-base-patch32) weight names.
+    ///
+    /// CLIP has TWO encoder prefixes: `vision_model.` for the ViT image encoder
+    /// and `text_model.` for the bidirectional text encoder, plus global projection
+    /// weights `visual_projection.weight` and `text_projection.weight`.
+    pub fn clip() -> Self {
+        WeightMapper::new(vec![
+            // ── Vision side ─────────────────────────────────────────
+            rule(
+                "vision_model.embeddings.patch_embedding.weight",
+                "vision.patch_proj",
+            ),
+            rule(
+                "vision_model.embeddings.class_embedding",
+                "vision.cls_token",
+            ),
+            rule(
+                "vision_model.embeddings.position_embedding.weight",
+                "vision.pos_embed",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.q_proj.weight",
+                "vision.layers[{i}].attention.w_q",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.q_proj.bias",
+                "vision.layers[{i}].attention.q_bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.k_proj.weight",
+                "vision.layers[{i}].attention.w_k",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.k_proj.bias",
+                "vision.layers[{i}].attention.k_bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.v_proj.weight",
+                "vision.layers[{i}].attention.w_v",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.v_proj.bias",
+                "vision.layers[{i}].attention.v_bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.out_proj.weight",
+                "vision.layers[{i}].attention.w_o",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.self_attn.out_proj.bias",
+                "vision.layers[{i}].attention.o_bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.mlp.fc1.weight",
+                "vision.layers[{i}].ffn.w_up",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.mlp.fc1.bias",
+                "vision.layers[{i}].ffn.up_bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.mlp.fc2.weight",
+                "vision.layers[{i}].ffn.w_down",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.mlp.fc2.bias",
+                "vision.layers[{i}].ffn.down_bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.layer_norm1.weight",
+                "vision.layers[{i}].attn_norm.weight",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.layer_norm1.bias",
+                "vision.layers[{i}].attn_norm.bias",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.layer_norm2.weight",
+                "vision.layers[{i}].ffn_norm.weight",
+            ),
+            rule(
+                "vision_model.encoder.layers.{i}.layer_norm2.bias",
+                "vision.layers[{i}].ffn_norm.bias",
+            ),
+            rule("vision_model.pre_layernorm.weight", "vision.pre_norm.weight"),
+            rule("vision_model.pre_layernorm.bias", "vision.pre_norm.bias"),
+            rule("vision_model.post_layernorm.weight", "vision.norm.weight"),
+            rule("vision_model.post_layernorm.bias", "vision.norm.bias"),
+            // ── Text side ───────────────────────────────────────────
+            rule(
+                "text_model.embeddings.token_embedding.weight",
+                "text.embeddings",
+            ),
+            rule(
+                "text_model.embeddings.position_embedding.weight",
+                "text.pos_embed",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.q_proj.weight",
+                "text.layers[{i}].attention.w_q",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.q_proj.bias",
+                "text.layers[{i}].attention.q_bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.k_proj.weight",
+                "text.layers[{i}].attention.w_k",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.k_proj.bias",
+                "text.layers[{i}].attention.k_bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.v_proj.weight",
+                "text.layers[{i}].attention.w_v",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.v_proj.bias",
+                "text.layers[{i}].attention.v_bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.out_proj.weight",
+                "text.layers[{i}].attention.w_o",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.self_attn.out_proj.bias",
+                "text.layers[{i}].attention.o_bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.mlp.fc1.weight",
+                "text.layers[{i}].ffn.w_up",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.mlp.fc1.bias",
+                "text.layers[{i}].ffn.up_bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.mlp.fc2.weight",
+                "text.layers[{i}].ffn.w_down",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.mlp.fc2.bias",
+                "text.layers[{i}].ffn.down_bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.layer_norm1.weight",
+                "text.layers[{i}].attn_norm.weight",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.layer_norm1.bias",
+                "text.layers[{i}].attn_norm.bias",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.layer_norm2.weight",
+                "text.layers[{i}].ffn_norm.weight",
+            ),
+            rule(
+                "text_model.encoder.layers.{i}.layer_norm2.bias",
+                "text.layers[{i}].ffn_norm.bias",
+            ),
+            rule("text_model.final_layer_norm.weight", "text.norm.weight"),
+            rule("text_model.final_layer_norm.bias", "text.norm.bias"),
+            // ── Projections ─────────────────────────────────────────
+            rule("visual_projection.weight", "vision_proj"),
+            rule("text_projection.weight", "text_proj"),
+        ])
+    }
+
+    /// Create a mapper for HuggingFace DINOv2 (facebook/dinov2-base) weight names.
+    ///
+    /// DINOv2 uses standard ViT architecture without prefix and
+    /// the same layer naming convention as HuggingFace ViT models.
+    pub fn dinov2() -> Self {
+        WeightMapper::new(vec![
+            rule(
+                "embeddings.patch_embeddings.projection.weight",
+                "patch_proj",
+            ),
+            rule(
+                "embeddings.patch_embeddings.projection.bias",
+                "patch_proj_bias",
+            ),
+            rule("embeddings.cls_token", "cls_token"),
+            rule("embeddings.position_embeddings", "pos_embed"),
+            // Attention weights
+            rule(
+                "encoder.layer.{i}.attention.attention.query.weight",
+                "layers[{i}].attention.w_q",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.attention.query.bias",
+                "layers[{i}].attention.q_bias",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.attention.key.weight",
+                "layers[{i}].attention.w_k",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.attention.key.bias",
+                "layers[{i}].attention.k_bias",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.attention.value.weight",
+                "layers[{i}].attention.w_v",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.attention.value.bias",
+                "layers[{i}].attention.v_bias",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.output.dense.weight",
+                "layers[{i}].attention.w_o",
+            ),
+            rule(
+                "encoder.layer.{i}.attention.output.dense.bias",
+                "layers[{i}].attention.o_bias",
+            ),
+            // FFN weights
+            rule(
+                "encoder.layer.{i}.intermediate.dense.weight",
+                "layers[{i}].ffn.w_up",
+            ),
+            rule(
+                "encoder.layer.{i}.intermediate.dense.bias",
+                "layers[{i}].ffn.up_bias",
+            ),
+            rule(
+                "encoder.layer.{i}.output.dense.weight",
+                "layers[{i}].ffn.w_down",
+            ),
+            rule(
+                "encoder.layer.{i}.output.dense.bias",
+                "layers[{i}].ffn.down_bias",
+            ),
+            // LayerNorm weights and biases
+            rule(
+                "encoder.layer.{i}.norm1.weight",
+                "layers[{i}].attn_norm.weight",
+            ),
+            rule(
+                "encoder.layer.{i}.norm1.bias",
+                "layers[{i}].attn_norm.bias",
+            ),
+            rule(
+                "encoder.layer.{i}.norm2.weight",
+                "layers[{i}].ffn_norm.weight",
+            ),
+            rule(
+                "encoder.layer.{i}.norm2.bias",
+                "layers[{i}].ffn_norm.bias",
+            ),
+            // Final norm
+            rule("layernorm.weight", "norm.weight"),
+            rule("layernorm.bias", "norm.bias"),
+        ])
+    }
+
     /// Create a mapper for HuggingFace ViT (Vision Transformer) weight names.
     ///
     /// Maps `google/vit-base-patch16-224` style naming to Synapse internal paths.
-    /// ViT uses LayerNorm, bidirectional attention, and GELU FFN (non-gated).
+    /// ViT uses LayerNorm (with bias), bidirectional attention, and GELU FFN (non-gated).
     pub fn vit() -> Self {
         WeightMapper::new(vec![
             rule(
                 "vit.embeddings.patch_embeddings.projection.weight",
                 "patch_proj",
             ),
+            rule(
+                "vit.embeddings.patch_embeddings.projection.bias",
+                "patch_proj_bias",
+            ),
             rule("vit.embeddings.cls_token", "cls_token"),
             rule("vit.embeddings.position_embeddings", "pos_embed"),
+            // Attention weights
             rule(
                 "vit.encoder.layer.{i}.attention.attention.query.weight",
                 "layers[{i}].attention.w_q",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.attention.attention.query.bias",
+                "layers[{i}].attention.q_bias",
             ),
             rule(
                 "vit.encoder.layer.{i}.attention.attention.key.weight",
                 "layers[{i}].attention.w_k",
             ),
             rule(
+                "vit.encoder.layer.{i}.attention.attention.key.bias",
+                "layers[{i}].attention.k_bias",
+            ),
+            rule(
                 "vit.encoder.layer.{i}.attention.attention.value.weight",
                 "layers[{i}].attention.w_v",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.attention.attention.value.bias",
+                "layers[{i}].attention.v_bias",
             ),
             rule(
                 "vit.encoder.layer.{i}.attention.output.dense.weight",
                 "layers[{i}].attention.w_o",
             ),
             rule(
+                "vit.encoder.layer.{i}.attention.output.dense.bias",
+                "layers[{i}].attention.o_bias",
+            ),
+            // FFN weights
+            rule(
                 "vit.encoder.layer.{i}.intermediate.dense.weight",
                 "layers[{i}].ffn.w_up",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.intermediate.dense.bias",
+                "layers[{i}].ffn.up_bias",
             ),
             rule(
                 "vit.encoder.layer.{i}.output.dense.weight",
                 "layers[{i}].ffn.w_down",
             ),
             rule(
+                "vit.encoder.layer.{i}.output.dense.bias",
+                "layers[{i}].ffn.down_bias",
+            ),
+            // LayerNorm weights and biases
+            rule(
                 "vit.encoder.layer.{i}.layernorm_before.weight",
                 "layers[{i}].attn_norm.weight",
+            ),
+            rule(
+                "vit.encoder.layer.{i}.layernorm_before.bias",
+                "layers[{i}].attn_norm.bias",
             ),
             rule(
                 "vit.encoder.layer.{i}.layernorm_after.weight",
                 "layers[{i}].ffn_norm.weight",
             ),
+            rule(
+                "vit.encoder.layer.{i}.layernorm_after.bias",
+                "layers[{i}].ffn_norm.bias",
+            ),
+            // Final norm
             rule("vit.layernorm.weight", "norm.weight"),
+            rule("vit.layernorm.bias", "norm.bias"),
+            // Classifier head
             rule("classifier.weight", "classifier.weight"),
+            rule("classifier.bias", "classifier.bias"),
         ])
     }
 
@@ -901,6 +1204,172 @@ mod tests {
         let mapper2 = WeightMapper::from_model_type("gemma").unwrap();
         assert_eq!(
             mapper2.map_name("model.layers.0.self_attn.q_proj.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+    }
+
+    // ── CLIP weight mapping ───────────────────────────────────────────
+
+    #[test]
+    fn clip_vision_mappings_correct() {
+        let mapper = WeightMapper::clip();
+
+        assert_eq!(
+            mapper.map_name("vision_model.embeddings.patch_embedding.weight"),
+            Some("vision.patch_proj".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.embeddings.class_embedding"),
+            Some("vision.cls_token".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.embeddings.position_embedding.weight"),
+            Some("vision.pos_embed".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.encoder.layers.0.self_attn.q_proj.weight"),
+            Some("vision.layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.encoder.layers.5.self_attn.out_proj.bias"),
+            Some("vision.layers[5].attention.o_bias".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.encoder.layers.11.mlp.fc1.weight"),
+            Some("vision.layers[11].ffn.w_up".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.encoder.layers.3.layer_norm1.weight"),
+            Some("vision.layers[3].attn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.pre_layernorm.weight"),
+            Some("vision.pre_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("vision_model.post_layernorm.weight"),
+            Some("vision.norm.weight".to_string())
+        );
+    }
+
+    #[test]
+    fn clip_text_mappings_correct() {
+        let mapper = WeightMapper::clip();
+
+        assert_eq!(
+            mapper.map_name("text_model.embeddings.token_embedding.weight"),
+            Some("text.embeddings".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.embeddings.position_embedding.weight"),
+            Some("text.pos_embed".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.encoder.layers.0.self_attn.q_proj.weight"),
+            Some("text.layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.encoder.layers.7.mlp.fc2.bias"),
+            Some("text.layers[7].ffn.down_bias".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.encoder.layers.2.layer_norm2.weight"),
+            Some("text.layers[2].ffn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.final_layer_norm.weight"),
+            Some("text.norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.final_layer_norm.bias"),
+            Some("text.norm.bias".to_string())
+        );
+    }
+
+    #[test]
+    fn clip_projection_mappings_correct() {
+        let mapper = WeightMapper::clip();
+
+        assert_eq!(
+            mapper.map_name("visual_projection.weight"),
+            Some("vision_proj".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_projection.weight"),
+            Some("text_proj".to_string())
+        );
+    }
+
+    #[test]
+    fn from_model_type_selects_clip() {
+        let mapper = WeightMapper::from_model_type("clip").unwrap();
+        assert_eq!(
+            mapper.map_name("vision_model.encoder.layers.0.self_attn.q_proj.weight"),
+            Some("vision.layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("text_model.encoder.layers.0.self_attn.q_proj.weight"),
+            Some("text.layers[0].attention.w_q".to_string())
+        );
+    }
+
+    // ── DINOv2 weight mapping ─────────────────────────────────────────
+
+    #[test]
+    fn dinov2_individual_mappings_correct() {
+        let mapper = WeightMapper::dinov2();
+
+        assert_eq!(
+            mapper.map_name("embeddings.patch_embeddings.projection.weight"),
+            Some("patch_proj".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("embeddings.patch_embeddings.projection.bias"),
+            Some("patch_proj_bias".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("embeddings.cls_token"),
+            Some("cls_token".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("embeddings.position_embeddings"),
+            Some("pos_embed".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("encoder.layer.0.attention.attention.query.weight"),
+            Some("layers[0].attention.w_q".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("encoder.layer.5.attention.attention.value.bias"),
+            Some("layers[5].attention.v_bias".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("encoder.layer.11.intermediate.dense.weight"),
+            Some("layers[11].ffn.w_up".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("encoder.layer.3.norm1.weight"),
+            Some("layers[3].attn_norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("encoder.layer.3.norm2.bias"),
+            Some("layers[3].ffn_norm.bias".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("layernorm.weight"),
+            Some("norm.weight".to_string())
+        );
+        assert_eq!(
+            mapper.map_name("layernorm.bias"),
+            Some("norm.bias".to_string())
+        );
+    }
+
+    #[test]
+    fn from_model_type_selects_dinov2() {
+        let mapper = WeightMapper::from_model_type("dinov2").unwrap();
+        assert_eq!(
+            mapper.map_name("encoder.layer.0.attention.attention.query.weight"),
             Some("layers[0].attention.w_q".to_string())
         );
     }

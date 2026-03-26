@@ -298,6 +298,13 @@ extern "C" {
         out: *mut f32,
     ) -> syn_status_t;
 
+    /// Bidirectional fused attention (no causal mask). For ViT/JEPA/CLIP encoders.
+    pub fn syn_fused_attention_bidi(
+        seq_q: usize, seq_k: usize, d_head: usize,
+        q: *const f32, k: *const f32, v: *const f32,
+        out: *mut f32,
+    ) -> syn_status_t;
+
     /// Q4_0 matrix-vector multiply: C[1,N] = A_f32[1,K] @ dequant(B_q4[N,K]).
     /// K must be a multiple of 32.
     pub fn syn_q4_0_gemv(

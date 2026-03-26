@@ -20,18 +20,21 @@ pub fn patch_embed(
     let num_patches = patches_h * patches_w;
     let patch_dim = patch_size * patch_size * channels;
 
-    // Extract patches into [num_patches, patch_dim]
+    // Extract patches into [num_patches, patch_dim] in CHW order.
+    // Conv2D weight from HuggingFace is [out_ch, in_ch, kH, kW] = [embed_dim, C, P, P].
+    // Flattened: index = c * P * P + py * P + px.
+    // Image is stored HWC: image[(y * W + x) * C + c].
     let mut patches = vec![0.0f32; num_patches * patch_dim];
     for ph in 0..patches_h {
         for pw in 0..patches_w {
             let patch_idx = ph * patches_w + pw;
-            for py in 0..patch_size {
-                for px in 0..patch_size {
-                    let img_y = ph * patch_size + py;
-                    let img_x = pw * patch_size + px;
-                    for c in 0..channels {
+            for c in 0..channels {
+                for py in 0..patch_size {
+                    for px in 0..patch_size {
+                        let img_y = ph * patch_size + py;
+                        let img_x = pw * patch_size + px;
                         let img_idx = (img_y * width + img_x) * channels + c;
-                        let patch_pixel = (py * patch_size + px) * channels + c;
+                        let patch_pixel = c * patch_size * patch_size + py * patch_size + px;
                         patches[patch_idx * patch_dim + patch_pixel] = image[img_idx];
                     }
                 }

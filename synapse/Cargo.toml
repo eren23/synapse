@@ -142,3 +142,15 @@ path = "examples/qwen3_chat.rs"
 [[example]]
 name = "model_benchmark"
 path = "examples/model_benchmark.rs"
+
+[[example]]
+name = "vit_classify"
+path = "examples/vit_classify.rs"
+
+[[example]]
+name = "clip_similarity"
+path = "examples/clip_similarity.rs"
+
+[[example]]
+name = "jepa_embed"
+path = "examples/jepa_embed.rs"
