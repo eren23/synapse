@@ -122,7 +122,7 @@ impl InferenceEngine {
         let model_adapter_kind = ModelAdapterKind::from_model_name(&config.name);
 
         let mut model = ModelBuilder::from_config(&config);
-        let weights = if model_path.join("model.safetensors.index.json").exists() {
+        let mut weights = if model_path.join("model.safetensors.index.json").exists() {
             load_safetensors_sharded(model_path)?
         } else {
             let checkpoint = find_checkpoint_file(model_path)?;
@@ -131,6 +131,14 @@ impl InferenceEngine {
                 _ => load_safetensors(&checkpoint)?,
             }
         };
+
+        // Split fused projections (Phi-3 uses qkv_proj and gate_up_proj)
+        crate::weight_loading::weight_map::split_fused_projections(
+            &mut weights,
+            config.architecture.hidden_size,
+            config.ffn.intermediate_size(),
+            config.architecture.num_layers,
+        );
 
         // CODEx: exact-mode pretrained loading should fail on checkpoint drift
         // instead of silently dropping required tensors.

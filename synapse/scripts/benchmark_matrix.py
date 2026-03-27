@@ -445,6 +445,12 @@ def synthetic_benchmark_specs() -> list[dict[str, str]]:
             "label": "Gemma synthetic scaled config",
             "config_path": "configs/gemma_2b.json",
         },
+        {
+            "id": "synthetic_phi3",
+            "family_id": "phi_3",
+            "label": "Phi-3 synthetic scaled config",
+            "config_path": "configs/phi3_mini.json",
+        },
     ]
 
 

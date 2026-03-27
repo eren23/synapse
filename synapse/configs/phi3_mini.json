@@ -1,0 +1,31 @@
+{
+    "name": "phi3",
+    "architecture": {
+        "hidden_size": 3072,
+        "num_layers": 32,
+        "vocab_size": 32064,
+        "max_sequence_length": 4096,
+        "tie_word_embeddings": false
+    },
+    "attention": {
+        "type": "MHA",
+        "num_heads": 32,
+        "head_dim": 96
+    },
+    "norm": {
+        "type": "RMSNorm",
+        "eps": 1e-5
+    },
+    "ffn": {
+        "type": "SwiGLU",
+        "intermediate_size": 8192
+    },
+    "position": {
+        "type": "RoPE",
+        "base": 10000.0,
+        "max_position_embeddings": 4096
+    },
+    "quantization": {
+        "type": "F32"
+    }
+}

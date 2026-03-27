@@ -620,6 +620,65 @@ impl WeightMapper {
     }
 }
 
+/// Split fused QKV and gate/up projections into separate weight tensors.
+///
+/// Phi-3 and some other models use fused `qkv_proj` (shape [3*h, h]) and
+/// `gate_up_proj` (shape [2*inter, h]). This function detects them by key
+/// name pattern and splits them into separate q/k/v and gate/up tensors.
+///
+/// This is a no-op if no fused keys are found, so it is safe to call for
+/// all models.
+pub fn split_fused_projections(
+    weights: &mut HashMap<String, super::RawTensor>,
+    hidden_size: usize,
+    intermediate_size: usize,
+    num_layers: usize,
+) {
+    use super::AlignedBuffer;
+
+    for layer_idx in 0..num_layers {
+        // Split qkv_proj → q_proj, k_proj, v_proj
+        let qkv_key = format!("model.layers.{layer_idx}.self_attn.qkv_proj.weight");
+        if let Some(qkv) = weights.remove(&qkv_key) {
+            let rows_per_proj = hidden_size;
+            let elems_per_proj = rows_per_proj * hidden_size;
+            let q_data = AlignedBuffer::from_slice(&qkv.data[..elems_per_proj]);
+            let k_data = AlignedBuffer::from_slice(&qkv.data[elems_per_proj..2 * elems_per_proj]);
+            let v_data = AlignedBuffer::from_slice(&qkv.data[2 * elems_per_proj..3 * elems_per_proj]);
+
+            weights.insert(
+                format!("model.layers.{layer_idx}.self_attn.q_proj.weight"),
+                super::RawTensor { data: q_data, shape: vec![hidden_size, hidden_size] },
+            );
+            weights.insert(
+                format!("model.layers.{layer_idx}.self_attn.k_proj.weight"),
+                super::RawTensor { data: k_data, shape: vec![hidden_size, hidden_size] },
+            );
+            weights.insert(
+                format!("model.layers.{layer_idx}.self_attn.v_proj.weight"),
+                super::RawTensor { data: v_data, shape: vec![hidden_size, hidden_size] },
+            );
+        }
+
+        // Split gate_up_proj → gate_proj, up_proj
+        let gate_up_key = format!("model.layers.{layer_idx}.mlp.gate_up_proj.weight");
+        if let Some(gate_up) = weights.remove(&gate_up_key) {
+            let gate_elems = intermediate_size * hidden_size;
+            let gate_data = AlignedBuffer::from_slice(&gate_up.data[..gate_elems]);
+            let up_data = AlignedBuffer::from_slice(&gate_up.data[gate_elems..2 * gate_elems]);
+
+            weights.insert(
+                format!("model.layers.{layer_idx}.mlp.gate_proj.weight"),
+                super::RawTensor { data: gate_data, shape: vec![intermediate_size, hidden_size] },
+            );
+            weights.insert(
+                format!("model.layers.{layer_idx}.mlp.up_proj.weight"),
+                super::RawTensor { data: up_data, shape: vec![intermediate_size, hidden_size] },
+            );
+        }
+    }
+}
+
 /// Match `source` against `source_pattern` (with optional `{i}` placeholder),
 /// extracting the captured layer index and substituting it into `target_pattern`.
 fn try_match_and_replace(
@@ -1373,5 +1432,59 @@ mod tests {
             mapper.map_name("encoder.layer.0.attention.attention.query.weight"),
             Some("layers[0].attention.w_q".to_string())
         );
+    }
+
+    // ── split_fused_projections ───────────────────────────────────────
+
+    #[test]
+    fn split_fused_qkv_projection() {
+        use crate::weight_loading::{AlignedBuffer, RawTensor};
+
+        let h = 64usize;
+        let qkv_data: Vec<f32> = (0..3 * h * h).map(|i| i as f32).collect();
+        let mut weights = HashMap::new();
+        weights.insert(
+            "model.layers.0.self_attn.qkv_proj.weight".to_string(),
+            RawTensor {
+                data: AlignedBuffer::from_slice(&qkv_data),
+                shape: vec![3 * h, h],
+            },
+        );
+
+        split_fused_projections(&mut weights, h, h, 1);
+
+        assert!(weights.contains_key("model.layers.0.self_attn.q_proj.weight"));
+        assert!(weights.contains_key("model.layers.0.self_attn.k_proj.weight"));
+        assert!(weights.contains_key("model.layers.0.self_attn.v_proj.weight"));
+        assert!(!weights.contains_key("model.layers.0.self_attn.qkv_proj.weight"));
+
+        let q = &weights["model.layers.0.self_attn.q_proj.weight"];
+        assert_eq!(q.shape, vec![h, h]);
+    }
+
+    #[test]
+    fn split_fused_gate_up_projection() {
+        use crate::weight_loading::{AlignedBuffer, RawTensor};
+
+        let h = 64usize;
+        let inter = 128usize;
+        let gate_up_data: Vec<f32> = (0..2 * inter * h).map(|i| i as f32).collect();
+        let mut weights = HashMap::new();
+        weights.insert(
+            "model.layers.0.mlp.gate_up_proj.weight".to_string(),
+            RawTensor {
+                data: AlignedBuffer::from_slice(&gate_up_data),
+                shape: vec![2 * inter, h],
+            },
+        );
+
+        split_fused_projections(&mut weights, h, inter, 1);
+
+        assert!(weights.contains_key("model.layers.0.mlp.gate_proj.weight"));
+        assert!(weights.contains_key("model.layers.0.mlp.up_proj.weight"));
+        assert!(!weights.contains_key("model.layers.0.mlp.gate_up_proj.weight"));
+
+        let gate = &weights["model.layers.0.mlp.gate_proj.weight"];
+        assert_eq!(gate.shape, vec![inter, h]);
     }
 }
