@@ -439,6 +439,12 @@ def synthetic_benchmark_specs() -> list[dict[str, str]]:
             "label": "Mistral 7B synthetic scaled config",
             "config_path": "configs/mistral_7b.json",
         },
+        {
+            "id": "synthetic_gemma",
+            "family_id": "gemma",
+            "label": "Gemma synthetic scaled config",
+            "config_path": "configs/gemma_2b.json",
+        },
     ]
 
 

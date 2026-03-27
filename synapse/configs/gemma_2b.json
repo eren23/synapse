@@ -1,0 +1,32 @@
+{
+    "name": "gemma",
+    "architecture": {
+        "hidden_size": 2048,
+        "num_layers": 18,
+        "vocab_size": 256000,
+        "max_sequence_length": 8192,
+        "tie_word_embeddings": true,
+        "embed_scale": 45.254833
+    },
+    "attention": {
+        "type": "MHA",
+        "num_heads": 8,
+        "head_dim": 256
+    },
+    "norm": {
+        "type": "RMSNorm",
+        "eps": 1e-6
+    },
+    "ffn": {
+        "type": "GeGLU",
+        "intermediate_size": 16384
+    },
+    "position": {
+        "type": "RoPE",
+        "base": 10000.0,
+        "max_position_embeddings": 8192
+    },
+    "quantization": {
+        "type": "F32"
+    }
+}
