@@ -91,3 +91,69 @@ pub(crate) fn apply_headwise_rmsnorm(
     // Delegate to SIMD rmsnorm which normalizes over the last dimension.
     rmsnorm(x, weight, eps, head_dim)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rms(v: &[f32]) -> f32 {
+        (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn rmsnorm_output_has_unit_rms() {
+        let x = vec![1.0f32, 2.0, 3.0, 4.0];
+        let weight = vec![1.0f32; 4];
+        let out = rmsnorm(&x, &weight, 1e-8, 4);
+        let r = rms(&out);
+        assert!((r - 1.0).abs() < 0.01, "RMS of rmsnorm output should be ~1.0, got {r}");
+    }
+
+    #[test]
+    fn rmsnorm_with_ones_weight_is_identity_scale() {
+        // With weight=[1,...], rmsnorm just rescales direction not orientation.
+        // Confirm the output has the same direction as x/||x||_rms.
+        let x = vec![3.0f32, 4.0, 0.0, 0.0];
+        let weight = vec![1.0f32; 4];
+        let out = rmsnorm(&x, &weight, 1e-8, 4);
+        // output[0]/output[1] should equal x[0]/x[1] = 3/4
+        let ratio_out = out[0] / out[1];
+        let ratio_in = x[0] / x[1];
+        assert!(
+            (ratio_out - ratio_in).abs() < 1e-5,
+            "rmsnorm with ones weight should preserve direction: got ratio {ratio_out}, expected {ratio_in}"
+        );
+    }
+
+    #[test]
+    fn layernorm_output_has_zero_mean() {
+        let x = vec![1.0f32, 2.0, 3.0, 4.0];
+        let weight = vec![1.0f32; 4];
+        let out = layernorm(&x, &weight, 1e-8, 4);
+        let mean: f32 = out.iter().sum::<f32>() / out.len() as f32;
+        assert!(mean.abs() < 1e-5, "layernorm output mean should be ~0.0, got {mean}");
+    }
+
+    #[test]
+    fn layernorm_batched_independent() {
+        // Two different rows; each should normalize independently (mean ~ 0).
+        // Row 0 and row 1 should NOT produce identical outputs.
+        let x = vec![
+            1.0f32, 2.0, 3.0, 4.0,   // row 0: ascending
+            10.0f32, 10.0, 20.0, 20.0, // row 1: different distribution
+        ];
+        let weight = vec![1.0f32; 4];
+        let out = layernorm(&x, &weight, 1e-8, 4);
+        assert_eq!(out.len(), 8);
+
+        // Each row independently normalized: both means should be ~0
+        let mean0: f32 = out[0..4].iter().sum::<f32>() / 4.0;
+        let mean1: f32 = out[4..8].iter().sum::<f32>() / 4.0;
+        assert!(mean0.abs() < 1e-5, "row 0 mean should be 0, got {mean0}");
+        assert!(mean1.abs() < 1e-5, "row 1 mean should be 0, got {mean1}");
+
+        // The two rows should NOT be identical (different input distributions)
+        let diff: f32 = out[0..4].iter().zip(out[4..8].iter()).map(|(a, b)| (a - b).abs()).sum();
+        assert!(diff > 1e-3, "rows with different inputs should produce different normalized outputs, diff={diff}");
+    }
+}

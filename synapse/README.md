@@ -43,6 +43,25 @@ Metal rows are only allowed into the public benchmark table when the runtime lin
 - **Training workspace** (Beta) — Autograd, NN, data, graph, and training crates remain available in the workspace.
 <!-- status:synapse-features:end -->
 
+## Multi-Target Architecture
+
+Synapse runs the same models across three deployment targets from one codebase:
+
+| Target | Backend | Quantization | Use Case |
+|--------|---------|-------------|----------|
+| **Desktop** | Zig SIMD (NEON/AVX2) + Metal GPU | f32, INT8, Q4 | Development, benchmarking |
+| **Browser** | Pure Rust (WASM) | f32, INT8 | Client-side demos, embeddable widget |
+| **ESP32-P4** | Pure Rust + PIE accelerator | INT8, Q4 | Edge inference, IoT |
+
+Build for any target:
+```bash
+cargo build --release                    # Desktop (default)
+wasm-pack build -p synapse-wasm --release  # Browser
+cargo build -p synapse-esp32               # ESP32 (host test)
+```
+
+See [BUILD.md](BUILD.md) for detailed instructions.
+
 ## Quick Start
 
 ```bash
@@ -84,7 +103,9 @@ synapse/
 │   ├── synapse-optim       # Optimizers (SGD, Adam, RMSProp)
 │   ├── synapse-data        # Data loading pipeline
 │   ├── synapse-graph       # Graph IR + optimization
-│   └── synapse-train       # Training loop + callbacks
+│   ├── synapse-train       # Training loop + callbacks
+│   ├── synapse-wasm/           # Browser WASM runtime (pure Rust)
+│   └── synapse-esp32/          # ESP32-P4 edge inference
 ├── zig/                    # SIMD kernels (matmul, attention, RoPE, RMSNorm)
 ├── configs/                # Model configs (Qwen3, LLaMA, Mistral)
 ├── examples/               # Chat, benchmarking, training examples
@@ -110,6 +131,31 @@ The model matrix carries two dimensions:
 - `Evidence` is the strongest proof currently available, such as a real local benchmark, logit verification, or synthetic validation.
 
 That split keeps the docs honest. A family can be structurally supported and exercised through fake-weight tests without being presented as a measured end-to-end checkpoint path yet.
+
+## World Models (LEWM)
+
+Synapse includes a Latent Emergent World Model (LEWM) — a ViT encoder + DiT predictor that maps observations to latent states and predicts future states conditioned on actions.
+
+| Operation | Latency (Mac) | Notes |
+|-----------|-------------|-------|
+| Encode (224×224 → 192d) | 26.9ms | ViT encoder, 6 layers |
+| Predict (single step) | 12.8ms | DiT predictor, 6 adaLN layers |
+| Rollout (50 steps) | 609ms | Sequential predict_next |
+
+**Quantization:**
+- INT8: predictor layers quantized (~4x smaller)
+- Q4: predictor layers in 4-bit (~6.4x compression, ~7MB weights)
+
+**Browser demo:** Load the 69MB checkpoint in-browser and run interactive trajectory rollouts. See `web/index.html`.
+
+```bash
+# Run LEWM demo (requires PushT checkpoint)
+cargo run --example lewm_demo --release
+
+# Browser demo
+cd web && python3 -m http.server 8000
+# Open http://localhost:8000
+```
 
 ## Quantization Formats
 
@@ -153,6 +199,22 @@ cargo test --test multi_model_validation
 python3 scripts/benchmark_matrix.py
 python3 scripts/sync_public_status.py --check
 ```
+
+## Workspace
+
+| Crate | Purpose |
+|-------|---------|
+| **synapse-inference** | Core: models, generation, quantization, chat templates |
+| **synapse-core** | FFI wrappers for Zig SIMD ops |
+| **synapse-sys** | Raw C bindings to Zig kernels |
+| **synapse-nn** | Neural network modules (Linear, Transformer) |
+| **synapse-autograd** | Tape-based automatic differentiation |
+| **synapse-optim** | Optimizers (SGD, Adam, RMSProp) |
+| **synapse-data** | Data loading pipeline |
+| **synapse-graph** | Graph IR + optimization passes |
+| **synapse-train** | Training loop with callbacks |
+| **synapse-wasm** | Browser WASM runtime (pure Rust, no FFI) |
+| **synapse-esp32** | ESP32-P4 edge inference target |
 
 ## License
 

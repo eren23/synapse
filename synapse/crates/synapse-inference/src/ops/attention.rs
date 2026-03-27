@@ -345,4 +345,54 @@ mod tests {
             );
         }
     }
+
+    /// seq_len=1, single head: with only one token, softmax over a single score
+    /// is 1.0, so output must equal V exactly.
+    #[test]
+    fn bidirectional_attention_single_head_single_token() {
+        let seq_len = 1;
+        let num_heads = 1;
+        let head_dim = 4;
+        let q_dim = num_heads * head_dim;
+
+        let q = vec![1.0f32, 0.0, 0.0, 0.0];
+        let k = vec![1.0f32, 0.0, 0.0, 0.0];
+        let v = vec![0.5f32, 1.5, 2.5, 3.5];
+
+        let output = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+
+        assert_eq!(output.len(), seq_len * q_dim);
+        for (i, (&expected, &got)) in v.iter().zip(output.iter()).enumerate() {
+            assert!(
+                (got - expected).abs() < 1e-5,
+                "single-token attention output[{i}] should equal v[{i}]: got {got}, expected {expected}"
+            );
+        }
+    }
+
+    /// Output tensor has the correct shape [seq_len * num_heads * head_dim].
+    #[test]
+    fn bidirectional_attention_output_shape() {
+        let seq_len = 5;
+        let num_heads = 3;
+        let head_dim = 8;
+        let q_dim = num_heads * head_dim;
+
+        let q: Vec<f32> = (0..seq_len * q_dim).map(|i| (i as f32) * 0.01).collect();
+        let k = q.clone();
+        let v = q.clone();
+
+        let output = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+
+        assert_eq!(
+            output.len(),
+            seq_len * q_dim,
+            "output length should be seq_len * num_heads * head_dim = {}",
+            seq_len * q_dim
+        );
+        assert!(
+            output.iter().all(|x| x.is_finite()),
+            "all output values should be finite"
+        );
+    }
 }
