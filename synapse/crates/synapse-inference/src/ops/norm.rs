@@ -4,6 +4,7 @@ use crate::registry::NormVariant;
 ///
 /// Uses `syn_vmul` / `syn_vreduce_sum` for zero-copy SIMD on each row,
 /// avoiding tensor-handle allocation overhead that dominates at small sizes.
+#[cfg(feature = "zig-ffi")]
 pub(crate) fn rmsnorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
     let n = x.len() / hidden_size;
     let mut out = vec![0.0f32; x.len()];
@@ -34,6 +35,11 @@ pub(crate) fn rmsnorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -
         }
     }
     out
+}
+
+#[cfg(not(feature = "zig-ffi"))]
+pub(crate) fn rmsnorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
+    super::pure_rust_ops::rmsnorm(x, weight, eps, hidden_size)
 }
 
 /// Layer normalization over the last dimension (gamma only, no beta).

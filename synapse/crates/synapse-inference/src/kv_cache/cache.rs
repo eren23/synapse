@@ -1,140 +1,243 @@
-use std::ptr;
+// ── FFI-based KV cache (zig-ffi feature) ─────────────────────────────
+#[cfg(feature = "zig-ffi")]
+mod imp {
+    use std::ptr;
 
-use synapse_core::SynapseError;
-use synapse_sys as ffi;
+    use synapse_core::SynapseError;
+    use synapse_sys as ffi;
 
-fn check_status(status: ffi::syn_status_t) -> Result<(), SynapseError> {
-    match status {
-        ffi::SYN_OK => Ok(()),
-        ffi::SYN_ERR_NULL_PTR => Err(SynapseError::NullPointer),
-        ffi::SYN_ERR_INVALID_ARG => Err(SynapseError::InvalidArg),
-        ffi::SYN_ERR_OUT_OF_MEMORY => Err(SynapseError::OutOfMemory),
-        ffi::SYN_ERR_SHAPE_MISMATCH => Err(SynapseError::ShapeMismatch),
-        ffi::SYN_ERR_NOT_CONTIGUOUS => Err(SynapseError::NotContiguous),
-        ffi::SYN_ERR_INVALID_AXIS => Err(SynapseError::InvalidAxis),
-        ffi::SYN_ERR_INVALID_DIMENSIONS => Err(SynapseError::InvalidDimensions),
-        ffi::SYN_ERR_INTERNAL => Err(SynapseError::Internal),
-        code => Err(SynapseError::Unknown(code)),
+    fn check_status(status: ffi::syn_status_t) -> Result<(), SynapseError> {
+        match status {
+            ffi::SYN_OK => Ok(()),
+            ffi::SYN_ERR_NULL_PTR => Err(SynapseError::NullPointer),
+            ffi::SYN_ERR_INVALID_ARG => Err(SynapseError::InvalidArg),
+            ffi::SYN_ERR_OUT_OF_MEMORY => Err(SynapseError::OutOfMemory),
+            ffi::SYN_ERR_SHAPE_MISMATCH => Err(SynapseError::ShapeMismatch),
+            ffi::SYN_ERR_NOT_CONTIGUOUS => Err(SynapseError::NotContiguous),
+            ffi::SYN_ERR_INVALID_AXIS => Err(SynapseError::InvalidAxis),
+            ffi::SYN_ERR_INVALID_DIMENSIONS => Err(SynapseError::InvalidDimensions),
+            ffi::SYN_ERR_INTERNAL => Err(SynapseError::Internal),
+            code => Err(SynapseError::Unknown(code)),
+        }
     }
-}
 
-/// A single layer's KV cache, wrapping a Zig-allocated pre-allocated buffer.
-///
-/// Each layer holds separate K and V buffers sized for `max_seq_len` tokens.
-/// Append is O(1) memcpy, slice is zero-copy, reset just rewinds the position.
-pub struct KVCacheLayer {
-    ptr: *mut ffi::syn_kvcache_t,
-    n_kv_heads: usize,
-    head_dim: usize,
-    max_seq_len: usize,
-}
-
-unsafe impl Send for KVCacheLayer {}
-
-impl KVCacheLayer {
-    pub fn new(
-        max_seq_len: usize,
+    /// A single layer's KV cache, wrapping a Zig-allocated pre-allocated buffer.
+    ///
+    /// Each layer holds separate K and V buffers sized for `max_seq_len` tokens.
+    /// Append is O(1) memcpy, slice is zero-copy, reset just rewinds the position.
+    pub struct KVCacheLayer {
+        ptr: *mut ffi::syn_kvcache_t,
         n_kv_heads: usize,
         head_dim: usize,
-    ) -> Result<Self, SynapseError> {
-        let mut ptr: *mut ffi::syn_kvcache_t = ptr::null_mut();
-        unsafe {
-            check_status(ffi::syn_kvcache_create(
-                max_seq_len,
+        max_seq_len: usize,
+    }
+
+    unsafe impl Send for KVCacheLayer {}
+
+    impl KVCacheLayer {
+        pub fn new(
+            max_seq_len: usize,
+            n_kv_heads: usize,
+            head_dim: usize,
+        ) -> Result<Self, CacheError> {
+            let mut ptr: *mut ffi::syn_kvcache_t = ptr::null_mut();
+            unsafe {
+                check_status(ffi::syn_kvcache_create(
+                    max_seq_len,
+                    n_kv_heads,
+                    head_dim,
+                    &mut ptr,
+                ))?;
+            }
+            Ok(Self {
+                ptr,
                 n_kv_heads,
                 head_dim,
-                &mut ptr,
-            ))?;
+                max_seq_len,
+            })
         }
-        Ok(Self {
-            ptr,
-            n_kv_heads,
-            head_dim,
-            max_seq_len,
-        })
-    }
 
-    /// Append one token's K and V vectors.
-    /// `k_token` and `v_token` must each have length `n_kv_heads * head_dim`.
-    pub fn append(&mut self, k_token: &[f32], v_token: &[f32]) -> Result<(), SynapseError> {
-        let stride = self.n_kv_heads * self.head_dim;
-        unsafe {
-            check_status(ffi::syn_kvcache_append(
-                self.ptr,
-                k_token.as_ptr(),
-                v_token.as_ptr(),
-                stride,
-            ))
-        }
-    }
-
-    /// Get zero-copy slices into the populated K and V regions.
-    /// Returns `(k_slice, v_slice, seq_len)`.
-    pub fn slice(&self) -> Result<(&[f32], &[f32], usize), SynapseError> {
-        let mut k_ptr: *const f32 = ptr::null();
-        let mut v_ptr: *const f32 = ptr::null();
-        let mut seq_len: usize = 0;
-        unsafe {
-            check_status(ffi::syn_kvcache_slice(
-                self.ptr,
-                &mut k_ptr,
-                &mut v_ptr,
-                &mut seq_len,
-            ))?;
-            let total = seq_len * self.n_kv_heads * self.head_dim;
-            Ok((
-                std::slice::from_raw_parts(k_ptr, total),
-                std::slice::from_raw_parts(v_ptr, total),
-                seq_len,
-            ))
-        }
-    }
-
-    /// Reset position to 0. No deallocation — buffers are reused.
-    pub fn reset(&mut self) -> Result<(), SynapseError> {
-        unsafe { check_status(ffi::syn_kvcache_reset(self.ptr)) }
-    }
-
-    /// Truncate to a given position. Used by speculative decoding rollback.
-    pub fn truncate_to(&mut self, new_len: usize) -> Result<(), SynapseError> {
-        unsafe { check_status(ffi::syn_kvcache_truncate(self.ptr, new_len)) }
-    }
-
-    pub fn current_len(&self) -> Result<usize, SynapseError> {
-        let mut seq_len: usize = 0;
-        unsafe {
-            check_status(ffi::syn_kvcache_slice(
-                self.ptr,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                &mut seq_len,
-            ))?;
-        }
-        Ok(seq_len)
-    }
-
-    pub fn max_seq_len(&self) -> usize {
-        self.max_seq_len
-    }
-
-    pub fn n_kv_heads(&self) -> usize {
-        self.n_kv_heads
-    }
-
-    pub fn head_dim(&self) -> usize {
-        self.head_dim
-    }
-}
-
-impl Drop for KVCacheLayer {
-    fn drop(&mut self) {
-        if !self.ptr.is_null() {
+        pub fn append(&mut self, k_token: &[f32], v_token: &[f32]) -> Result<(), CacheError> {
+            let stride = self.n_kv_heads * self.head_dim;
             unsafe {
-                ffi::syn_kvcache_destroy(self.ptr);
+                check_status(ffi::syn_kvcache_append(
+                    self.ptr,
+                    k_token.as_ptr(),
+                    v_token.as_ptr(),
+                    stride,
+                ))
+            }
+        }
+
+        pub fn slice(&self) -> Result<(&[f32], &[f32], usize), CacheError> {
+            let mut k_ptr: *const f32 = ptr::null();
+            let mut v_ptr: *const f32 = ptr::null();
+            let mut seq_len: usize = 0;
+            unsafe {
+                check_status(ffi::syn_kvcache_slice(
+                    self.ptr,
+                    &mut k_ptr,
+                    &mut v_ptr,
+                    &mut seq_len,
+                ))?;
+                let total = seq_len * self.n_kv_heads * self.head_dim;
+                Ok((
+                    std::slice::from_raw_parts(k_ptr, total),
+                    std::slice::from_raw_parts(v_ptr, total),
+                    seq_len,
+                ))
+            }
+        }
+
+        pub fn reset(&mut self) -> Result<(), CacheError> {
+            unsafe { check_status(ffi::syn_kvcache_reset(self.ptr)) }
+        }
+
+        pub fn truncate_to(&mut self, new_len: usize) -> Result<(), CacheError> {
+            unsafe { check_status(ffi::syn_kvcache_truncate(self.ptr, new_len)) }
+        }
+
+        pub fn current_len(&self) -> Result<usize, CacheError> {
+            let mut seq_len: usize = 0;
+            unsafe {
+                check_status(ffi::syn_kvcache_slice(
+                    self.ptr,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    &mut seq_len,
+                ))?;
+            }
+            Ok(seq_len)
+        }
+
+        pub fn max_seq_len(&self) -> usize {
+            self.max_seq_len
+        }
+
+        pub fn n_kv_heads(&self) -> usize {
+            self.n_kv_heads
+        }
+
+        pub fn head_dim(&self) -> usize {
+            self.head_dim
+        }
+    }
+
+    impl Drop for KVCacheLayer {
+        fn drop(&mut self) {
+            if !self.ptr.is_null() {
+                unsafe {
+                    ffi::syn_kvcache_destroy(self.ptr);
+                }
             }
         }
     }
+
+    /// Error type for KV cache operations.
+    pub type CacheError = SynapseError;
 }
+
+// ── Pure-Rust KV cache (no zig-ffi) ─────────────────────────────────
+#[cfg(not(feature = "zig-ffi"))]
+mod imp {
+    use std::fmt;
+
+    /// Error type for KV cache operations (pure-Rust).
+    #[derive(Debug, Clone)]
+    pub enum CacheError {
+        OutOfCapacity,
+        InvalidArg,
+    }
+
+    impl fmt::Display for CacheError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                CacheError::OutOfCapacity => write!(f, "KV cache out of capacity"),
+                CacheError::InvalidArg => write!(f, "Invalid argument"),
+            }
+        }
+    }
+
+    impl std::error::Error for CacheError {}
+
+    /// A single layer's KV cache using pure Rust Vec storage.
+    pub struct KVCacheLayer {
+        k_buf: Vec<f32>,
+        v_buf: Vec<f32>,
+        n_kv_heads: usize,
+        head_dim: usize,
+        max_seq_len: usize,
+        pos: usize,
+    }
+
+    impl KVCacheLayer {
+        pub fn new(
+            max_seq_len: usize,
+            n_kv_heads: usize,
+            head_dim: usize,
+        ) -> Result<Self, CacheError> {
+            let capacity = max_seq_len * n_kv_heads * head_dim;
+            Ok(Self {
+                k_buf: vec![0.0f32; capacity],
+                v_buf: vec![0.0f32; capacity],
+                n_kv_heads,
+                head_dim,
+                max_seq_len,
+                pos: 0,
+            })
+        }
+
+        pub fn append(&mut self, k_token: &[f32], v_token: &[f32]) -> Result<(), CacheError> {
+            if self.pos >= self.max_seq_len {
+                return Err(CacheError::OutOfCapacity);
+            }
+            let stride = self.n_kv_heads * self.head_dim;
+            let off = self.pos * stride;
+            self.k_buf[off..off + stride].copy_from_slice(k_token);
+            self.v_buf[off..off + stride].copy_from_slice(v_token);
+            self.pos += 1;
+            Ok(())
+        }
+
+        pub fn slice(&self) -> Result<(&[f32], &[f32], usize), CacheError> {
+            let total = self.pos * self.n_kv_heads * self.head_dim;
+            Ok((&self.k_buf[..total], &self.v_buf[..total], self.pos))
+        }
+
+        pub fn reset(&mut self) -> Result<(), CacheError> {
+            self.pos = 0;
+            Ok(())
+        }
+
+        pub fn truncate_to(&mut self, new_len: usize) -> Result<(), CacheError> {
+            if new_len > self.pos {
+                return Err(CacheError::InvalidArg);
+            }
+            self.pos = new_len;
+            Ok(())
+        }
+
+        pub fn current_len(&self) -> Result<usize, CacheError> {
+            Ok(self.pos)
+        }
+
+        pub fn max_seq_len(&self) -> usize {
+            self.max_seq_len
+        }
+
+        pub fn n_kv_heads(&self) -> usize {
+            self.n_kv_heads
+        }
+
+        pub fn head_dim(&self) -> usize {
+            self.head_dim
+        }
+    }
+}
+
+// ── Re-exports ──────────────────────────────────────────────────────
+
+pub use imp::{CacheError, KVCacheLayer};
 
 /// Multi-layer KV cache for a transformer model.
 ///
@@ -157,7 +260,7 @@ impl KVCache {
         max_seq_len: usize,
         n_kv_heads: usize,
         head_dim: usize,
-    ) -> Result<Self, SynapseError> {
+    ) -> Result<Self, CacheError> {
         let mut layers = Vec::with_capacity(num_layers);
         for _ in 0..num_layers {
             layers.push(KVCacheLayer::new(max_seq_len, n_kv_heads, head_dim)?);
@@ -176,18 +279,18 @@ impl KVCache {
         layer: usize,
         k_token: &[f32],
         v_token: &[f32],
-    ) -> Result<(), SynapseError> {
+    ) -> Result<(), CacheError> {
         self.layers[layer].append(k_token, v_token)
     }
 
     /// Get zero-copy K/V slices for a specific layer.
     /// Returns `(k_slice, v_slice, seq_len)`.
-    pub fn get(&self, layer: usize) -> Result<(&[f32], &[f32], usize), SynapseError> {
+    pub fn get(&self, layer: usize) -> Result<(&[f32], &[f32], usize), CacheError> {
         self.layers[layer].slice()
     }
 
     /// Reset all layers to empty state. No deallocation.
-    pub fn reset(&mut self) -> Result<(), SynapseError> {
+    pub fn reset(&mut self) -> Result<(), CacheError> {
         for layer in &mut self.layers {
             layer.reset()?;
         }
@@ -195,13 +298,13 @@ impl KVCache {
     }
 
     /// Current sequence length (same across all layers after uniform appends).
-    pub fn current_len(&self) -> Result<usize, SynapseError> {
+    pub fn current_len(&self) -> Result<usize, CacheError> {
         self.layers[0].current_len()
     }
 
     /// Truncate all layers to a given position. Used by speculative decoding
     /// to roll back rejected draft tokens.
-    pub fn truncate_to(&mut self, new_len: usize) -> Result<(), SynapseError> {
+    pub fn truncate_to(&mut self, new_len: usize) -> Result<(), CacheError> {
         for layer in &mut self.layers {
             layer.truncate_to(new_len)?;
         }

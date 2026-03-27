@@ -20,6 +20,7 @@
 ///
 /// # Returns
 /// `[n, d]` output embeddings
+#[cfg(feature = "zig-ffi")]
 pub fn geometric_attention(
     n: usize,
     d: usize,
@@ -47,6 +48,21 @@ pub fn geometric_attention(
     };
     debug_assert_eq!(status, synapse_sys::SYN_OK);
     out
+}
+
+#[cfg(not(feature = "zig-ffi"))]
+pub fn geometric_attention(
+    n: usize,
+    d: usize,
+    pos_dim: usize,
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    positions: &[f32],
+    sigma: f32,
+) -> Vec<f32> {
+    assert!(n <= 4096, "geometric_attention: n > 4096 not yet supported");
+    super::pure_rust_ops::geometric_attention(n, d, pos_dim, q, k, v, positions, sigma)
 }
 
 #[cfg(test)]

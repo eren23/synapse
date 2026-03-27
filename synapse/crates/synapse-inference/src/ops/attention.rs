@@ -226,9 +226,14 @@ pub fn cached_attention_prefill(
         }
 
         // Fused causal attention: Q*K^T -> scale -> mask -> softmax -> *V
+        #[cfg(feature = "zig-ffi")]
         let head_out =
             synapse_core::fused_attention(seq_len, seq_len, head_dim, &q_head, &k_head, &v_head)
                 .expect("fused attention failed");
+        #[cfg(not(feature = "zig-ffi"))]
+        let head_out = crate::ops::pure_rust_ops::fused_attention(
+            seq_len, seq_len, head_dim, &q_head, &k_head, &v_head,
+        );
 
         // Scatter output back to interleaved layout
         for t in 0..seq_len {
@@ -271,10 +276,15 @@ pub fn bidirectional_attention(
 
         // Fused tiled attention: Q·K^T → scale → softmax → ·V in one pass.
         // Uses Zig SIMD with TILE_Q=32 tiling and online softmax.
+        #[cfg(feature = "zig-ffi")]
         let head_out = synapse_core::fused_attention_bidi(
             seq_len, seq_len, head_dim, &q_head, &k_head, &v_head,
         )
         .expect("fused bidirectional attention failed");
+        #[cfg(not(feature = "zig-ffi"))]
+        let head_out = crate::ops::pure_rust_ops::fused_attention_bidi(
+            seq_len, seq_len, head_dim, &q_head, &k_head, &v_head,
+        );
 
         // Scatter back to interleaved output
         for t in 0..seq_len {

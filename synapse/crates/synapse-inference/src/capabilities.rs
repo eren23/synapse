@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "zig-ffi")]
 use synapse_core::{capability_summary, CapabilityRuntimeProfile, CapabilitySupportLevel};
 
 const STATUS_MANIFEST_JSON: &str = include_str!("../../../status/public_status.json");
@@ -159,6 +160,7 @@ impl CapabilityReport {
     }
 }
 
+#[cfg(feature = "zig-ffi")]
 fn native_kernel_info() -> Option<NativeKernelInfo> {
     if cfg!(target_arch = "wasm32") {
         return None;
@@ -187,6 +189,11 @@ fn native_kernel_info() -> Option<NativeKernelInfo> {
             .map(str::to_owned)
             .collect(),
     })
+}
+
+#[cfg(not(feature = "zig-ffi"))]
+fn native_kernel_info() -> Option<NativeKernelInfo> {
+    None
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -251,7 +258,7 @@ mod tests {
         assert!(!report.quantization.is_empty());
         assert_eq!(report.manifest_version, 2);
         assert_eq!(report.model_families.len(), 5);
-        if !cfg!(target_arch = "wasm32") {
+        if !cfg!(target_arch = "wasm32") && cfg!(feature = "zig-ffi") {
             assert!(report.native_kernel.is_some());
         }
     }

@@ -298,8 +298,12 @@ impl QuantizedDecoderLayer {
 
         // Quantize x once and share across Q/K/V projections.
         let k_dim = self.hidden_size;
+        #[cfg(feature = "zig-ffi")]
         let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, seq_len, k_dim)
             .expect("quantize_per_channel_int8 failed for attention input");
+        #[cfg(not(feature = "zig-ffi"))]
+        let (x_int8, scales_x) =
+            crate::ops::pure_rust_ops::quantize_per_channel_int8(x, seq_len, k_dim);
         let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
         Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
         let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
@@ -388,8 +392,12 @@ impl QuantizedDecoderLayer {
 
         // INT8 Q/K/V projections (quantize input once, share across projections)
         let k_in = self.hidden_size;
+        #[cfg(feature = "zig-ffi")]
         let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, seq_len, k_in)
             .expect("quantize failed for prefill attention");
+        #[cfg(not(feature = "zig-ffi"))]
+        let (x_int8, scales_x) =
+            crate::ops::pure_rust_ops::quantize_per_channel_int8(x, seq_len, k_in);
         let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
         Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
         let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
@@ -434,8 +442,12 @@ impl QuantizedDecoderLayer {
         let tokens = 1;
 
         // Quantize the single-token input once and share it across Q/K/V.
+        #[cfg(feature = "zig-ffi")]
         let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, tokens, self.hidden_size)
             .expect("quantize failed for cached attention input");
+        #[cfg(not(feature = "zig-ffi"))]
+        let (x_int8, scales_x) =
+            crate::ops::pure_rust_ops::quantize_per_channel_int8(x, tokens, self.hidden_size);
         let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, tokens);
         Self::add_bias(&mut q, &self.q_bias, tokens, q_dim);
         let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, tokens);
@@ -473,8 +485,12 @@ impl QuantizedDecoderLayer {
         match self.ffn.name() {
             "SwiGLU" => {
                 // Quantize x once and share across gate/up projections.
+                #[cfg(feature = "zig-ffi")]
                 let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, tokens, h)
                     .expect("quantize_per_channel_int8 failed for SwiGLU input");
+                #[cfg(not(feature = "zig-ffi"))]
+                let (x_int8, scales_x) =
+                    crate::ops::pure_rust_ops::quantize_per_channel_int8(x, tokens, h);
                 let gate = self
                     .ffn_gate
                     .forward_pre_quantized(&x_int8, &scales_x, tokens);
@@ -489,8 +505,12 @@ impl QuantizedDecoderLayer {
             }
             "GeGLU" => {
                 // Quantize x once and share across gate/up projections.
+                #[cfg(feature = "zig-ffi")]
                 let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, tokens, h)
                     .expect("quantize_per_channel_int8 failed for GeGLU input");
+                #[cfg(not(feature = "zig-ffi"))]
+                let (x_int8, scales_x) =
+                    crate::ops::pure_rust_ops::quantize_per_channel_int8(x, tokens, h);
                 let gate = self
                     .ffn_gate
                     .forward_pre_quantized(&x_int8, &scales_x, tokens);

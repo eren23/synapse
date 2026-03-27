@@ -1,6 +1,8 @@
 /// y = A * B^T  where A is [m, k], B is [n, k] -> y is [m, n].
 ///
-/// Dispatches to the Zig SIMD tiled GEMM (`syn_sgemm`) via FFI.
+/// Dispatches to the Zig SIMD tiled GEMM (`syn_sgemm`) via FFI when zig-ffi is
+/// enabled, or to a pure-Rust scalar fallback otherwise.
+#[cfg(feature = "zig-ffi")]
 pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     debug_assert_eq!(a.len(), m * k, "matmul_t: a.len() != m*k");
     debug_assert_eq!(b.len(), n * k, "matmul_t: b.len() != n*k");
@@ -28,10 +30,18 @@ pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Ve
     out
 }
 
+#[cfg(not(feature = "zig-ffi"))]
+pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+    debug_assert_eq!(a.len(), m * k, "matmul_t: a.len() != m*k");
+    debug_assert_eq!(b.len(), n * k, "matmul_t: b.len() != n*k");
+    super::pure_rust_ops::matmul_t(a, b, m, k, n)
+}
+
 /// y = A * B  where A is [m, k], B is [k, n] -> y is [m, n].
 ///
 /// Non-transposed variant of [`matmul_t`]. Used for score*V in cached decode
 /// where scores are `[1, seq_len]` and V is `[seq_len, head_dim]`.
+#[cfg(feature = "zig-ffi")]
 pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     debug_assert_eq!(a.len(), m * k, "matmul_nn: a.len() != m*k");
     debug_assert_eq!(b.len(), k * n, "matmul_nn: b.len() != k*n");
@@ -61,4 +71,11 @@ pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> V
         "syn_sgemm (nn) failed: {status}"
     );
     out
+}
+
+#[cfg(not(feature = "zig-ffi"))]
+pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
+    debug_assert_eq!(a.len(), m * k, "matmul_nn: a.len() != m*k");
+    debug_assert_eq!(b.len(), k * n, "matmul_nn: b.len() != k*n");
+    super::pure_rust_ops::matmul_nn(a, b, m, k, n)
 }

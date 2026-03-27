@@ -98,20 +98,38 @@ impl QuantizedLinear {
         }
 
         // Quantize input activations per-row to INT8.
-        let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, m, k)
-            .expect("quantize_per_channel_int8 failed");
+        #[cfg(feature = "zig-ffi")]
+        {
+            let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, m, k)
+                .expect("quantize_per_channel_int8 failed");
 
-        // GEMM: C[m,n] = diag(scales_x) * (x_i8[m,k] @ W_i8^T[k,n]) * diag(scales_w)
-        synapse_core::qgemm_int8(
-            m,
-            n,
-            k,
-            &x_int8,
-            &self.weights_int8,
-            &scales_x,
-            &self.scales,
-        )
-        .expect("qgemm_int8 failed")
+            // GEMM: C[m,n] = diag(scales_x) * (x_i8[m,k] @ W_i8^T[k,n]) * diag(scales_w)
+            synapse_core::qgemm_int8(
+                m,
+                n,
+                k,
+                &x_int8,
+                &self.weights_int8,
+                &scales_x,
+                &self.scales,
+            )
+            .expect("qgemm_int8 failed")
+        }
+
+        #[cfg(not(feature = "zig-ffi"))]
+        {
+            let (x_int8, scales_x) =
+                crate::ops::pure_rust_ops::quantize_per_channel_int8(x, m, k);
+            crate::ops::pure_rust_ops::qgemm_int8(
+                m,
+                n,
+                k,
+                &x_int8,
+                &self.weights_int8,
+                &scales_x,
+                &self.scales,
+            )
+        }
     }
 
     /// Forward pass with pre-quantized input activations.
@@ -126,8 +144,24 @@ impl QuantizedLinear {
             return vec![0.0f32; m * n];
         }
 
-        synapse_core::qgemm_int8(m, n, k, x_int8, &self.weights_int8, scales_x, &self.scales)
-            .expect("qgemm_int8 failed")
+        #[cfg(feature = "zig-ffi")]
+        {
+            synapse_core::qgemm_int8(m, n, k, x_int8, &self.weights_int8, scales_x, &self.scales)
+                .expect("qgemm_int8 failed")
+        }
+
+        #[cfg(not(feature = "zig-ffi"))]
+        {
+            crate::ops::pure_rust_ops::qgemm_int8(
+                m,
+                n,
+                k,
+                x_int8,
+                &self.weights_int8,
+                scales_x,
+                &self.scales,
+            )
+        }
     }
 
     /// Memory in bytes for INT8 weights + f32 scales.
@@ -295,7 +329,10 @@ mod tests {
         let y_normal = ql.forward(&x, m);
 
         // Pre-quantize x and use forward_pre_quantized.
+        #[cfg(feature = "zig-ffi")]
         let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(&x, m, k).unwrap();
+        #[cfg(not(feature = "zig-ffi"))]
+        let (x_int8, scales_x) = crate::ops::pure_rust_ops::quantize_per_channel_int8(&x, m, k);
         let y_pre = ql.forward_pre_quantized(&x_int8, &scales_x, m);
 
         // Should be bit-identical since they use the same quantized input.

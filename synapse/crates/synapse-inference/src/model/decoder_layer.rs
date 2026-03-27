@@ -689,12 +689,18 @@ impl DecoderLayer {
             "SwiGLU" => {
                 let gate = matmul_t(x, &self.ffn_gate, tokens, h, inter);
                 let up = matmul_t(x, &self.ffn_up, tokens, h, inter);
-                let mut hidden = vec![0.0f32; tokens * inter];
-                let len = hidden.len();
-                let status = unsafe {
-                    synapse_sys::syn_swiglu(hidden.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len)
+                #[cfg(feature = "zig-ffi")]
+                let hidden = {
+                    let mut hidden = vec![0.0f32; tokens * inter];
+                    let len = hidden.len();
+                    let status = unsafe {
+                        synapse_sys::syn_swiglu(hidden.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len)
+                    };
+                    debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
+                    hidden
                 };
-                debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
+                #[cfg(not(feature = "zig-ffi"))]
+                let hidden = crate::ops::pure_rust_ops::swiglu(&gate, &up);
                 matmul_t(&hidden, &self.ffn_down, tokens, inter, h)
             }
             "GeGLU" => {
@@ -1138,14 +1144,21 @@ mod tests {
             .collect()
     }
 
-    /// Fused SwiGLU via syn_swiglu FFI.
+    /// Fused SwiGLU via syn_swiglu FFI (or pure-Rust fallback).
     fn swiglu_fused(gate: &[f32], up: &[f32]) -> Vec<f32> {
-        let len = gate.len();
-        let mut out = vec![0.0f32; len];
-        let status =
-            unsafe { synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len) };
-        assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
-        out
+        #[cfg(feature = "zig-ffi")]
+        {
+            let len = gate.len();
+            let mut out = vec![0.0f32; len];
+            let status =
+                unsafe { synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len) };
+            assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
+            out
+        }
+        #[cfg(not(feature = "zig-ffi"))]
+        {
+            crate::ops::pure_rust_ops::swiglu(gate, up)
+        }
     }
 
     #[test]
@@ -1263,56 +1276,66 @@ mod tests {
         let up = pseudo_rand(len, 99);
         let mut dst = vec![0.0f32; len];
 
-        // Warm up
-        for _ in 0..100 {
-            swiglu_separate_scalar(&mut dst, &gate, &up);
-            unsafe {
-                synapse_sys::syn_swiglu(dst.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len);
-            }
+        // This benchmark compares scalar vs FFI and is only meaningful with zig-ffi.
+        #[cfg(not(feature = "zig-ffi"))]
+        {
+            eprintln!("Skipping swiglu FFI throughput benchmark without zig-ffi");
+            return;
         }
 
-        // Use min-of-runs: noise only adds latency, minimum is most
-        // representative (standard microbenchmark practice).
-        let runs = 5;
-        let iters_per_run = 2000;
-
-        let mut best_separate = f64::MAX;
-        for _ in 0..runs {
-            let t0 = std::time::Instant::now();
-            for _ in 0..iters_per_run {
+        #[cfg(feature = "zig-ffi")]
+        {
+            // Warm up
+            for _ in 0..100 {
                 swiglu_separate_scalar(&mut dst, &gate, &up);
-            }
-            let ns = t0.elapsed().as_nanos() as f64 / iters_per_run as f64;
-            if ns < best_separate {
-                best_separate = ns;
-            }
-        }
-
-        let mut best_fused = f64::MAX;
-        for _ in 0..runs {
-            let t0 = std::time::Instant::now();
-            for _ in 0..iters_per_run {
                 unsafe {
                     synapse_sys::syn_swiglu(dst.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len);
                 }
             }
-            let ns = t0.elapsed().as_nanos() as f64 / iters_per_run as f64;
-            if ns < best_fused {
-                best_fused = ns;
+
+            // Use min-of-runs: noise only adds latency, minimum is most
+            // representative (standard microbenchmark practice).
+            let runs = 5;
+            let iters_per_run = 2000;
+
+            let mut best_separate = f64::MAX;
+            for _ in 0..runs {
+                let t0 = std::time::Instant::now();
+                for _ in 0..iters_per_run {
+                    swiglu_separate_scalar(&mut dst, &gate, &up);
+                }
+                let ns = t0.elapsed().as_nanos() as f64 / iters_per_run as f64;
+                if ns < best_separate {
+                    best_separate = ns;
+                }
             }
+
+            let mut best_fused = f64::MAX;
+            for _ in 0..runs {
+                let t0 = std::time::Instant::now();
+                for _ in 0..iters_per_run {
+                    unsafe {
+                        synapse_sys::syn_swiglu(dst.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len);
+                    }
+                }
+                let ns = t0.elapsed().as_nanos() as f64 / iters_per_run as f64;
+                if ns < best_fused {
+                    best_fused = ns;
+                }
+            }
+
+            let speedup = best_separate / best_fused;
+            eprintln!(
+                "swiglu [1,{len}]: separate={best_separate:.0}ns, \
+                 fused={best_fused:.0}ns, speedup={speedup:.1}×"
+            );
+
+            assert!(
+                speedup >= 2.0,
+                "syn_swiglu speedup {speedup:.1}× is below 2× threshold \
+                 (separate={best_separate:.0}ns, fused={best_fused:.0}ns)"
+            );
         }
-
-        let speedup = best_separate / best_fused;
-        eprintln!(
-            "swiglu [1,{len}]: separate={best_separate:.0}ns, \
-             fused={best_fused:.0}ns, speedup={speedup:.1}×"
-        );
-
-        assert!(
-            speedup >= 2.0,
-            "syn_swiglu speedup {speedup:.1}× is below 2× threshold \
-             (separate={best_separate:.0}ns, fused={best_fused:.0}ns)"
-        );
     }
 
     // ── forward_one / KV-cache tests ────────────────────────────────

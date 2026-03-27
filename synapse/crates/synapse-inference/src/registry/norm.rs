@@ -75,6 +75,7 @@ impl RMSNorm {
     ///
     /// # Safety
     /// Requires the synapse Zig library to be linked.
+    #[cfg(feature = "zig-ffi")]
     pub unsafe fn forward_ffi(&self, input: &[f32], shape: &[usize]) -> Vec<f32> {
         use synapse_sys::*;
 
@@ -204,6 +205,7 @@ impl LayerNormInfer {
     ///
     /// # Safety
     /// Requires the synapse Zig library to be linked.
+    #[cfg(feature = "zig-ffi")]
     pub unsafe fn forward_ffi(&self, input: &[f32], shape: &[usize]) -> Vec<f32> {
         use synapse_sys::*;
 
@@ -401,6 +403,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn rmsnorm_ffi_matches_reference() {
         let norm = RMSNorm::new(1e-6, 4);
         let input = vec![1.0, 2.0, 3.0, 4.0];
@@ -420,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn layernorm_ffi_matches_reference() {
         let norm = LayerNormInfer::new(1e-5, 4);
         let input = vec![1.0, 2.0, 3.0, 4.0];

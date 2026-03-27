@@ -1,6 +1,7 @@
 //! Positional encoding implementations: RoPE and Learned embeddings.
 
 use super::PositionVariant;
+#[cfg(feature = "zig-ffi")]
 use synapse_core::{SynapseError, Tensor};
 
 // ── RoPE ─────────────────────────────────────────────────────────────
@@ -15,7 +16,9 @@ pub struct RoPEPosition {
     base: f64,
     max_position_embeddings: usize,
     head_dim: usize,
+    #[allow(dead_code)]
     cos_data: Vec<f32>, // [max_pos, head_dim/2]
+    #[allow(dead_code)]
     sin_data: Vec<f32>, // [max_pos, head_dim/2]
 }
 
@@ -50,6 +53,7 @@ impl RoPEPosition {
     /// Apply RoPE to a 4-D tensor `[batch, heads, seq, head_dim]`.
     ///
     /// `offset` is the starting position index (for KV-cache decode).
+    #[cfg(feature = "zig-ffi")]
     pub fn apply(&self, input: &Tensor, offset: usize) -> Result<Tensor, SynapseError> {
         let half_d = self.head_dim / 2;
         let cos = Tensor::from_data(&self.cos_data, &[self.max_position_embeddings, half_d])?;
@@ -58,6 +62,7 @@ impl RoPEPosition {
     }
 
     /// Get cos/sin cache tensors for use with attention layers directly.
+    #[cfg(feature = "zig-ffi")]
     pub fn cos_sin_tensors(&self) -> Result<(Tensor, Tensor), SynapseError> {
         let half_d = self.head_dim / 2;
         Ok((
@@ -123,9 +128,9 @@ impl LearnedPosition {
         batch: usize,
         seq_len: usize,
         offset: usize,
-    ) -> Result<(), SynapseError> {
+    ) -> Result<(), &'static str> {
         if offset + seq_len > self.max_position_embeddings {
-            return Err(SynapseError::InvalidArg);
+            return Err("offset + seq_len exceeds max_position_embeddings");
         }
         for b in 0..batch {
             for s in 0..seq_len {
@@ -168,6 +173,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn rope_position_zero_identity() {
         let rope = RoPEPosition::new(10000.0, 16, 8);
         let data: Vec<f32> = (0..8).map(|i| i as f32 + 1.0).collect();
@@ -188,6 +194,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn rope_positions_affect_output() {
         let rope = RoPEPosition::new(10000.0, 128, 8);
         let data: Vec<f32> = (0..8).map(|i| i as f32 + 1.0).collect();
@@ -207,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn rope_cos_sin_tensors_shape() {
         let rope = RoPEPosition::new(10000.0, 64, 16);
         let (cos, sin) = rope.cos_sin_tensors().unwrap();

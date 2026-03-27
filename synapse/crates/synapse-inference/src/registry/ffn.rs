@@ -130,6 +130,7 @@ impl SwiGLUFFN {
     ///
     /// # Safety
     /// Requires the synapse Zig library to be linked.
+    #[cfg(feature = "zig-ffi")]
     pub unsafe fn forward_ffi(&self, input: &[f32], tokens: usize) -> Vec<f32> {
         use synapse_sys::*;
 
@@ -276,6 +277,7 @@ impl StandardFFN {
     ///
     /// # Safety
     /// Requires the synapse Zig library to be linked.
+    #[cfg(feature = "zig-ffi")]
     pub unsafe fn forward_ffi(&self, input: &[f32], tokens: usize) -> Vec<f32> {
         use synapse_sys::*;
 
@@ -426,6 +428,7 @@ impl GeGLUFFN {
     ///
     /// # Safety
     /// Requires the synapse Zig library to be linked.
+    #[cfg(feature = "zig-ffi")]
     pub unsafe fn forward_ffi(&self, input: &[f32], tokens: usize) -> Vec<f32> {
         use synapse_sys::*;
 
@@ -648,6 +651,7 @@ mod tests {
     // ── FFI round-trip tests ───────────────────────────────────────
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn swiglu_ffi_matches_reference() {
         let hidden = 4;
         let intermediate = 8;
@@ -673,6 +677,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "zig-ffi")]
     fn geglu_ffi_matches_reference() {
         let hidden = 4;
         let intermediate = 8;

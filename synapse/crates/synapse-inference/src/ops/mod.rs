@@ -6,5 +6,6 @@ pub mod geometric;
 pub mod matmul;
 pub mod norm;
 pub mod patch_embed;
+pub mod pure_rust_ops;
 pub mod rope;
 pub mod vector;

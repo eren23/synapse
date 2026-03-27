@@ -4,14 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-metal = ["dep:metal"]
+default = ["zig-ffi"]
+zig-ffi = ["dep:synapse-core", "dep:synapse-sys"]
+pure-rust = []
+metal = ["dep:metal", "zig-ffi"]
 diffusion = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-synapse-core = { path = "../synapse-core" }
-synapse-sys = { path = "../synapse-sys" }
+synapse-core = { path = "../synapse-core", optional = true }
+synapse-sys = { path = "../synapse-sys", optional = true }
 memmap2 = "0.9"
 minijinja = "2"
 rand = "0.8"

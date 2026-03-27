@@ -5,11 +5,20 @@
 //! - **MQA** (Multi-Query Attention): `num_kv_heads == 1` — all heads share one KV
 
 use super::AttentionVariant;
+#[cfg(feature = "zig-ffi")]
 use synapse_core::{KvCache, SynapseError, Tensor};
 
 // ── Helper functions ─────────────────────────────────────────────────
 
+/// Error type alias for attention helpers.
+#[cfg(feature = "zig-ffi")]
+type AttentionError = SynapseError;
+#[cfg(not(feature = "zig-ffi"))]
+#[allow(dead_code)]
+type AttentionError = &'static str;
+
 /// C\[m,n\] = A\[m,k\] @ B\[k,n\]  (no transpose).
+#[cfg(feature = "zig-ffi")]
 fn sgemm_nn(
     m: usize,
     n: usize,
@@ -17,7 +26,7 @@ fn sgemm_nn(
     a: &[f32],
     b: &[f32],
     c: &mut [f32],
-) -> Result<(), SynapseError> {
+) -> Result<(), AttentionError> {
     if m == 0 || n == 0 {
         return Ok(());
     }
@@ -42,7 +51,25 @@ fn sgemm_nn(
     Ok(())
 }
 
+#[cfg(not(feature = "zig-ffi"))]
+#[allow(dead_code)]
+fn sgemm_nn(
+    m: usize,
+    n: usize,
+    k: usize,
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+) -> Result<(), AttentionError> {
+    if m == 0 || n == 0 {
+        return Ok(());
+    }
+    crate::ops::pure_rust_ops::sgemm_nn_into(m, n, k, a, b, c);
+    Ok(())
+}
+
 /// C\[m,n\] = A\[m,k\] @ B^T, where B is stored row-major as \[n,k\].
+#[cfg(feature = "zig-ffi")]
 fn sgemm_nt(
     m: usize,
     n: usize,
@@ -50,7 +77,7 @@ fn sgemm_nt(
     a: &[f32],
     b: &[f32],
     c: &mut [f32],
-) -> Result<(), SynapseError> {
+) -> Result<(), AttentionError> {
     if m == 0 || n == 0 {
         return Ok(());
     }
@@ -75,9 +102,27 @@ fn sgemm_nt(
     Ok(())
 }
 
+#[cfg(not(feature = "zig-ffi"))]
+#[allow(dead_code)]
+fn sgemm_nt(
+    m: usize,
+    n: usize,
+    k: usize,
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
+) -> Result<(), AttentionError> {
+    if m == 0 || n == 0 {
+        return Ok(());
+    }
+    crate::ops::pure_rust_ops::sgemm_nt_into(m, n, k, a, b, c);
+    Ok(())
+}
+
 /// Swap dimensions 1 and 2 of a 4-D tensor: \[d0, d1, d2, d3\] → \[d0, d2, d1, d3\].
 ///
 /// Used for the \[batch, seq, heads, d\] ↔ \[batch, heads, seq, d\] conversion.
+#[allow(dead_code)]
 fn transpose_0213(data: &[f32], d0: usize, d1: usize, d2: usize, d3: usize) -> Vec<f32> {
     let mut out = vec![0.0; d0 * d1 * d2 * d3];
     for i0 in 0..d0 {
@@ -93,6 +138,7 @@ fn transpose_0213(data: &[f32], d0: usize, d1: usize, d2: usize, d3: usize) -> V
 }
 
 /// Repeat KV heads via interleave: \[batch, kv\_heads, seq, d\] → \[batch, kv\_heads\*repeat, seq, d\].
+#[allow(dead_code)]
 fn repeat_kv(
     data: &[f32],
     batch: usize,
@@ -121,6 +167,7 @@ fn repeat_kv(
 }
 
 /// Row-wise softmax in-place on a \[rows, cols\] matrix.
+#[allow(dead_code)]
 fn softmax_rows(data: &mut [f32], rows: usize, cols: usize) {
     for r in 0..rows {
         let row = &mut data[r * cols..(r + 1) * cols];
@@ -214,6 +261,7 @@ impl GQAAttention {
     /// - Q: `[batch, num_heads, seq, head_dim]`  (RoPE applied)
     /// - K: `[batch, kv_heads, seq, head_dim]`   (RoPE applied)
     /// - V: `[batch, kv_heads, seq, head_dim]`
+    #[cfg(feature = "zig-ffi")]
     pub(crate) fn prepare_qkv(
         &self,
         input: &[f32],
@@ -258,6 +306,7 @@ impl GQAAttention {
     /// Project attention output back to hidden dimension.
     ///
     /// `attn_out`: `[m, num_heads * head_dim]` → returns `[m, hidden_size]`.
+    #[cfg(feature = "zig-ffi")]
     pub(crate) fn project_output(
         &self,
         attn_out: &[f32],
@@ -273,6 +322,7 @@ impl GQAAttention {
     ///
     /// - `input`: flat `[batch * seq_len * hidden_size]` array.
     /// - Returns flat `[batch * seq_len * hidden_size]` output.
+    #[cfg(feature = "zig-ffi")]
     pub fn forward(
         &self,
         input: &[f32],
@@ -309,6 +359,7 @@ impl GQAAttention {
     /// - **Decode** (cache populated, `seq_len = 1`): processes single token against cached K/V.
     ///
     /// Requires `batch = 1`.
+    #[cfg(feature = "zig-ffi")]
     pub fn forward_with_cache(
         &self,
         input: &[f32],
@@ -441,6 +492,7 @@ impl SlidingWindowAttention {
     /// Returns `(output, attention_weights)` where:
     /// - `output`: `[batch * seq_len * hidden_size]`
     /// - `attention_weights`: `[batch * num_heads * seq_len * seq_len]`
+    #[cfg(feature = "zig-ffi")]
     pub fn forward(
         &self,
         input: &[f32],
@@ -561,6 +613,7 @@ impl AttentionVariant for SlidingWindowAttention {
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[cfg(feature = "zig-ffi")]
 mod tests {
     use super::*;
     use synapse_core::KvCache;

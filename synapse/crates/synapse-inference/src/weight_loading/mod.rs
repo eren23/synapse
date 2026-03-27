@@ -188,7 +188,10 @@ pub enum WeightError {
     ShapeMismatch(String),
     MissingKeys(Vec<String>),
     UnexpectedKeys(Vec<String>),
+    #[cfg(feature = "zig-ffi")]
     TensorError(synapse_core::SynapseError),
+    #[cfg(not(feature = "zig-ffi"))]
+    TensorError(String),
 }
 
 impl fmt::Display for WeightError {
