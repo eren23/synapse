@@ -9,7 +9,7 @@ use crate::model::{CausalLM, ModelBuilder, ModelOutput};
 use crate::model_adapter::{
     adapter_for_kind, ModelAdapter, ModelAdapterKind, ReasoningMarkers, ThinkingMode,
 };
-use crate::quantization::{quantize_model, QuantizedCausalLM};
+use crate::quantization::{quantize_model, quantize_model_ternary, QuantizedCausalLM, TernaryCausalLM};
 use crate::tokenizer::{Tokenizer, TokenizerError};
 use crate::weight_loading::{
     load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper,
@@ -99,6 +99,7 @@ pub type RuntimeSummary = RuntimePlan;
 pub struct InferenceEngine {
     pub model: CausalLM,
     pub quantized_model: Option<QuantizedCausalLM>,
+    pub ternary_model: Option<TernaryCausalLM>,
     pub config: ModelConfig,
     pub model_adapter_kind: ModelAdapterKind,
     pub tokenizer: Option<Tokenizer>,
@@ -181,6 +182,7 @@ impl InferenceEngine {
         Ok(Self {
             model,
             quantized_model: None,
+            ternary_model: None,
             config,
             model_adapter_kind,
             tokenizer: Some(tokenizer),
@@ -199,6 +201,7 @@ impl InferenceEngine {
         Self {
             model,
             quantized_model: None,
+            ternary_model: None,
             config,
             model_adapter_kind,
             tokenizer: None,
@@ -222,6 +225,7 @@ impl InferenceEngine {
         Self {
             model,
             quantized_model: None,
+            ternary_model: None,
             config,
             model_adapter_kind,
             tokenizer: None,
@@ -338,6 +342,16 @@ impl InferenceEngine {
         self.quantized_model.is_some()
     }
 
+    /// Quantize the model to ternary 2-bit weights. Call after loading weights.
+    pub fn quantize_ternary(&mut self) {
+        self.ternary_model = Some(quantize_model_ternary(&self.model));
+    }
+
+    /// Whether the engine has a ternary model available.
+    pub fn is_ternary(&self) -> bool {
+        self.ternary_model.is_some()
+    }
+
     pub fn runtime_plan(&self) -> RuntimePlan {
         let quantized = self.is_quantized();
         #[cfg(feature = "metal")]
@@ -398,7 +412,9 @@ impl InferenceEngine {
     }
 
     pub fn generation_pipeline(&self) -> GenerationPipeline<'_> {
-        if let Some(ref qmodel) = self.quantized_model {
+        if let Some(ref tmodel) = self.ternary_model {
+            GenerationPipeline::new(tmodel)
+        } else if let Some(ref qmodel) = self.quantized_model {
             GenerationPipeline::new(qmodel)
         } else {
             #[cfg(feature = "metal")]
@@ -525,6 +541,56 @@ mod tests {
         assert_eq!(summary.decode_path, RuntimePath::CpuCached);
         assert_eq!(summary.prefill_strategy, "cpu_cached_prefill");
         assert_eq!(summary.decode_strategy, "cpu_cached_decode");
+    }
+
+    #[test]
+    fn test_engine_quantize_ternary() {
+        use std::collections::HashMap;
+        use crate::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
+
+        let config = test_config();
+
+        // Generate minimal fake weights so quantize_ternary has non-empty matrices.
+        let h = config.architecture.hidden_size;
+        let vocab = config.architecture.vocab_size;
+        let q_dim = config.attention.num_heads() * config.attention.head_dim();
+        let kv_dim = config.attention.num_kv_heads() * config.attention.head_dim();
+        let inter = config.ffn.intermediate_size();
+        let nl = config.architecture.num_layers;
+
+        let fake = |shape: Vec<usize>| -> RawTensor {
+            let n: usize = shape.iter().product();
+            RawTensor {
+                data: AlignedBuffer::from_slice(&vec![0.01f32; n]),
+                shape,
+            }
+        };
+
+        let mut weights: HashMap<String, RawTensor> = HashMap::new();
+        weights.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h]));
+        weights.insert("model.norm.weight".into(), fake(vec![h]));
+        weights.insert("lm_head.weight".into(), fake(vec![vocab, h]));
+        for i in 0..nl {
+            weights.insert(format!("model.layers.{i}.input_layernorm.weight"), fake(vec![h]));
+            weights.insert(format!("model.layers.{i}.self_attn.q_proj.weight"), fake(vec![q_dim, h]));
+            weights.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h]));
+            weights.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h]));
+            weights.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim]));
+            weights.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h]));
+            weights.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h]));
+            weights.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h]));
+            weights.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter]));
+        }
+
+        let mut engine = InferenceEngine::from_config(config);
+        let mapper = WeightMapper::from_model_type("InferenceEngineRuntimeSummaryTest")
+            .unwrap_or_else(|_| WeightMapper::llama());
+        let _ = engine.model.load_weights(weights, &mapper);
+
+        assert!(!engine.is_ternary());
+        engine.quantize_ternary();
+        assert!(engine.is_ternary());
+        let _pipeline = engine.generation_pipeline();
     }
 
     #[test]
