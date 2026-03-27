@@ -285,8 +285,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -801,6 +803,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "synapse-esp32"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "synapse-inference",
+]
+
+[[package]]
 name = "synapse-graph"
 version = "0.1.0"
 
@@ -848,6 +860,17 @@ dependencies = [
  "synapse-autograd",
  "synapse-nn",
  "synapse-optim",
+]
+
+[[package]]
+name = "synapse-wasm"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.2.17",
+ "serde",
+ "serde_json",
+ "synapse-inference",
+ "wasm-bindgen",
 ]
 
 [[package]]

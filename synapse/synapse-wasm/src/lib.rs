@@ -12,6 +12,12 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use wasm_bindgen::prelude::*;
 
+use synapse_inference::ops::pure_rust_ops::{
+    matmul_t, gelu, silu, softmax, bidirectional_attention,
+    layernorm_with_bias, layernorm as layernorm_no_bias_inner,
+    quantize_per_channel_int8, qgemm_int8,
+};
+
 // ── Constants ────────────────────────────────────────────────────────
 
 const STATUS_MANIFEST_JSON: &str = include_str!("../../status/public_status.json");
@@ -34,109 +40,16 @@ const PATCH_DIM: usize = PATCH_SIZE * PATCH_SIZE * CHANNELS; // 588
 const ACTION_DIM: usize = 10;
 const LATENT_DIM: usize = HIDDEN; // 192
 
-// ── Pure Rust ops (no FFI, WASM-compatible) ─────────────────────────
+// ── Local helpers (thin wrappers) ───────────────────────────────────
 
-/// Matrix multiply: C[m,n] = A[m,k] * B^T[n,k]  (B stored row-major, transposed)
-fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut sum = 0.0f32;
-            for p in 0..k {
-                sum += a[i * k + p] * b[j * k + p];
-            }
-            out[i * n + j] = sum;
-        }
-    }
-    out
-}
-
-/// Layer normalization with weight and bias, over rows of size `n`.
+/// Layer normalization with weight and bias using hardcoded eps=1e-6.
 fn layernorm(x: &[f32], weight: &[f32], bias: &[f32], n: usize) -> Vec<f32> {
-    let rows = x.len() / n;
-    let mut out = vec![0.0f32; x.len()];
-    for r in 0..rows {
-        let off = r * n;
-        let slice = &x[off..off + n];
-        let mean: f32 = slice.iter().sum::<f32>() / n as f32;
-        let var: f32 = slice.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n as f32;
-        let scale = 1.0 / (var + 1e-6).sqrt();
-        for j in 0..n {
-            out[off + j] =
-                (slice[j] - mean) * scale * weight[j] + if j < bias.len() { bias[j] } else { 0.0 };
-        }
-    }
-    out
+    layernorm_with_bias(x, weight, bias, 1e-6, n)
 }
 
-/// Layer normalization with weight only (no bias), over rows of size `n`.
+/// Layer normalization with weight only (no bias) using hardcoded eps=1e-6.
 fn layernorm_no_bias(x: &[f32], weight: &[f32], n: usize) -> Vec<f32> {
-    let rows = x.len() / n;
-    let mut out = vec![0.0f32; x.len()];
-    for r in 0..rows {
-        let off = r * n;
-        let slice = &x[off..off + n];
-        let mean: f32 = slice.iter().sum::<f32>() / n as f32;
-        let var: f32 = slice.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / n as f32;
-        let scale = 1.0 / (var + 1e-6).sqrt();
-        for j in 0..n {
-            out[off + j] = (slice[j] - mean) * scale * weight[j];
-        }
-    }
-    out
-}
-
-fn gelu(x: f32) -> f32 {
-    0.5 * x * (1.0 + ((2.0f32 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
-}
-
-fn softmax(x: &mut [f32]) {
-    let max = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let mut sum = 0.0f32;
-    for v in x.iter_mut() {
-        *v = (*v - max).exp();
-        sum += *v;
-    }
-    if sum > 0.0 {
-        for v in x.iter_mut() {
-            *v /= sum;
-        }
-    }
-}
-
-fn bidirectional_attention(
-    q: &[f32],
-    k: &[f32],
-    v: &[f32],
-    seq_len: usize,
-    num_heads: usize,
-    head_dim: usize,
-) -> Vec<f32> {
-    let q_dim = num_heads * head_dim;
-    let scale = 1.0 / (head_dim as f32).sqrt();
-    let mut output = vec![0.0f32; seq_len * q_dim];
-
-    for head in 0..num_heads {
-        for t in 0..seq_len {
-            let mut scores = vec![0.0f32; seq_len];
-            for s in 0..seq_len {
-                let mut dot = 0.0f32;
-                for d in 0..head_dim {
-                    dot += q[t * q_dim + head * head_dim + d] * k[s * q_dim + head * head_dim + d];
-                }
-                scores[s] = dot * scale;
-            }
-            softmax(&mut scores);
-            for d in 0..head_dim {
-                let mut sum = 0.0f32;
-                for s in 0..seq_len {
-                    sum += scores[s] * v[s * q_dim + head * head_dim + d];
-                }
-                output[t * q_dim + head * head_dim + d] = sum;
-            }
-        }
-    }
-    output
+    layernorm_no_bias_inner(x, weight, 1e-6, n)
 }
 
 /// Add per-column bias to a row-major matrix [m, n] in place.
@@ -875,40 +788,8 @@ impl RealLeWM {
     }
 }
 
-// ── INT8 Quantization Ops ──────────────────────────────────────────
-
-fn quantize_per_channel_int8(data: &[f32], channels: usize, channel_size: usize) -> (Vec<i8>, Vec<f32>) {
-    let mut int8_data = vec![0i8; channels * channel_size];
-    let mut scales = vec![0.0f32; channels];
-    for ch in 0..channels {
-        let off = ch * channel_size;
-        let slice = &data[off..off + channel_size];
-        let max_abs = slice.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
-        let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
-        scales[ch] = scale;
-        let inv_scale = 1.0 / scale;
-        for j in 0..channel_size {
-            int8_data[off + j] = (slice[j] * inv_scale).round().clamp(-128.0, 127.0) as i8;
-        }
-    }
-    (int8_data, scales)
-}
-
-fn qgemm_int8(m: usize, n: usize, k: usize, a: &[i8], b: &[i8], scales_a: &[f32], scales_b: &[f32]) -> Vec<f32> {
-    let mut out = vec![0.0f32; m * n];
-    for i in 0..m {
-        for j in 0..n {
-            let mut acc = 0i32;
-            for p in 0..k {
-                acc += (a[i * k + p] as i32) * (b[p * n + j] as i32);
-            }
-            out[i * n + j] = (acc as f32) * scales_a[i] * scales_b[j];
-        }
-    }
-    out
-}
-
 // ── QuantizedLinearWasm ────────────────────────────────────────────
+// Uses quantize_per_channel_int8 and qgemm_int8 from synapse-inference
 
 struct QuantizedLinearWasm {
     weights_int8: Vec<i8>,  // [in_features, out_features] transposed layout
@@ -1748,10 +1629,6 @@ const NU_CHANNELS: usize = 3;
 const NU_NUM_PATCHES: usize = (NU_IMAGE_SIZE / NU_PATCH_SIZE) * (NU_IMAGE_SIZE / NU_PATCH_SIZE); // 16
 const NU_PATCH_DIM: usize = NU_PATCH_SIZE * NU_PATCH_SIZE * NU_CHANNELS; // 48
 const NU_NUM_CLASSES: usize = 6;
-
-fn silu(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
-}
 
 struct NuBlock {
     ln_attn_w: Vec<f32>,

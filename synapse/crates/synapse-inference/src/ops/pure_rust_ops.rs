@@ -283,6 +283,100 @@ pub fn geometric_attention(
     out
 }
 
+/// GELU activation (approximation matching PyTorch).
+pub fn gelu(x: f32) -> f32 {
+    0.5 * x * (1.0 + ((2.0f32 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
+}
+
+/// SiLU (Sigmoid Linear Unit) activation: x * sigmoid(x).
+pub fn silu(x: f32) -> f32 {
+    x / (1.0 + (-x).exp())
+}
+
+/// In-place softmax over a mutable slice.
+pub fn softmax(x: &mut [f32]) {
+    let max = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mut sum = 0.0f32;
+    for v in x.iter_mut() {
+        *v = (*v - max).exp();
+        sum += *v;
+    }
+    if sum > 0.0 {
+        for v in x.iter_mut() {
+            *v /= sum;
+        }
+    }
+}
+
+/// Layer normalization (weight only, no bias) over rows of `hidden_size`.
+pub fn layernorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
+    let rows = x.len() / hidden_size;
+    let mut out = vec![0.0f32; x.len()];
+    for r in 0..rows {
+        let off = r * hidden_size;
+        let row = &x[off..off + hidden_size];
+        let mean: f32 = row.iter().sum::<f32>() / hidden_size as f32;
+        let var: f32 = row.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / hidden_size as f32;
+        let scale = 1.0 / (var + eps).sqrt();
+        for j in 0..hidden_size {
+            out[off + j] = (row[j] - mean) * scale * weight[j];
+        }
+    }
+    out
+}
+
+/// Layer normalization with weight and bias over rows of `hidden_size`.
+pub fn layernorm_with_bias(x: &[f32], weight: &[f32], bias: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
+    let rows = x.len() / hidden_size;
+    let mut out = vec![0.0f32; x.len()];
+    for r in 0..rows {
+        let off = r * hidden_size;
+        let row = &x[off..off + hidden_size];
+        let mean: f32 = row.iter().sum::<f32>() / hidden_size as f32;
+        let var: f32 = row.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>() / hidden_size as f32;
+        let scale = 1.0 / (var + eps).sqrt();
+        for j in 0..hidden_size {
+            out[off + j] = (row[j] - mean) * scale * weight[j] + if j < bias.len() { bias[j] } else { 0.0 };
+        }
+    }
+    out
+}
+
+/// Multi-head bidirectional attention (no causal mask).
+///
+/// Q, K, V: `[seq_len, num_heads * head_dim]` interleaved by head.
+/// Returns `[seq_len, num_heads * head_dim]`.
+pub fn bidirectional_attention(
+    q: &[f32], k: &[f32], v: &[f32],
+    seq_len: usize, num_heads: usize, head_dim: usize,
+) -> Vec<f32> {
+    let qk_dim = num_heads * head_dim;
+    let scale = 1.0 / (head_dim as f32).sqrt();
+    let mut output = vec![0.0f32; seq_len * qk_dim];
+    for head in 0..num_heads {
+        for qi in 0..seq_len {
+            let mut scores = vec![0.0f32; seq_len];
+            for ki in 0..seq_len {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[qi * qk_dim + head * head_dim + d]
+                         * k[ki * qk_dim + head * head_dim + d];
+                }
+                scores[ki] = dot * scale;
+            }
+            softmax(&mut scores);
+            for d in 0..head_dim {
+                let mut val = 0.0f32;
+                for ki in 0..seq_len {
+                    val += scores[ki] * v[ki * qk_dim + head * head_dim + d];
+                }
+                output[qi * qk_dim + head * head_dim + d] = val;
+            }
+        }
+    }
+    output
+}
+
 /// C[m,n] = A[m,k] @ B[k,n]  (no transpose), writes into mutable slice.
 pub fn sgemm_nn_into(
     m: usize,
@@ -434,6 +528,63 @@ mod tests {
         ];
         let out = geometric_attention(n, d, 3, &q, &k, &v, &positions, 1.0);
         assert_eq!(out.len(), n * d);
+        assert!(out.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn pure_rust_gelu_matches_reference() {
+        assert!((gelu(0.0) - 0.0).abs() < 1e-6);
+        assert!((gelu(1.0) - 0.8412).abs() < 0.01);
+        assert!((gelu(-1.0) - (-0.1588)).abs() < 0.01);
+    }
+
+    #[test]
+    fn pure_rust_silu_matches_reference() {
+        assert!((silu(0.0) - 0.0).abs() < 1e-6);
+        let expected = 1.0 / (1.0 + (-1.0f32).exp());
+        assert!((silu(1.0) - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn pure_rust_softmax_sums_to_one() {
+        let mut x = vec![1.0, 2.0, 3.0, 4.0];
+        softmax(&mut x);
+        let sum: f32 = x.iter().sum();
+        assert!((sum - 1.0).abs() < 1e-5);
+        // Should be monotonically increasing
+        for i in 1..x.len() {
+            assert!(x[i] >= x[i - 1]);
+        }
+    }
+
+    #[test]
+    fn pure_rust_layernorm_unit_variance() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let weight = vec![1.0; 4];
+        let out = layernorm(&x, &weight, 1e-8, 4);
+        // Mean should be ~0
+        let mean: f32 = out.iter().sum::<f32>() / 4.0;
+        assert!(mean.abs() < 0.01);
+    }
+
+    #[test]
+    fn pure_rust_layernorm_with_bias_basic() {
+        let x = vec![1.0, 2.0, 3.0, 4.0];
+        let weight = vec![1.0; 4];
+        let bias = vec![0.5; 4];
+        let out = layernorm_with_bias(&x, &weight, &bias, 1e-8, 4);
+        // Mean should be ~0.5 (since weight=1 and bias=0.5)
+        let mean: f32 = out.iter().sum::<f32>() / 4.0;
+        assert!((mean - 0.5).abs() < 0.1);
+    }
+
+    #[test]
+    fn pure_rust_bidirectional_attention_basic() {
+        let q = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]; // [2, 4]
+        let k = q.clone();
+        let v: Vec<f32> = (1..=8).map(|i| i as f32).collect();
+        let out = bidirectional_attention(&q, &k, &v, 2, 1, 4);
+        assert_eq!(out.len(), 8);
         assert!(out.iter().all(|v| v.is_finite()));
     }
 }
