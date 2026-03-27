@@ -8,8 +8,9 @@ version = "0.1.0"
 edition = "2021"
 description = "A modular LLM inference engine with Zig SIMD kernels and Metal GPU acceleration"
 license = "MIT"
-keywords = ["llm", "inference", "quantization", "transformer", "simd"]
-categories = ["science", "algorithms"]
+keywords = ["llm", "inference", "wasm", "quantization", "edge-ai"]
+categories = ["science", "wasm"]
+repository = "https://github.com/eren23/synapse"
 
 [features]
 metal = ["synapse-inference/metal"]

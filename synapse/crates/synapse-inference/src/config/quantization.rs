@@ -10,4 +10,5 @@ pub enum QuantConfig {
         calibration_method: String,
         calibration_samples: usize,
     },
+    Ternary,
 }
