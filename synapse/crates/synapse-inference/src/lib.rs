@@ -13,6 +13,7 @@ pub mod model_adapter;
 pub mod ops;
 pub mod quantization;
 pub mod registry;
+pub mod ssm;
 pub mod tokenizer;
 pub mod weight_loading;
 
