@@ -875,6 +875,612 @@ impl RealLeWM {
     }
 }
 
+// ── INT8 Quantization Ops ──────────────────────────────────────────
+
+fn quantize_per_channel_int8(data: &[f32], channels: usize, channel_size: usize) -> (Vec<i8>, Vec<f32>) {
+    let mut int8_data = vec![0i8; channels * channel_size];
+    let mut scales = vec![0.0f32; channels];
+    for ch in 0..channels {
+        let off = ch * channel_size;
+        let slice = &data[off..off + channel_size];
+        let max_abs = slice.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+        let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
+        scales[ch] = scale;
+        let inv_scale = 1.0 / scale;
+        for j in 0..channel_size {
+            int8_data[off + j] = (slice[j] * inv_scale).round().clamp(-128.0, 127.0) as i8;
+        }
+    }
+    (int8_data, scales)
+}
+
+fn qgemm_int8(m: usize, n: usize, k: usize, a: &[i8], b: &[i8], scales_a: &[f32], scales_b: &[f32]) -> Vec<f32> {
+    let mut out = vec![0.0f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut acc = 0i32;
+            for p in 0..k {
+                acc += (a[i * k + p] as i32) * (b[p * n + j] as i32);
+            }
+            out[i * n + j] = (acc as f32) * scales_a[i] * scales_b[j];
+        }
+    }
+    out
+}
+
+// ── QuantizedLinearWasm ────────────────────────────────────────────
+
+struct QuantizedLinearWasm {
+    weights_int8: Vec<i8>,  // [in_features, out_features] transposed layout
+    scales: Vec<f32>,       // [out_features]
+    out_features: usize,
+    in_features: usize,
+}
+
+impl QuantizedLinearWasm {
+    fn from_f32(weights: &[f32], out_features: usize, in_features: usize) -> Self {
+        // Quantize per output-channel (row), then transpose for GEMM
+        let mut scales = vec![0.0f32; out_features];
+        let mut weights_row = vec![0i8; out_features * in_features];
+        for ch in 0..out_features {
+            let row = &weights[ch * in_features..(ch + 1) * in_features];
+            let max_abs = row.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+            let scale = if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 };
+            scales[ch] = scale;
+            let inv = 1.0 / scale;
+            for j in 0..in_features {
+                weights_row[ch * in_features + j] = (row[j] * inv).round().clamp(-128.0, 127.0) as i8;
+            }
+        }
+        // Transpose to [in_features, out_features] for efficient GEMM
+        let mut weights_int8 = vec![0i8; out_features * in_features];
+        for r in 0..out_features {
+            for c in 0..in_features {
+                weights_int8[c * out_features + r] = weights_row[r * in_features + c];
+            }
+        }
+        QuantizedLinearWasm { weights_int8, scales, out_features, in_features }
+    }
+
+    fn forward(&self, x: &[f32], m: usize) -> Vec<f32> {
+        let k = self.in_features;
+        let n = self.out_features;
+        let (x_int8, scales_x) = quantize_per_channel_int8(x, m, k);
+        qgemm_int8(m, n, k, &x_int8, &self.weights_int8, &scales_x, &self.scales)
+    }
+}
+
+// ── QuantizedAdaLNWasm ─────────────────────────────────────────────
+
+struct QuantizedAdaLNWasm {
+    // Heavy matrices quantized to INT8
+    adaln_linear: QuantizedLinearWasm,
+    to_qkv: QuantizedLinearWasm,
+    attn_out: QuantizedLinearWasm,
+    mlp_up: QuantizedLinearWasm,
+    mlp_down: QuantizedLinearWasm,
+    // Biases and norm weights remain f32
+    adaln_b: Vec<f32>,
+    attn_out_b: Vec<f32>,
+    attn_norm_w: Vec<f32>,
+    attn_norm_b: Vec<f32>,
+    mlp_norm_w: Vec<f32>,
+    mlp_norm_b: Vec<f32>,
+    mlp_up_b: Vec<f32>,
+    mlp_down_b: Vec<f32>,
+}
+
+impl QuantizedAdaLNWasm {
+    fn from_adaln(layer: &AdaLNWeights) -> Self {
+        let h = HIDDEN;
+        let inner_dim = PREDICTOR_INNER_DIM;
+        let inter = PREDICTOR_INTER;
+        let mod_dim = 6 * h;
+
+        QuantizedAdaLNWasm {
+            adaln_linear: QuantizedLinearWasm::from_f32(&layer.adaln_w, mod_dim, h),
+            to_qkv: QuantizedLinearWasm::from_f32(&layer.to_qkv_w, 3 * inner_dim, h),
+            attn_out: QuantizedLinearWasm::from_f32(&layer.attn_out_w, h, inner_dim),
+            mlp_up: QuantizedLinearWasm::from_f32(&layer.mlp_up_w, inter, h),
+            mlp_down: QuantizedLinearWasm::from_f32(&layer.mlp_down_w, h, inter),
+            adaln_b: layer.adaln_b.clone(),
+            attn_out_b: layer.attn_out_b.clone(),
+            attn_norm_w: layer.attn_norm_w.clone(),
+            attn_norm_b: layer.attn_norm_b.clone(),
+            mlp_norm_w: layer.mlp_norm_w.clone(),
+            mlp_norm_b: layer.mlp_norm_b.clone(),
+            mlp_up_b: layer.mlp_up_b.clone(),
+            mlp_down_b: layer.mlp_down_b.clone(),
+        }
+    }
+}
+
+// ── RealLeWMInt8 ───────────────────────────────────────────────────
+
+#[wasm_bindgen]
+pub struct RealLeWMInt8 {
+    // Encoder stays f32 (same as RealLeWM)
+    encoder_patch_proj: Vec<f32>,
+    encoder_patch_proj_bias: Vec<f32>,
+    encoder_cls_token: Vec<f32>,
+    encoder_pos_embed: Vec<f32>,
+    encoder_layers: Vec<ViTLayerWeights>,
+    encoder_norm_w: Vec<f32>,
+    encoder_norm_b: Vec<f32>,
+
+    // Predictor uses quantized layers
+    predictor_pos_embed: Vec<f32>,
+    predictor_layers: Vec<QuantizedAdaLNWasm>,
+    predictor_norm_w: Vec<f32>,
+    predictor_norm_b: Vec<f32>,
+
+    // Action encoder (f32, small)
+    action_conv_w: Vec<f32>,
+    action_conv_b: Vec<f32>,
+    action_mlp1_w: Vec<f32>,
+    action_mlp1_b: Vec<f32>,
+    action_mlp2_w: Vec<f32>,
+    action_mlp2_b: Vec<f32>,
+
+    // Projector (f32)
+    projector_layers: Vec<(Vec<f32>, Vec<f32>)>,
+    projector_bn_weight: Vec<f32>,
+    projector_bn_bias: Vec<f32>,
+    projector_bn_mean: Vec<f32>,
+    projector_bn_var: Vec<f32>,
+
+    // Pred_proj (f32)
+    pred_proj_layers: Vec<(Vec<f32>, Vec<f32>)>,
+    pred_proj_bn_weight: Vec<f32>,
+    pred_proj_bn_bias: Vec<f32>,
+    pred_proj_bn_mean: Vec<f32>,
+    pred_proj_bn_var: Vec<f32>,
+}
+
+impl RealLeWMInt8 {
+    // ── ViT Encoder Forward (same as RealLeWM) ─────────────────────
+
+    fn vit_layer_forward(&self, x: &[f32], layer: &ViTLayerWeights, seq_len: usize) -> Vec<f32> {
+        let h = HIDDEN;
+        let num_heads = ENCODER_HEADS;
+        let head_dim = h / num_heads;
+        let q_dim = num_heads * head_dim;
+        let inter = ENCODER_INTER;
+
+        let normed = layernorm(x, &layer.norm1_w, &layer.norm1_b, h);
+
+        let mut q = matmul_t(&normed, &layer.q_w, seq_len, h, q_dim);
+        add_bias(&mut q, &layer.q_b, seq_len, q_dim);
+        let mut k = matmul_t(&normed, &layer.k_w, seq_len, h, q_dim);
+        add_bias(&mut k, &layer.k_b, seq_len, q_dim);
+        let mut v = matmul_t(&normed, &layer.v_w, seq_len, h, q_dim);
+        add_bias(&mut v, &layer.v_b, seq_len, q_dim);
+
+        let attn_out = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+
+        let mut proj = matmul_t(&attn_out, &layer.o_w, seq_len, q_dim, h);
+        add_bias(&mut proj, &layer.o_b, seq_len, h);
+
+        let mut residual = vec![0.0f32; seq_len * h];
+        for i in 0..seq_len * h {
+            residual[i] = x[i] + proj[i];
+        }
+
+        let normed2 = layernorm(&residual, &layer.norm2_w, &layer.norm2_b, h);
+
+        let mut up = matmul_t(&normed2, &layer.ffn_up_w, seq_len, h, inter);
+        add_bias(&mut up, &layer.ffn_up_b, seq_len, inter);
+        for val in up.iter_mut() {
+            *val = gelu(*val);
+        }
+        let mut down = matmul_t(&up, &layer.ffn_down_w, seq_len, inter, h);
+        add_bias(&mut down, &layer.ffn_down_b, seq_len, h);
+
+        for i in 0..seq_len * h {
+            residual[i] += down[i];
+        }
+
+        residual
+    }
+
+    fn encode_image_inner(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
+        let patch_embeddings = patch_embed(
+            pixels,
+            height,
+            width,
+            &self.encoder_patch_proj,
+            &self.encoder_patch_proj_bias,
+        );
+
+        let seq_len = SEQ_LEN_VIT;
+
+        let mut x = vec![0.0f32; seq_len * HIDDEN];
+        x[..HIDDEN].copy_from_slice(&self.encoder_cls_token);
+        x[HIDDEN..].copy_from_slice(&patch_embeddings);
+
+        let pos_len = self.encoder_pos_embed.len().min(x.len());
+        for i in 0..pos_len {
+            x[i] += self.encoder_pos_embed[i];
+        }
+
+        for layer in &self.encoder_layers {
+            x = self.vit_layer_forward(&x, layer, seq_len);
+        }
+
+        let cls_hidden = &x[..HIDDEN];
+        layernorm(cls_hidden, &self.encoder_norm_w, &self.encoder_norm_b, HIDDEN)
+    }
+
+    // ── Action Encoder (same as RealLeWM) ──────────────────────────
+
+    fn encode_action(&self, action: &[f32]) -> Vec<f32> {
+        let conv_out = if !self.action_conv_w.is_empty() {
+            let mut out = matmul_t(action, &self.action_conv_w, 1, ACTION_DIM, ACTION_DIM);
+            if !self.action_conv_b.is_empty() {
+                for j in 0..ACTION_DIM {
+                    out[j] += self.action_conv_b[j];
+                }
+            }
+            out
+        } else {
+            action.to_vec()
+        };
+
+        let inter = if !self.action_mlp1_w.is_empty() {
+            self.action_mlp1_w.len() / ACTION_DIM
+        } else {
+            ENCODER_INTER
+        };
+
+        let mut h1 = matmul_t(&conv_out, &self.action_mlp1_w, 1, ACTION_DIM, inter);
+        if !self.action_mlp1_b.is_empty() {
+            for j in 0..inter {
+                h1[j] += self.action_mlp1_b[j];
+            }
+        }
+        for v in h1.iter_mut() {
+            *v = gelu(*v);
+        }
+
+        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, HIDDEN);
+        if !self.action_mlp2_b.is_empty() {
+            for j in 0..HIDDEN {
+                out[j] += self.action_mlp2_b[j];
+            }
+        }
+
+        out
+    }
+
+    // ── Quantized adaLN Predictor Layer Forward ────────────────────
+
+    fn adaln_layer_forward_q(
+        &self,
+        x: &[f32],
+        conditioning: &[f32],
+        layer: &QuantizedAdaLNWasm,
+        seq_len: usize,
+    ) -> Vec<f32> {
+        let h = HIDDEN;
+        let num_heads = PREDICTOR_HEADS;
+        let inner_dim = PREDICTOR_INNER_DIM;
+        let head_dim = PREDICTOR_HEAD_DIM;
+        let inter = PREDICTOR_INTER;
+        let mod_dim = 6 * h;
+
+        // 1. Compute adaLN modulation using quantized linear
+        let mut mod_vec = layer.adaln_linear.forward(conditioning, 1);
+        for j in 0..mod_dim {
+            mod_vec[j] += layer.adaln_b[j];
+        }
+        let scale1 = &mod_vec[0..h];
+        let shift1 = &mod_vec[h..2 * h];
+        let gate1 = &mod_vec[2 * h..3 * h];
+        let scale2 = &mod_vec[3 * h..4 * h];
+        let shift2 = &mod_vec[4 * h..5 * h];
+        let gate2 = &mod_vec[5 * h..6 * h];
+
+        let mut residual = x.to_vec();
+
+        // 2. Pre-attention: LayerNorm + modulate
+        let normed = layernorm_no_bias(x, &layer.attn_norm_w, h);
+        let mut modulated = vec![0.0f32; seq_len * h];
+        for t in 0..seq_len {
+            for j in 0..h {
+                let idx = t * h + j;
+                let val = normed[idx] + layer.attn_norm_b[j];
+                modulated[idx] = val * (1.0 + scale1[j]) + shift1[j];
+            }
+        }
+
+        // 3. Fused QKV using quantized linear
+        let qkv = layer.to_qkv.forward(&modulated, seq_len);
+
+        let mut q = vec![0.0f32; seq_len * inner_dim];
+        let mut k = vec![0.0f32; seq_len * inner_dim];
+        let mut v = vec![0.0f32; seq_len * inner_dim];
+        for t in 0..seq_len {
+            let qkv_off = t * 3 * inner_dim;
+            let off = t * inner_dim;
+            q[off..off + inner_dim].copy_from_slice(&qkv[qkv_off..qkv_off + inner_dim]);
+            k[off..off + inner_dim]
+                .copy_from_slice(&qkv[qkv_off + inner_dim..qkv_off + 2 * inner_dim]);
+            v[off..off + inner_dim]
+                .copy_from_slice(&qkv[qkv_off + 2 * inner_dim..qkv_off + 3 * inner_dim]);
+        }
+
+        // 4. Bidirectional attention
+        let attn_out = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+
+        // 5. Output projection using quantized linear
+        let mut proj = layer.attn_out.forward(&attn_out, seq_len);
+        add_bias(&mut proj, &layer.attn_out_b, seq_len, h);
+
+        // 6. Gated residual
+        for t in 0..seq_len {
+            for j in 0..h {
+                let idx = t * h + j;
+                residual[idx] += gate1[j] * proj[idx];
+            }
+        }
+
+        // 7. Pre-FFN: LayerNorm + modulate
+        let normed2 = layernorm_no_bias(&residual, &layer.mlp_norm_w, h);
+        let mut modulated2 = vec![0.0f32; seq_len * h];
+        for t in 0..seq_len {
+            for j in 0..h {
+                let idx = t * h + j;
+                let val = normed2[idx] + layer.mlp_norm_b[j];
+                modulated2[idx] = val * (1.0 + scale2[j]) + shift2[j];
+            }
+        }
+
+        // 8. MLP using quantized linears
+        let mut up = layer.mlp_up.forward(&modulated2, seq_len);
+        add_bias(&mut up, &layer.mlp_up_b, seq_len, inter);
+        for val in up.iter_mut() {
+            *val = gelu(*val);
+        }
+        let mut down = layer.mlp_down.forward(&up, seq_len);
+        add_bias(&mut down, &layer.mlp_down_b, seq_len, h);
+
+        // 9. Gated residual
+        for t in 0..seq_len {
+            for j in 0..h {
+                let idx = t * h + j;
+                residual[idx] += gate2[j] * down[idx];
+            }
+        }
+
+        residual
+    }
+
+    // ── Predictor Forward ──────────────────────────────────────────
+
+    fn predict_next_inner(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
+        let a_embed = self.encode_action(action);
+
+        let z_projected = RealLeWM::projection_forward(
+            z_t,
+            &self.projector_layers,
+            &self.projector_bn_weight,
+            &self.projector_bn_bias,
+            &self.projector_bn_mean,
+            &self.projector_bn_var,
+        );
+
+        let seq_len = 3;
+        let mut seq = vec![0.0f32; seq_len * HIDDEN];
+        seq[..HIDDEN].copy_from_slice(&z_projected);
+        seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
+
+        if !self.predictor_pos_embed.is_empty() {
+            let pos_len = self.predictor_pos_embed.len().min(seq.len());
+            for i in 0..pos_len {
+                seq[i] += self.predictor_pos_embed[i];
+            }
+        }
+
+        for layer in &self.predictor_layers {
+            seq = self.adaln_layer_forward_q(&seq, &a_embed, layer, seq_len);
+        }
+
+        let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+
+        let target = &normed[2 * HIDDEN..3 * HIDDEN];
+
+        RealLeWM::projection_forward(
+            target,
+            &self.pred_proj_layers,
+            &self.pred_proj_bn_weight,
+            &self.pred_proj_bn_bias,
+            &self.pred_proj_bn_mean,
+            &self.pred_proj_bn_var,
+        )
+    }
+}
+
+#[wasm_bindgen]
+impl RealLeWMInt8 {
+    /// Load from f32 binary (same format as RealLeWM) and quantize predictor
+    /// layers to INT8 in-browser. Same 69MB download, ~4x less runtime memory
+    /// for predictor inference.
+    pub fn from_f32_data(data: &[u8]) -> Result<RealLeWMInt8, JsError> {
+        // First, parse the same format as RealLeWM
+        if data.len() < 4 {
+            return Err(JsError::new("Data too short for header length"));
+        }
+
+        let header_len = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
+
+        if data.len() < 4 + header_len {
+            return Err(JsError::new("Data too short for header"));
+        }
+
+        let header_bytes = &data[4..4 + header_len];
+        let header: HashMap<String, TensorInfo> = serde_json::from_slice(header_bytes)
+            .map_err(|e| JsError::new(&format!("Failed to parse header: {}", e)))?;
+
+        let data_start = 4 + header_len;
+
+        let get = |name: &str| -> Result<Vec<f32>, JsError> {
+            RealLeWM::get_tensor(&header, data, data_start, name)
+        };
+        let get_opt =
+            |name: &str| -> Vec<f32> { RealLeWM::get_tensor_opt(&header, data, data_start, name) };
+
+        // Load encoder weights (f32, same as RealLeWM)
+        let encoder_patch_proj = get("encoder.embeddings.patch_embeddings.projection.weight")?;
+        let encoder_patch_proj_bias = get("encoder.embeddings.patch_embeddings.projection.bias")?;
+        let encoder_cls_token = get("encoder.embeddings.cls_token")?;
+        let encoder_pos_embed = get("encoder.embeddings.position_embeddings")?;
+        let encoder_norm_w = get("encoder.layernorm.weight")?;
+        let encoder_norm_b = get("encoder.layernorm.bias")?;
+
+        let mut encoder_layers = Vec::with_capacity(ENCODER_LAYERS);
+        for i in 0..ENCODER_LAYERS {
+            let prefix = format!("encoder.encoder.layer.{}", i);
+            encoder_layers.push(ViTLayerWeights {
+                q_w: get(&format!("{}.attention.attention.query.weight", prefix))?,
+                q_b: get(&format!("{}.attention.attention.query.bias", prefix))?,
+                k_w: get(&format!("{}.attention.attention.key.weight", prefix))?,
+                k_b: get(&format!("{}.attention.attention.key.bias", prefix))?,
+                v_w: get(&format!("{}.attention.attention.value.weight", prefix))?,
+                v_b: get(&format!("{}.attention.attention.value.bias", prefix))?,
+                o_w: get(&format!("{}.attention.output.dense.weight", prefix))?,
+                o_b: get(&format!("{}.attention.output.dense.bias", prefix))?,
+                ffn_up_w: get(&format!("{}.intermediate.dense.weight", prefix))?,
+                ffn_up_b: get(&format!("{}.intermediate.dense.bias", prefix))?,
+                ffn_down_w: get(&format!("{}.output.dense.weight", prefix))?,
+                ffn_down_b: get(&format!("{}.output.dense.bias", prefix))?,
+                norm1_w: get(&format!("{}.layernorm_before.weight", prefix))?,
+                norm1_b: get(&format!("{}.layernorm_before.bias", prefix))?,
+                norm2_w: get(&format!("{}.layernorm_after.weight", prefix))?,
+                norm2_b: get(&format!("{}.layernorm_after.bias", prefix))?,
+            });
+        }
+
+        // Load predictor weights as f32 first, then quantize
+        let predictor_pos_embed = get("predictor.pos_embedding")?;
+        let predictor_norm_w = get("predictor.transformer.norm.weight")?;
+        let predictor_norm_b = get("predictor.transformer.norm.bias")?;
+
+        let mut predictor_layers = Vec::with_capacity(PREDICTOR_LAYERS);
+        for i in 0..PREDICTOR_LAYERS {
+            let prefix = format!("predictor.transformer.layers.{}", i);
+            let f32_layer = AdaLNWeights {
+                adaln_w: get(&format!("{}.adaLN_modulation.1.weight", prefix))?,
+                adaln_b: get(&format!("{}.adaLN_modulation.1.bias", prefix))?,
+                to_qkv_w: get(&format!("{}.attn.to_qkv.weight", prefix))?,
+                attn_out_w: get(&format!("{}.attn.to_out.0.weight", prefix))?,
+                attn_out_b: get(&format!("{}.attn.to_out.0.bias", prefix))?,
+                attn_norm_w: get(&format!("{}.attn.norm.weight", prefix))?,
+                attn_norm_b: get(&format!("{}.attn.norm.bias", prefix))?,
+                mlp_norm_w: get(&format!("{}.mlp.net.0.weight", prefix))?,
+                mlp_norm_b: get(&format!("{}.mlp.net.0.bias", prefix))?,
+                mlp_up_w: get(&format!("{}.mlp.net.1.weight", prefix))?,
+                mlp_up_b: get(&format!("{}.mlp.net.1.bias", prefix))?,
+                mlp_down_w: get(&format!("{}.mlp.net.4.weight", prefix))?,
+                mlp_down_b: get(&format!("{}.mlp.net.4.bias", prefix))?,
+            };
+            // Quantize to INT8
+            predictor_layers.push(QuantizedAdaLNWasm::from_adaln(&f32_layer));
+        }
+
+        // Action encoder (f32)
+        let action_conv_w = get("action_encoder.patch_embed.weight")?;
+        let action_conv_b = get("action_encoder.patch_embed.bias")?;
+        let action_mlp1_w = get("action_encoder.embed.0.weight")?;
+        let action_mlp1_b = get("action_encoder.embed.0.bias")?;
+        let action_mlp2_w = get("action_encoder.embed.2.weight")?;
+        let action_mlp2_b = get("action_encoder.embed.2.bias")?;
+
+        // Projector (f32)
+        let projector_layers = vec![
+            (get("projector.net.0.weight")?, get("projector.net.0.bias")?),
+            (get("projector.net.3.weight")?, get("projector.net.3.bias")?),
+        ];
+        let projector_bn_weight = get_opt("projector.net.1.weight");
+        let projector_bn_bias = get_opt("projector.net.1.bias");
+        let projector_bn_mean = get_opt("projector.net.1.running_mean");
+        let projector_bn_var = get_opt("projector.net.1.running_var");
+
+        // Pred_proj (f32)
+        let pred_proj_layers = vec![
+            (get("pred_proj.net.0.weight")?, get("pred_proj.net.0.bias")?),
+            (get("pred_proj.net.3.weight")?, get("pred_proj.net.3.bias")?),
+        ];
+        let pred_proj_bn_weight = get_opt("pred_proj.net.1.weight");
+        let pred_proj_bn_bias = get_opt("pred_proj.net.1.bias");
+        let pred_proj_bn_mean = get_opt("pred_proj.net.1.running_mean");
+        let pred_proj_bn_var = get_opt("pred_proj.net.1.running_var");
+
+        Ok(RealLeWMInt8 {
+            encoder_patch_proj,
+            encoder_patch_proj_bias,
+            encoder_cls_token,
+            encoder_pos_embed,
+            encoder_layers,
+            encoder_norm_w,
+            encoder_norm_b,
+            predictor_pos_embed,
+            predictor_layers,
+            predictor_norm_w,
+            predictor_norm_b,
+            action_conv_w,
+            action_conv_b,
+            action_mlp1_w,
+            action_mlp1_b,
+            action_mlp2_w,
+            action_mlp2_b,
+            projector_layers,
+            projector_bn_weight,
+            projector_bn_bias,
+            projector_bn_mean,
+            projector_bn_var,
+            pred_proj_layers,
+            pred_proj_bn_weight,
+            pred_proj_bn_bias,
+            pred_proj_bn_mean,
+            pred_proj_bn_var,
+        })
+    }
+
+    /// Encode a 224x224x3 image (HWC, flat f32 array) to a latent state [192].
+    /// Same as RealLeWM — encoder is f32.
+    pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
+        self.encode_image_inner(pixels, height, width)
+    }
+
+    /// Predict next latent state using INT8 quantized predictor layers.
+    pub fn predict_next(&self, state: &[f32], action: &[f32]) -> Vec<f32> {
+        self.predict_next_inner(state, action)
+    }
+
+    /// Multi-step rollout using INT8 quantized predictor layers.
+    /// Returns flattened array [num_steps * 192].
+    pub fn rollout(&self, state: &[f32], actions: &[f32], num_steps: usize) -> Vec<f32> {
+        let mut states = Vec::with_capacity(num_steps * LATENT_DIM);
+        let mut current = state.to_vec();
+        for step in 0..num_steps {
+            let action = &actions[step * ACTION_DIM..(step + 1) * ACTION_DIM];
+            current = self.predict_next_inner(&current, action);
+            states.extend_from_slice(&current);
+        }
+        states
+    }
+
+    /// Returns the latent dimension (192).
+    pub fn latent_dim(&self) -> usize {
+        LATENT_DIM
+    }
+
+    /// Returns the action dimension (10).
+    pub fn action_dim(&self) -> usize {
+        ACTION_DIM
+    }
+}
+
 // ── Keep the old WasmWorldModel for backward compat ─────────────────
 
 /// A minimal world model dynamics predictor for WASM (demo with random weights).

@@ -76,6 +76,14 @@
                     18M-param world model (JEPA) predicts future states in latent space.
                     Same starting image + different actions = different predicted futures.
                 </p>
+                <div style="display:inline-flex; align-items:center; gap:8px; margin-bottom:6px;">
+                    <label style="font-size:11px; color:#888;">Model format:</label>
+                    <select id="model-format" style="background:#222; color:#e0e0e0; border:1px solid #444; border-radius:4px; padding:3px 6px; font-family:inherit; font-size:11px;">
+                        <option value="f32">f32 (69 MB download)</option>
+                        <option value="int8">INT8 (69 MB download, quantizes in browser, ~4x less memory)</option>
+                    </select>
+                </div>
+                <br>
                 <button id="btn-load" onclick="loadModel()">Load Model (69MB)</button>
                 <button onclick="runLatentDemo()" disabled id="btn-run-latent">Run Latent Rollout</button>
                 <button onclick="runRandomActions()" disabled id="btn-random">Random Actions x5</button>
@@ -107,9 +115,11 @@
                     <div class="card">
                         <h2>Metrics</h2>
                         <div class="metric"><span class="label">Status</span><span class="value" id="status">Not loaded</span></div>
+                        <div class="metric"><span class="label">Format</span><span class="value" id="model-format-display">&mdash;</span></div>
                         <div class="metric"><span class="label">Encode</span><span class="value" id="encode-time">&mdash;</span></div>
                         <div class="metric"><span class="label">Rollout</span><span class="value" id="rollout-time">&mdash;</span></div>
                         <div class="metric"><span class="label">Steps/sec</span><span class="value" id="steps-sec">&mdash;</span></div>
+                        <div class="metric" id="memory-savings-row" style="display:none"><span class="label">Memory</span><span class="value" id="memory-savings">&mdash;</span></div>
                     </div>
                 </div>
                 <div class="col">
@@ -248,7 +258,7 @@
         const wasmModulePath = window.location.pathname.includes('/web/')
             ? '../synapse-wasm/pkg/synapse_wasm.js'
             : './synapse-wasm/pkg/synapse_wasm.js';
-        const { default: init, RealLeWM, NeoUnify } = await import(wasmModulePath);
+        const { default: init, RealLeWM, RealLeWMInt8, NeoUnify } = await import(wasmModulePath);
 
         let model = null;
         let wasmReady = false;
@@ -287,39 +297,113 @@
             document.getElementById('val-dy').textContent = (dy / 100).toFixed(2);
         };
 
+        // ── IndexedDB Weight Caching ─────────────────────────────────
+
+        const DB_NAME = 'synapse-cache';
+        const DB_VERSION = 1;
+        const STORE_NAME = 'weights';
+
+        async function openDB() {
+            return new Promise((resolve, reject) => {
+                const req = indexedDB.open(DB_NAME, DB_VERSION);
+                req.onupgradeneeded = () => req.result.createObjectStore(STORE_NAME);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+        }
+
+        async function getCachedWeights(key) {
+            try {
+                const db = await openDB();
+                return new Promise((resolve) => {
+                    const tx = db.transaction(STORE_NAME, 'readonly');
+                    const req = tx.objectStore(STORE_NAME).get(key);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                });
+            } catch {
+                return null;
+            }
+        }
+
+        async function cacheWeights(key, data) {
+            try {
+                const db = await openDB();
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                tx.objectStore(STORE_NAME).put(data, key);
+            } catch {
+                // Caching failed silently — not critical
+            }
+        }
+
+        async function fetchWithProgress(url, total) {
+            const resp = await fetch(url);
+            const contentLength = parseInt(resp.headers.get('Content-Length') || String(total));
+            const reader = resp.body.getReader();
+            let received = 0;
+            const chunks = [];
+            const bar = document.getElementById('progress-bar');
+            const pct = document.getElementById('progress-pct');
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                chunks.push(value);
+                received += value.length;
+                const p = (received / contentLength * 100).toFixed(1);
+                bar.style.width = p + '%';
+                pct.textContent = `${p}% (${(received/1048576).toFixed(1)}MB)`;
+            }
+
+            const allBytes = new Uint8Array(received);
+            let off = 0;
+            for (const c of chunks) { allBytes.set(c, off); off += c.length; }
+            return allBytes;
+        }
+
+        async function loadWeightsWithCache(url, key, expectedSize) {
+            const cached = await getCachedWeights(key);
+            if (cached) {
+                document.getElementById('loading-text').textContent = 'Loaded from cache';
+                document.getElementById('progress-bar').style.width = '100%';
+                document.getElementById('progress-pct').textContent = 'cached';
+                log('Weights loaded from IndexedDB cache');
+                return new Uint8Array(cached);
+            }
+            const data = await fetchWithProgress(url, expectedSize);
+            await cacheWeights(key, data.buffer);
+            log('Weights downloaded and cached to IndexedDB');
+            return data;
+        }
+
         // ── Model Loading ───────────────────────────────────────────
 
         window.loadModel = async function() {
             await ensureWasm();
             const overlay = document.getElementById('loading-overlay');
-            const bar = document.getElementById('progress-bar');
-            const pct = document.getElementById('progress-pct');
             overlay.classList.add('active');
 
-            try {
-                const resp = await fetch('lewm_weights.bin');
-                const total = parseInt(resp.headers.get('Content-Length') || '72201733');
-                const reader = resp.body.getReader();
-                let received = 0;
-                const chunks = [];
+            const format = document.getElementById('model-format').value;
+            const isInt8 = format === 'int8';
 
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    chunks.push(value);
-                    received += value.length;
-                    const p = (received / total * 100).toFixed(1);
-                    bar.style.width = p + '%';
-                    pct.textContent = `${p}% (${(received/1048576).toFixed(1)}MB)`;
+            try {
+                document.getElementById('loading-text').textContent =
+                    isInt8 ? 'Loading LeWorldModel for INT8 (69MB)...' : 'Loading LeWorldModel (69MB)...';
+
+                const allBytes = await loadWeightsWithCache('lewm_weights.bin', 'lewm_weights_v1', 72201733);
+
+                if (isInt8) {
+                    document.getElementById('loading-text').textContent = 'Quantizing predictor to INT8...';
+                    // Yield to UI before heavy quantization work
+                    await new Promise(r => setTimeout(r, 50));
                 }
 
-                document.getElementById('loading-text').textContent = 'Parsing weights...';
-                const allBytes = new Uint8Array(received);
-                let off = 0;
-                for (const c of chunks) { allBytes.set(c, off); off += c.length; }
-
                 const t0 = performance.now();
-                model = new RealLeWM(allBytes);
+                if (isInt8) {
+                    model = RealLeWMInt8.from_f32_data(allBytes);
+                } else {
+                    model = new RealLeWM(allBytes);
+                }
                 const loadMs = (performance.now() - t0).toFixed(0);
 
                 // Encode test image once
@@ -329,12 +413,21 @@
                 z0 = model.encode_image(pixels, 224, 224);
                 const encMs = (performance.now() - t1).toFixed(0);
 
-                document.getElementById('status').textContent = `Ready`;
+                document.getElementById('status').textContent = 'Ready';
+                document.getElementById('model-format-display').textContent = isInt8 ? 'INT8' : 'f32';
                 document.getElementById('encode-time').textContent = encMs + 'ms';
                 document.getElementById('btn-run-latent').disabled = false;
                 document.getElementById('btn-random').disabled = false;
                 document.getElementById('vit-status').textContent = 'Model loaded — ready to encode';
-                log(`Loaded in ${loadMs}ms. Encoded test image in ${encMs}ms. Latent dim: ${model.latent_dim()}`);
+
+                if (isInt8) {
+                    document.getElementById('memory-savings-row').style.display = '';
+                    document.getElementById('memory-savings').textContent = '~4x less (predictor INT8)';
+                    log(`Loaded + quantized in ${loadMs}ms. Encoded test image in ${encMs}ms. Format: INT8. Latent dim: ${model.latent_dim()}`);
+                } else {
+                    document.getElementById('memory-savings-row').style.display = 'none';
+                    log(`Loaded in ${loadMs}ms. Encoded test image in ${encMs}ms. Format: f32. Latent dim: ${model.latent_dim()}`);
+                }
             } catch(e) {
                 log(`ERROR: ${e.message}`);
             } finally {
@@ -783,31 +876,13 @@
         window.loadDiffusionModel = async function() {
             await ensureWasm();
             const overlay = document.getElementById('loading-overlay');
-            const bar = document.getElementById('progress-bar');
-            const pct = document.getElementById('progress-pct');
             document.getElementById('loading-text').textContent = 'Loading Neo-Unify (9.3MB)...';
             overlay.classList.add('active');
 
             try {
-                const resp = await fetch('neo_unify_weights.bin');
-                const total = parseInt(resp.headers.get('Content-Length') || '9733058');
-                const reader = resp.body.getReader();
-                let received = 0;
-                const chunks = [];
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    chunks.push(value);
-                    received += value.length;
-                    const p = (received / total * 100).toFixed(1);
-                    bar.style.width = p + '%';
-                    pct.textContent = `${p}% (${(received/1048576).toFixed(1)}MB)`;
-                }
-                document.getElementById('loading-text').textContent = 'Parsing weights...';
-                const allBytes = new Uint8Array(received);
-                let off = 0;
-                for (const c of chunks) { allBytes.set(c, off); off += c.length; }
+                const allBytes = await loadWeightsWithCache('neo_unify_weights.bin', 'neo_unify_weights_v1', 9733058);
 
+                document.getElementById('loading-text').textContent = 'Parsing weights...';
                 const t0 = performance.now();
                 diffModel = new NeoUnify(allBytes);
                 const ms = (performance.now() - t0).toFixed(0);

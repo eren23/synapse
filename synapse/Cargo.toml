@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*"]
-exclude = ["synapse-wasm"]
+exclude = ["synapse-wasm", "synapse-esp32"]
 resolver = "2"
 
 [package]
