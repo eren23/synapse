@@ -2,6 +2,7 @@
 
 pub mod activation;
 pub mod attention;
+pub mod fused_ops;
 pub mod geometric;
 pub mod matmul;
 pub mod norm;
