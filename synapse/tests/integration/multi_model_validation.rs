@@ -47,6 +47,7 @@ fn qwen3_config() -> ModelConfig {
             vocab_size: VOCAB_SIZE,
             max_sequence_length: MAX_SEQ,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,
@@ -76,6 +77,7 @@ fn llama_config() -> ModelConfig {
             vocab_size: VOCAB_SIZE,
             max_sequence_length: MAX_SEQ,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,
@@ -105,6 +107,7 @@ fn mistral_config() -> ModelConfig {
             vocab_size: VOCAB_SIZE,
             max_sequence_length: MAX_SEQ,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::SlidingWindow {
             num_heads: 4,
@@ -135,6 +138,7 @@ fn phi3_config() -> ModelConfig {
             vocab_size: VOCAB_SIZE,
             max_sequence_length: MAX_SEQ,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,
@@ -164,6 +168,7 @@ fn gemma_config() -> ModelConfig {
             vocab_size: VOCAB_SIZE,
             max_sequence_length: MAX_SEQ,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::MHA {
             num_heads: 4,

@@ -149,6 +149,7 @@ fn memory_usage_analytical_matches_actual() {
             vocab_size: 64,
             max_sequence_length: 16,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,

@@ -126,6 +126,11 @@ impl CausalLM {
                 x[t * h..(t + 1) * h].copy_from_slice(src);
             }
         }
+        if let Some(scale) = self.config.architecture.embed_scale {
+            for v in &mut x {
+                *v *= scale;
+            }
+        }
 
         // 2. Decoder layers
         for layer in &self.layers {
@@ -201,6 +206,11 @@ impl CausalLM {
                 x[t * h..(t + 1) * h].copy_from_slice(src);
             }
         }
+        if let Some(scale) = self.config.architecture.embed_scale {
+            for v in &mut x {
+                *v *= scale;
+            }
+        }
 
         // 2. Decoder layers — batched forward with cache populate
         for (i, layer) in self.layers.iter().enumerate() {
@@ -242,6 +252,11 @@ impl CausalLM {
         let id = token as usize;
         if id < vocab {
             x.copy_from_slice(&self.embed_tokens[id * h..(id + 1) * h]);
+        }
+        if let Some(scale) = self.config.architecture.embed_scale {
+            for v in &mut x {
+                *v *= scale;
+            }
         }
 
         // 2. Decoder layers with KV cache
@@ -594,6 +609,7 @@ mod tests {
                 vocab_size: 256,
                 max_sequence_length: 64,
                 tie_word_embeddings: true,
+                embed_scale: None,
             },
             attention: AttentionConfig::GQA {
                 num_heads: 4,

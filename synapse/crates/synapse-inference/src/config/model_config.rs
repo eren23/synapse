@@ -28,6 +28,8 @@ pub struct ArchitectureConfig {
     pub vocab_size: usize,
     pub max_sequence_length: usize,
     pub tie_word_embeddings: bool,
+    #[serde(default)]
+    pub embed_scale: Option<f32>,
 }
 
 impl ModelConfig {
@@ -161,6 +163,7 @@ impl HuggingFaceConfig {
                 vocab_size: self.vocab_size,
                 max_sequence_length: self.max_position_embeddings,
                 tie_word_embeddings: self.tie_word_embeddings,
+                embed_scale: None,
             },
             attention,
             norm: NormConfig::RMSNorm {
@@ -237,6 +240,36 @@ mod tests {
             }
         );
         assert_eq!(cfg.quantization, QuantConfig::F32);
+    }
+
+    #[test]
+    fn embed_scale_defaults_to_none() {
+        let json = r#"{
+            "name": "test",
+            "architecture": { "hidden_size": 64, "num_layers": 2, "vocab_size": 128, "max_sequence_length": 64, "tie_word_embeddings": false },
+            "attention": { "type": "MHA", "num_heads": 4, "head_dim": 16 },
+            "norm": { "type": "RMSNorm", "eps": 1e-6 },
+            "ffn": { "type": "SwiGLU", "intermediate_size": 128 },
+            "position": { "type": "RoPE", "base": 10000.0, "max_position_embeddings": 64 },
+            "quantization": { "type": "F32" }
+        }"#;
+        let cfg = ModelConfig::from_json(json).unwrap();
+        assert_eq!(cfg.architecture.embed_scale, None);
+    }
+
+    #[test]
+    fn embed_scale_parsed_from_json() {
+        let json = r#"{
+            "name": "test",
+            "architecture": { "hidden_size": 2048, "num_layers": 2, "vocab_size": 128, "max_sequence_length": 64, "tie_word_embeddings": false, "embed_scale": 45.254833 },
+            "attention": { "type": "MHA", "num_heads": 4, "head_dim": 16 },
+            "norm": { "type": "RMSNorm", "eps": 1e-6 },
+            "ffn": { "type": "SwiGLU", "intermediate_size": 128 },
+            "position": { "type": "RoPE", "base": 10000.0, "max_position_embeddings": 64 },
+            "quantization": { "type": "F32" }
+        }"#;
+        let cfg = ModelConfig::from_json(json).unwrap();
+        assert!((cfg.architecture.embed_scale.unwrap() - 45.254833).abs() < 1e-3);
     }
 
     #[test]

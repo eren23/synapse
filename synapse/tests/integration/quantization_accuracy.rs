@@ -15,6 +15,7 @@ fn test_config() -> ModelConfig {
             vocab_size: 64,
             max_sequence_length: 32,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,

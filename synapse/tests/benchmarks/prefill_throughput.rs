@@ -25,6 +25,7 @@ fn bench_config() -> ModelConfig {
             vocab_size: 512,
             max_sequence_length: 256,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,

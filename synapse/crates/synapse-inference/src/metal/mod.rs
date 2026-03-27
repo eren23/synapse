@@ -590,6 +590,7 @@ mod tests {
                 vocab_size: 100,
                 max_sequence_length: 128,
                 tie_word_embeddings: true,
+                embed_scale: None,
             },
             attention: AttentionConfig::MHA {
                 num_heads: 4,
@@ -629,6 +630,7 @@ mod tests {
                 vocab_size: 100,
                 max_sequence_length: 128,
                 tie_word_embeddings: true,
+                embed_scale: None,
             },
             attention: AttentionConfig::MHA {
                 num_heads: 4,

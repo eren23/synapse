@@ -470,6 +470,7 @@ mod tests {
                 vocab_size: 128,
                 max_sequence_length: 64,
                 tie_word_embeddings: true,
+                embed_scale: None,
             },
             attention: AttentionConfig::GQA {
                 num_heads: 4,

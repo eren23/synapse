@@ -19,6 +19,7 @@ fn qwen3_test_config() -> ModelConfig {
             vocab_size: 256,
             max_sequence_length: 128,
             tie_word_embeddings: true,
+            embed_scale: None,
         },
         attention: AttentionConfig::GQA {
             num_heads: 4,
