@@ -254,6 +254,15 @@
         <div id="log"></div>
     </div>
 
+    <script>
+        // Tab switching — must be in a regular script (not module) so onclick can find it immediately
+        window.switchTab = function(tab) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active-tab'));
+            document.getElementById('tab-' + tab).classList.add('active');
+            event.target.classList.add('active-tab');
+        };
+    </script>
     <script type="module">
         const wasmModulePath = window.location.pathname.includes('/web/')
             ? '../synapse-wasm/pkg/synapse_wasm.js'
@@ -271,15 +280,6 @@
         async function ensureWasm() {
             if (!wasmReady) { await init(); wasmReady = true; }
         }
-
-        // ── Tab switching ───────────────────────────────────────────
-
-        window.switchTab = function(tab) {
-            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-            document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active-tab'));
-            document.getElementById('tab-' + tab).classList.add('active');
-            event.target.classList.add('active-tab');
-        };
 
         // ── Slider updates ──────────────────────────────────────────
 

@@ -210,6 +210,138 @@ pub fn fused_linear_bias_gelu(
     out
 }
 
+/// Fused LayerNorm + adaLN modulate + matrix multiply.
+/// Writes result into `out` buffer (no allocation).
+///
+/// x: [seq_len, hidden], norm_weight: [hidden], scale: [hidden], shift: [hidden]
+/// weight: [out_dim, hidden] (row-major, for matmul_t pattern)
+/// out: [seq_len, out_dim] (pre-allocated, overwritten)
+pub fn fused_adaln_layernorm_matmul_into(
+    x: &[f32],
+    norm_weight: &[f32],
+    scale: &[f32],
+    shift: &[f32],
+    weight: &[f32],
+    seq_len: usize,
+    hidden: usize,
+    out_dim: usize,
+    eps: f32,
+    out: &mut [f32],
+) {
+    for t in 0..seq_len {
+        let x_off = t * hidden;
+        let row = &x[x_off..x_off + hidden];
+
+        // Compute mean and variance
+        let mut sum = 0.0f32;
+        let mut sum_sq = 0.0f32;
+        for j in 0..hidden {
+            sum += row[j];
+            sum_sq += row[j] * row[j];
+        }
+        let mean = sum / hidden as f32;
+        let var = sum_sq / hidden as f32 - mean * mean;
+        let inv_std = 1.0 / (var + eps).sqrt();
+
+        // For each output column, accumulate the fused dot product
+        let out_off = t * out_dim;
+        for j in 0..out_dim {
+            let w_off = j * hidden;
+            let mut acc = 0.0f32;
+            for k in 0..hidden {
+                let normed = (row[k] - mean) * inv_std * norm_weight[k];
+                let modulated = normed * (1.0 + scale[k]) + shift[k];
+                acc += modulated * weight[w_off + k];
+            }
+            out[out_off + j] = acc;
+        }
+    }
+}
+
+/// Fused: proj = attn_out @ weight^T + bias, then residual += gate * proj.
+/// Writes directly into residual (in-place gated residual update).
+pub fn fused_attn_proj_gated_residual_into(
+    attn_out: &[f32],
+    weight: &[f32], // [hidden, inner_dim] row-major
+    bias: &[f32],   // [hidden]
+    gate: &[f32],   // [hidden]
+    seq_len: usize,
+    inner_dim: usize,
+    hidden: usize,
+    residual: &mut [f32],
+) {
+    for t in 0..seq_len {
+        let a_off = t * inner_dim;
+        let r_off = t * hidden;
+        for j in 0..hidden {
+            let w_off = j * inner_dim;
+            let mut acc = 0.0f32;
+            for k in 0..inner_dim {
+                acc += attn_out[a_off + k] * weight[w_off + k];
+            }
+            if j < bias.len() {
+                acc += bias[j];
+            }
+            residual[r_off + j] += gate[j] * acc;
+        }
+    }
+}
+
+/// Fused FFN: up_proj + bias + GELU into scratch, then down_proj + bias + gated residual.
+/// scratch: [seq_len, inter] pre-allocated buffer for intermediate activations
+pub fn fused_ffn_gated_residual_into(
+    x: &[f32],         // [seq_len, hidden] -- input (normed+modulated)
+    up_weight: &[f32],  // [inter, hidden]
+    up_bias: &[f32],
+    down_weight: &[f32], // [hidden, inter]
+    down_bias: &[f32],
+    gate: &[f32], // [hidden]
+    seq_len: usize,
+    hidden: usize,
+    inter: usize,
+    residual: &mut [f32],
+    scratch: &mut [f32], // [seq_len, inter]
+) {
+    // Step 1: scratch = GELU(x @ up_weight^T + up_bias)
+    for t in 0..seq_len {
+        let x_off = t * hidden;
+        let s_off = t * inter;
+        for j in 0..inter {
+            let w_off = j * hidden;
+            let mut acc = 0.0f32;
+            for k in 0..hidden {
+                acc += x[x_off + k] * up_weight[w_off + k];
+            }
+            if j < up_bias.len() {
+                acc += up_bias[j];
+            }
+            // Inline GELU
+            scratch[s_off + j] = 0.5
+                * acc
+                * (1.0
+                    + ((2.0f32 / std::f32::consts::PI).sqrt()
+                        * (acc + 0.044715 * acc * acc * acc))
+                        .tanh());
+        }
+    }
+    // Step 2: residual += gate * (scratch @ down_weight^T + down_bias)
+    for t in 0..seq_len {
+        let s_off = t * inter;
+        let r_off = t * hidden;
+        for j in 0..hidden {
+            let w_off = j * inter;
+            let mut acc = 0.0f32;
+            for k in 0..inter {
+                acc += scratch[s_off + k] * down_weight[w_off + k];
+            }
+            if j < down_bias.len() {
+                acc += down_bias[j];
+            }
+            residual[r_off + j] += gate[j] * acc;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,5 +538,174 @@ mod tests {
         let result = online_softmax_attention(&q, &k, &v, seq_len, num_heads, head_dim);
         // With seq_len=1, output should just be v (softmax of single element = 1.0)
         assert!(approx_eq(&result, &v, 1e-5));
+    }
+
+    #[test]
+    fn fused_adaln_layernorm_matmul_into_matches_unfused() {
+        let hidden = 16;
+        let out_dim = 24;
+        let seq_len = 3;
+        let x: Vec<f32> = (0..seq_len * hidden)
+            .map(|i| (i as f32) * 0.02 - 0.5)
+            .collect();
+        let norm_weight: Vec<f32> = (0..hidden).map(|i| 1.0 + i as f32 * 0.001).collect();
+        let scale: Vec<f32> = (0..hidden).map(|i| i as f32 * 0.01).collect();
+        let shift: Vec<f32> = (0..hidden).map(|i| -0.3 + i as f32 * 0.005).collect();
+        let weight: Vec<f32> = (0..out_dim * hidden)
+            .map(|i| (i as f32) * 0.005 - 0.2)
+            .collect();
+
+        // Unfused reference: layernorm + modulate + matmul_t
+        let normed = ref_layernorm(&x, &norm_weight, 1e-6, hidden);
+        let modulated = ref_modulate(&normed, &scale, &shift, seq_len, hidden);
+        let expected = crate::ops::matmul::matmul_t(&modulated, &weight, seq_len, hidden, out_dim);
+
+        let mut fused_out = vec![0.0f32; seq_len * out_dim];
+        fused_adaln_layernorm_matmul_into(
+            &x,
+            &norm_weight,
+            &scale,
+            &shift,
+            &weight,
+            seq_len,
+            hidden,
+            out_dim,
+            1e-6,
+            &mut fused_out,
+        );
+
+        assert!(
+            approx_eq(&fused_out, &expected, 1e-4),
+            "max diff: {}",
+            fused_out
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max)
+        );
+    }
+
+    #[test]
+    fn fused_attn_proj_gated_residual_into_matches_unfused() {
+        let inner_dim = 16;
+        let hidden = 8;
+        let seq_len = 3;
+        let attn_out: Vec<f32> = (0..seq_len * inner_dim)
+            .map(|i| (i as f32) * 0.01 - 0.3)
+            .collect();
+        let weight: Vec<f32> = (0..hidden * inner_dim)
+            .map(|i| (i as f32) * 0.005 - 0.1)
+            .collect();
+        let bias: Vec<f32> = (0..hidden).map(|i| i as f32 * 0.02).collect();
+        let gate: Vec<f32> = (0..hidden).map(|i| 0.5 + i as f32 * 0.05).collect();
+        let residual_init: Vec<f32> = (0..seq_len * hidden)
+            .map(|i| (i as f32) * 0.03 - 0.5)
+            .collect();
+
+        // Unfused reference: matmul_t + bias + gated residual
+        let mut expected = residual_init.clone();
+        let proj = crate::ops::matmul::matmul_t(&attn_out, &weight, seq_len, inner_dim, hidden);
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                let idx = t * hidden + j;
+                let mut p = proj[idx];
+                p += bias[j];
+                expected[idx] += gate[j] * p;
+            }
+        }
+
+        let mut fused_residual = residual_init.clone();
+        fused_attn_proj_gated_residual_into(
+            &attn_out,
+            &weight,
+            &bias,
+            &gate,
+            seq_len,
+            inner_dim,
+            hidden,
+            &mut fused_residual,
+        );
+
+        assert!(
+            approx_eq(&fused_residual, &expected, 1e-4),
+            "max diff: {}",
+            fused_residual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max)
+        );
+    }
+
+    #[test]
+    fn fused_ffn_gated_residual_into_matches_unfused() {
+        let hidden = 8;
+        let inter = 16;
+        let seq_len = 3;
+        let x: Vec<f32> = (0..seq_len * hidden)
+            .map(|i| (i as f32) * 0.02 - 0.3)
+            .collect();
+        let up_weight: Vec<f32> = (0..inter * hidden)
+            .map(|i| (i as f32) * 0.005 - 0.1)
+            .collect();
+        let up_bias: Vec<f32> = (0..inter).map(|i| i as f32 * 0.01).collect();
+        let down_weight: Vec<f32> = (0..hidden * inter)
+            .map(|i| (i as f32) * 0.003 - 0.05)
+            .collect();
+        let down_bias: Vec<f32> = (0..hidden).map(|i| i as f32 * 0.02).collect();
+        let gate: Vec<f32> = (0..hidden).map(|i| 0.4 + i as f32 * 0.06).collect();
+        let residual_init: Vec<f32> = (0..seq_len * hidden)
+            .map(|i| (i as f32) * 0.01 - 0.2)
+            .collect();
+
+        // Unfused reference: matmul_t + bias + gelu, then matmul_t + bias + gated residual
+        let mut up = crate::ops::matmul::matmul_t(&x, &up_weight, seq_len, hidden, inter);
+        for t in 0..seq_len {
+            for j in 0..inter {
+                up[t * inter + j] += up_bias[j];
+            }
+        }
+        for v in up.iter_mut() {
+            *v = crate::ops::activation::gelu(*v);
+        }
+        let mut down = crate::ops::matmul::matmul_t(&up, &down_weight, seq_len, inter, hidden);
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                down[t * hidden + j] += down_bias[j];
+            }
+        }
+        let mut expected = residual_init.clone();
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                let idx = t * hidden + j;
+                expected[idx] += gate[j] * down[idx];
+            }
+        }
+
+        let mut fused_residual = residual_init.clone();
+        let mut scratch = vec![0.0f32; seq_len * inter];
+        fused_ffn_gated_residual_into(
+            &x,
+            &up_weight,
+            &up_bias,
+            &down_weight,
+            &down_bias,
+            &gate,
+            seq_len,
+            hidden,
+            inter,
+            &mut fused_residual,
+            &mut scratch,
+        );
+
+        assert!(
+            approx_eq(&fused_residual, &expected, 1e-4),
+            "max diff: {}",
+            fused_residual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| (a - b).abs())
+                .fold(0.0f32, f32::max)
+        );
     }
 }

@@ -363,6 +363,7 @@ impl DecoderLayer {
             self.rope_style,
         );
 
+        let scale = 1.0 / (head_dim as f32).sqrt();
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
         for head in 0..num_heads {
             let kv_head = head / groups;

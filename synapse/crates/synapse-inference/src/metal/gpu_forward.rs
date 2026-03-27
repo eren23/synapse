@@ -435,7 +435,7 @@ pub fn gpu_forward_all_layers(
     h: usize,
     inter: usize,
     has_head_norms: bool,
-    eps: f32,
+    _eps: f32,
     backend: &MetalBackend,
 ) -> Vec<f32> {
     let dev = &backend.device;

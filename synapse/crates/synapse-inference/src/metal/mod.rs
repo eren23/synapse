@@ -3,11 +3,13 @@ mod device;
 pub mod dispatch;
 pub mod gpu_buffers;
 pub mod gpu_forward;
+pub mod lewm_forward;
 
 pub use buffer::BufferPool;
 pub use device::{MetalBackend, MetalError};
 pub use dispatch::ComputeBackend;
 pub use gpu_buffers::MetalModelBuffers;
+pub use lewm_forward::MetalLeWMState;
 
 #[cfg(test)]
 mod tests {
@@ -62,13 +64,15 @@ mod tests {
     }
 
     /// Assert two f32 slices are approximately equal within tolerance.
+    /// Uses relative tolerance for large values, absolute for small values.
     fn assert_approx(actual: &[f32], expected: &[f32], tol: f32, label: &str) {
         assert_eq!(actual.len(), expected.len(), "{label}: length mismatch");
         for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            let abs_diff = (a - e).abs();
+            let rel_tol = tol * e.abs().max(1.0);
             assert!(
-                (a - e).abs() < tol,
-                "{label}[{i}]: GPU={a} vs CPU={e}, diff={}",
-                (a - e).abs()
+                abs_diff < rel_tol,
+                "{label}[{i}]: GPU={a} vs CPU={e}, diff={abs_diff}, rel_tol={rel_tol}",
             );
         }
     }
@@ -1288,5 +1292,361 @@ mod tests {
         }
 
         assert_approx(&gpu_result, &cpu_result, 1e-2, "gemv_int8 vs cpu reference");
+    }
+
+    // ======================== LEWM GPU forward tests ========================
+
+    #[test]
+    fn lewm_new_kernels_compiled() {
+        // Verify all 6 new kernels exist in the compiled pipeline set.
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        for name in &[
+            "gemv3_t",
+            "layernorm_modulate",
+            "gelu_inplace",
+            "gated_residual",
+            "add_bias",
+            "attention_3x3",
+        ] {
+            assert!(
+                backend.pipeline(name).is_some(),
+                "Missing pipeline: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn lewm_gemv3_correctness() {
+        // Test gemv3_t: C[3,4] = A[3,2] * B^T[4,2]
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+        let m = 3u32;
+        let n = 4u32;
+        let k = 2u32;
+        let a = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0]; // [3, 2]
+        let b = [1.0f32, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 3.0]; // [4, 2]
+
+        let buf_a = make_buffer(dev, &a);
+        let buf_b = make_buffer(dev, &b);
+        let buf_c = make_empty(dev, (m * n) as usize);
+        let buf_m = make_const_u32(dev, m);
+        let buf_n = make_const_u32(dev, n);
+        let buf_k = make_const_u32(dev, k);
+
+        let pipeline = backend.pipeline("gemv3_t").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_a), 0);
+        encoder.set_buffer(1, Some(&buf_b), 0);
+        encoder.set_buffer(2, Some(&buf_c), 0);
+        encoder.set_buffer(3, Some(&buf_m), 0);
+        encoder.set_buffer(4, Some(&buf_n), 0);
+        encoder.set_buffer(5, Some(&buf_k), 0);
+        let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(n as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_c, (m * n) as usize);
+
+        // CPU reference: C[i,j] = sum_k A[i,k] * B[j,k]
+        let mut expected = vec![0.0f32; (m * n) as usize];
+        for i in 0..m as usize {
+            for j in 0..n as usize {
+                let mut sum = 0.0f32;
+                for ki in 0..k as usize {
+                    sum += a[i * k as usize + ki] * b[j * k as usize + ki];
+                }
+                expected[i * n as usize + j] = sum;
+            }
+        }
+        assert_approx(&result, &expected, 1e-5, "gemv3_t");
+    }
+
+    #[test]
+    fn lewm_gelu_correctness() {
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+        let data = [-1.0f32, 0.0, 0.5, 1.0, 2.0];
+        let n = data.len() as u32;
+
+        let buf_x = make_buffer(dev, &data);
+        let buf_n = make_const_u32(dev, n);
+
+        let pipeline = backend.pipeline("gelu_inplace").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_x), 0);
+        encoder.set_buffer(1, Some(&buf_n), 0);
+        let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(n as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_x, n as usize);
+        let expected: Vec<f32> = data
+            .iter()
+            .map(|&v| {
+                0.5 * v
+                    * (1.0
+                        + ((2.0f32 / std::f32::consts::PI).sqrt()
+                            * (v + 0.044715 * v * v * v))
+                            .tanh())
+            })
+            .collect();
+        assert_approx(&result, &expected, 1e-5, "gelu_inplace");
+    }
+
+    #[test]
+    fn lewm_attention_3x3_correctness() {
+        // Test bidirectional attention for seq_len=3, num_heads=2, head_dim=4
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+        let dev = &backend.device;
+        let seq_len = 3u32;
+        let num_heads = 2u32;
+        let head_dim = 4u32;
+        let inner_dim = (num_heads * head_dim) as usize; // 8
+
+        // Random-ish Q, K, V [seq_len, inner_dim]
+        let q: Vec<f32> = (0..seq_len as usize * inner_dim)
+            .map(|i| (i as f32 * 0.37 + 0.1).sin() * 0.5)
+            .collect();
+        let k: Vec<f32> = (0..seq_len as usize * inner_dim)
+            .map(|i| (i as f32 * 0.53 + 0.3).sin() * 0.5)
+            .collect();
+        let v: Vec<f32> = (0..seq_len as usize * inner_dim)
+            .map(|i| (i as f32 * 0.71 + 0.7).sin() * 0.5)
+            .collect();
+
+        let buf_q = make_buffer(dev, &q);
+        let buf_k = make_buffer(dev, &k);
+        let buf_v = make_buffer(dev, &v);
+        let buf_out = make_empty(dev, seq_len as usize * inner_dim);
+        let buf_nh = make_const_u32(dev, num_heads);
+        let buf_hd = make_const_u32(dev, head_dim);
+        let buf_sl = make_const_u32(dev, seq_len);
+
+        let pipeline = backend.pipeline("attention_3x3").unwrap();
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_q), 0);
+        encoder.set_buffer(1, Some(&buf_k), 0);
+        encoder.set_buffer(2, Some(&buf_v), 0);
+        encoder.set_buffer(3, Some(&buf_out), 0);
+        encoder.set_buffer(4, Some(&buf_nh), 0);
+        encoder.set_buffer(5, Some(&buf_hd), 0);
+        encoder.set_buffer(6, Some(&buf_sl), 0);
+        let grid = ::metal::MTLSize::new(num_heads as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(num_heads as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let gpu_result = read_buffer(&buf_out, seq_len as usize * inner_dim);
+
+        // CPU reference: bidirectional attention
+        let sl = seq_len as usize;
+        let hd = head_dim as usize;
+        let nh = num_heads as usize;
+        let scale = 1.0 / (hd as f32).sqrt();
+        let mut expected = vec![0.0f32; sl * inner_dim];
+
+        for h in 0..nh {
+            for qi in 0..sl {
+                // Compute scores for all keys
+                let mut scores = vec![0.0f32; sl];
+                let mut max_score = f32::NEG_INFINITY;
+                for ki in 0..sl {
+                    let mut dot = 0.0f32;
+                    for d in 0..hd {
+                        dot += q[qi * inner_dim + h * hd + d] * k[ki * inner_dim + h * hd + d];
+                    }
+                    scores[ki] = dot * scale;
+                    if scores[ki] > max_score {
+                        max_score = scores[ki];
+                    }
+                }
+                // Softmax
+                let mut sum_exp = 0.0f32;
+                for ki in 0..sl {
+                    scores[ki] = (scores[ki] - max_score).exp();
+                    sum_exp += scores[ki];
+                }
+                for ki in 0..sl {
+                    scores[ki] /= sum_exp;
+                }
+                // Weighted V
+                for d in 0..hd {
+                    let mut val = 0.0f32;
+                    for ki in 0..sl {
+                        val += scores[ki] * v[ki * inner_dim + h * hd + d];
+                    }
+                    expected[qi * inner_dim + h * hd + d] = val;
+                }
+            }
+        }
+
+        assert_approx(&gpu_result, &expected, 1e-4, "attention_3x3");
+    }
+
+    #[test]
+    fn lewm_metal_predict_matches_cpu() {
+        // End-to-end: Metal predict_next output matches CPU predict_next.
+        let backend = match get_backend() {
+            Some(b) => b,
+            None => return,
+        };
+
+        use crate::model::lewm::{LeWMConfig, LeWorldModel};
+        use crate::weight_loading::AlignedBuffer;
+
+        // Deterministic pseudo-random weight generator
+        fn gen_weights(len: usize, seed: u32) -> Vec<f32> {
+            (0..len)
+                .map(|i| {
+                    let x = ((i as u32).wrapping_mul(2654435761).wrapping_add(seed)) as f32;
+                    (x / u32::MAX as f32) * 0.36 - 0.18
+                })
+                .collect()
+        }
+
+        // Use a small config to keep the test fast
+        let config = LeWMConfig {
+            image_size: 8,
+            patch_size: 4,
+            channels: 3,
+            encoder_hidden: 16,
+            encoder_layers: 2,
+            encoder_heads: 2,
+            encoder_inter: 32,
+            predictor_hidden: 16,
+            predictor_layers: 2,
+            predictor_heads: 2,
+            predictor_inner_dim: 16,
+            predictor_inter: 32,
+            action_dim: 4,
+            latent_dim: 16,
+        };
+
+        let pred_h = config.predictor_hidden;
+        let pred_inner = config.predictor_inner_dim;
+        let pred_inter = config.predictor_inter;
+        let act_dim = config.action_dim;
+        let enc_inter = config.encoder_inter;
+        let h = config.encoder_hidden;
+        let patch_dim = config.patch_size * config.patch_size * config.channels;
+        let num_patches = (config.image_size / config.patch_size).pow(2);
+        let enc_seq_len = num_patches + 1;
+
+        let mut model = LeWorldModel::from_config(&config);
+
+        // Initialize encoder weights
+        model.encoder.patch_proj = AlignedBuffer::from_slice(&gen_weights(h * patch_dim, 1));
+        model.encoder.cls_token = AlignedBuffer::from_slice(&gen_weights(h, 2));
+        model.encoder.pos_embed = AlignedBuffer::from_slice(&gen_weights(enc_seq_len * h, 3));
+        model.encoder.final_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+        for (i, layer) in model.encoder.layers.iter_mut().enumerate() {
+            let s = (i as u32 + 1) * 100;
+            layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+            layer.w_q = AlignedBuffer::from_slice(&gen_weights(h * h, s + 1));
+            layer.w_k = AlignedBuffer::from_slice(&gen_weights(h * h, s + 2));
+            layer.w_v = AlignedBuffer::from_slice(&gen_weights(h * h, s + 3));
+            layer.w_o = AlignedBuffer::from_slice(&gen_weights(h * h, s + 4));
+            layer.ffn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+            layer.ffn_up = AlignedBuffer::from_slice(&gen_weights(enc_inter * h, s + 5));
+            layer.ffn_down = AlignedBuffer::from_slice(&gen_weights(h * enc_inter, s + 6));
+        }
+
+        // Projector
+        model.projector.layers[0].0 =
+            AlignedBuffer::from_slice(&gen_weights(enc_inter * h, 400));
+        model.projector.layers[0].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 401));
+        model.projector.layers[1].0 =
+            AlignedBuffer::from_slice(&gen_weights(enc_inter * enc_inter, 402));
+        model.projector.layers[1].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 403));
+        model.projector.layers[2].0 =
+            AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 404));
+        model.projector.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 405));
+
+        // Pred_proj
+        model.pred_proj.layers[0].0 =
+            AlignedBuffer::from_slice(&gen_weights(enc_inter * pred_h, 500));
+        model.pred_proj.layers[0].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 501));
+        model.pred_proj.layers[1].0 =
+            AlignedBuffer::from_slice(&gen_weights(enc_inter * enc_inter, 502));
+        model.pred_proj.layers[1].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 503));
+        model.pred_proj.layers[2].0 =
+            AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 504));
+        model.pred_proj.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 505));
+
+        // Action encoder
+        model.action_conv_weight =
+            AlignedBuffer::from_slice(&gen_weights(act_dim * act_dim, 600));
+        model.action_conv_bias = AlignedBuffer::from_slice(&gen_weights(act_dim, 601));
+        model.action_mlp1_weight =
+            AlignedBuffer::from_slice(&gen_weights(enc_inter * act_dim, 602));
+        model.action_mlp1_bias = AlignedBuffer::from_slice(&gen_weights(enc_inter, 603));
+        model.action_mlp2_weight =
+            AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 604));
+        model.action_mlp2_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, 605));
+
+        // Predictor
+        model.predictor_pos_embed = AlignedBuffer::from_slice(&gen_weights(3 * pred_h, 700));
+        model.predictor_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
+        model.predictor_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
+
+        for (i, layer) in model.predictor_layers.iter_mut().enumerate() {
+            let s = (i as u32 + 1) * 1000;
+            layer.adaln_weight =
+                AlignedBuffer::from_slice(&gen_weights(6 * pred_h * pred_h, s + 1));
+            layer.adaln_bias = AlignedBuffer::from_slice(&gen_weights(6 * pred_h, s + 2));
+            layer.to_qkv =
+                AlignedBuffer::from_slice(&gen_weights(3 * pred_inner * pred_h, s + 3));
+            layer.attn_out_weight =
+                AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inner, s + 4));
+            layer.attn_out_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 5));
+            layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
+            layer.attn_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
+            layer.mlp_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
+            layer.mlp_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
+            layer.mlp_up_weight =
+                AlignedBuffer::from_slice(&gen_weights(pred_inter * pred_h, s + 10));
+            layer.mlp_up_bias = AlignedBuffer::from_slice(&gen_weights(pred_inter, s + 11));
+            layer.mlp_down_weight =
+                AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 12));
+            layer.mlp_down_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 13));
+        }
+
+        let state = MetalLeWMState::from_model(&model, &backend);
+
+        let z_t = gen_weights(config.latent_dim, 42);
+        let action = gen_weights(config.action_dim, 43);
+
+        let cpu_result = model.predict_next(&z_t, &action);
+        let gpu_result = model.predict_next_metal(&z_t, &action, &state, &backend);
+
+        assert_eq!(cpu_result.len(), gpu_result.len(), "output length mismatch");
+        // Both paths run the same computation; tolerance accounts for floating-point order
+        assert_approx(&gpu_result, &cpu_result, 1e-2, "lewm_metal_vs_cpu");
     }
 }

@@ -46,6 +46,16 @@ const SHADER_SOURCE: &str = concat!(
     "\n",
     include_str!("shaders/gemv_int8.metal"),
     "\n",
+    // LEWM shaders (3 optimization levels):
+    //   lewm_gemv3.metal        — individual kernel ops, used by v1 dispatch (~5ms)
+    //   lewm_fused_layer.metal  — one-dispatch-per-layer, scalar dots (~1.07ms, fastest)
+    //   lewm_fused_simd.metal   — one-dispatch-per-layer, float4 vectorized (~1.09ms)
+    include_str!("shaders/lewm_gemv3.metal"),
+    "\n",
+    include_str!("shaders/lewm_fused_layer.metal"),
+    "\n",
+    include_str!("shaders/lewm_fused_simd.metal"),
+    "\n",
     // Simple utility kernels kept inline
     r#"
 #include <metal_stdlib>
@@ -109,6 +119,14 @@ pub(crate) const KERNEL_NAMES: &[&str] = &[
     "headwise_rmsnorm",
     "gemv",
     "gemv_int8",
+    "gemv3_t",
+    "layernorm_modulate",
+    "gelu_inplace",
+    "gated_residual",
+    "add_bias",
+    "attention_3x3",
+    "adaln_layer_fused",
+    "adaln_layer_fused_simd",
 ];
 
 /// Optional kernels that require specific Metal feature support.

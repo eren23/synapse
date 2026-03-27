@@ -1,83 +1,110 @@
+// ── Apple Accelerate BLAS (macOS) ─────────────────────────────────
+// cblas_sgemm from Accelerate.framework — hand-tuned by Apple for all
+// Apple Silicon matrix sizes. Significantly faster than our Zig kernel
+// for small M (LEWM predict) and competitive for large M (LLM prefill).
+#[cfg(target_os = "macos")]
+mod accelerate {
+    // CBLAS enums (CblasRowMajor=101, CblasNoTrans=111, CblasTrans=112)
+    const CBLAS_ROW_MAJOR: i32 = 101;
+    const CBLAS_NO_TRANS: i32 = 111;
+    const CBLAS_TRANS: i32 = 112;
+
+    extern "C" {
+        fn cblas_sgemm(
+            order: i32, trans_a: i32, trans_b: i32,
+            m: i32, n: i32, k: i32,
+            alpha: f32, a: *const f32, lda: i32,
+            b: *const f32, ldb: i32,
+            beta: f32, c: *mut f32, ldc: i32,
+        );
+    }
+
+    /// C[m,n] = A[m,k] * B^T[n,k] via Apple Accelerate cblas_sgemm.
+    pub fn sgemm_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize, out: &mut [f32]) {
+        unsafe {
+            cblas_sgemm(
+                CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_TRANS,
+                m as i32, n as i32, k as i32,
+                1.0, a.as_ptr(), k as i32,
+                b.as_ptr(), k as i32,
+                0.0, out.as_mut_ptr(), n as i32,
+            );
+        }
+    }
+
+    /// C[m,n] = A[m,k] * B[k,n] via Apple Accelerate cblas_sgemm.
+    pub fn sgemm_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize, out: &mut [f32]) {
+        unsafe {
+            cblas_sgemm(
+                CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+                m as i32, n as i32, k as i32,
+                1.0, a.as_ptr(), k as i32,
+                b.as_ptr(), n as i32,
+                0.0, out.as_mut_ptr(), n as i32,
+            );
+        }
+    }
+}
+
 /// y = A * B^T  where A is [m, k], B is [n, k] -> y is [m, n].
 ///
-/// Dispatches to the Zig SIMD tiled GEMM (`syn_sgemm`) via FFI when zig-ffi is
-/// enabled, or to a pure-Rust scalar fallback otherwise.
-#[cfg(feature = "zig-ffi")]
+/// Dispatch order:
+/// 1. Apple Accelerate (macOS) — fastest for all sizes
+/// 2. Zig SIMD (zig-ffi feature) — cross-platform SIMD
+/// 3. Pure-Rust scalar — WASM/embedded fallback
 pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     debug_assert_eq!(a.len(), m * k, "matmul_t: a.len() != m*k");
     debug_assert_eq!(b.len(), n * k, "matmul_t: b.len() != n*k");
     let mut out = vec![0.0f32; m * n];
-    // syn_sgemm: C = op(A) * op(B), row-major.
-    //   A [m, k] no-transpose, lda = k
-    //   B [n, k] transposed -> [k, n], ldb = k
-    //   C [m, n], ldc = n
-    let status = unsafe {
-        synapse_sys::syn_sgemm(
-            m,
-            n,
-            k,
-            a.as_ptr(),
-            k,
-            0, // A: no transpose
-            b.as_ptr(),
-            k,
-            1, // B: transpose
-            out.as_mut_ptr(),
-            n, // C
-        )
-    };
-    debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
-    out
-}
 
-#[cfg(not(feature = "zig-ffi"))]
-pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-    debug_assert_eq!(a.len(), m * k, "matmul_t: a.len() != m*k");
-    debug_assert_eq!(b.len(), n * k, "matmul_t: b.len() != n*k");
-    super::pure_rust_ops::matmul_t(a, b, m, k, n)
+    #[cfg(target_os = "macos")]
+    {
+        accelerate::sgemm_t(a, b, m, k, n, &mut out);
+        return out;
+    }
+
+    #[cfg(all(not(target_os = "macos"), feature = "zig-ffi"))]
+    {
+        let status = unsafe {
+            synapse_sys::syn_sgemm(m, n, k, a.as_ptr(), k, 0, b.as_ptr(), k, 1, out.as_mut_ptr(), n)
+        };
+        debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
+        return out;
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(feature = "zig-ffi")))]
+    {
+        return super::pure_rust_ops::matmul_t(a, b, m, k, n);
+    }
 }
 
 /// y = A * B  where A is [m, k], B is [k, n] -> y is [m, n].
 ///
-/// Non-transposed variant of [`matmul_t`]. Used for score*V in cached decode
-/// where scores are `[1, seq_len]` and V is `[seq_len, head_dim]`.
-#[cfg(feature = "zig-ffi")]
+/// Non-transposed variant. Same dispatch as matmul_t.
 pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
     debug_assert_eq!(a.len(), m * k, "matmul_nn: a.len() != m*k");
     debug_assert_eq!(b.len(), k * n, "matmul_nn: b.len() != k*n");
     let mut out = vec![0.0f32; m * n];
-    // syn_sgemm: C = op(A) * op(B), row-major.
-    //   A [m, k] no-transpose, lda = k
-    //   B [k, n] no-transpose, ldb = n
-    //   C [m, n], ldc = n
-    let status = unsafe {
-        synapse_sys::syn_sgemm(
-            m,
-            n,
-            k,
-            a.as_ptr(),
-            k,
-            0, // A: no transpose
-            b.as_ptr(),
-            n,
-            0, // B: no transpose
-            out.as_mut_ptr(),
-            n, // C
-        )
-    };
-    debug_assert_eq!(
-        status,
-        synapse_sys::SYN_OK,
-        "syn_sgemm (nn) failed: {status}"
-    );
-    out
-}
 
-#[cfg(not(feature = "zig-ffi"))]
-pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> {
-    debug_assert_eq!(a.len(), m * k, "matmul_nn: a.len() != m*k");
-    debug_assert_eq!(b.len(), k * n, "matmul_nn: b.len() != k*n");
-    super::pure_rust_ops::matmul_nn(a, b, m, k, n)
+    #[cfg(target_os = "macos")]
+    {
+        accelerate::sgemm_nn(a, b, m, k, n, &mut out);
+        return out;
+    }
+
+    #[cfg(all(not(target_os = "macos"), feature = "zig-ffi"))]
+    {
+        let status = unsafe {
+            synapse_sys::syn_sgemm(m, n, k, a.as_ptr(), k, 0, b.as_ptr(), n, 0, out.as_mut_ptr(), n)
+        };
+        debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm (nn) failed: {status}");
+        return out;
+    }
+
+    #[cfg(all(not(target_os = "macos"), not(feature = "zig-ffi")))]
+    {
+        return super::pure_rust_ops::matmul_nn(a, b, m, k, n);
+    }
 }
 
 #[cfg(test)]

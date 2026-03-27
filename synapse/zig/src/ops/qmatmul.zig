@@ -56,6 +56,15 @@ pub fn int8GemmTiled(
         return;
     }
 
+    // Fast path: skinny INT8 GEMM for M=2..16 (LEWM predict, small-batch).
+    // Calls the GEMV kernel per row — avoids packing overhead at small M.
+    if (m <= 16) {
+        for (0..m) |i| {
+            int8GemvRow(n, k, a + i * lda, ldb, b, ldb, c + i * ldc, scales_a[i], scales_b);
+        }
+        return;
+    }
+
     // Zero C
     for (0..m) |i| {
         @memset((c + i * ldc)[0..n], @as(f32, 0));

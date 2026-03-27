@@ -144,6 +144,16 @@ pub fn sgemmTiled(
         return;
     }
 
+    // Fast path: skinny GEMM for M=2..16 (LEWM predict, small-batch inference).
+    // Calls the GEMV kernel per row — avoids packA/packB overhead that dominates
+    // at small M. The GEMV kernel uses 8×F32x4 SIMD accumulators internally.
+    if (m <= 16 and !trans_a) {
+        for (0..m) |i| {
+            f32GemvRow(n, k, a + i * lda, b, ldb, trans_b, c + i * ldc);
+        }
+        return;
+    }
+
     // L3: partition N
     var jc: usize = 0;
     while (jc < n) : (jc += NC) {

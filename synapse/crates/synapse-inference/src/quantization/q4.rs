@@ -117,6 +117,33 @@ impl Q4Linear {
         self.blocks.len() * std::mem::size_of::<Q4Block>()
     }
 
+    /// Dequantize all Q4 blocks back to f32.
+    /// Returns [out_features, in_features] row-major weights.
+    pub fn dequantize(&self) -> Vec<f32> {
+        let mut weights = vec![0.0f32; self.out_features * self.in_features];
+        let padded_k = (self.in_features + 31) / 32 * 32;
+        let blocks_per_row = padded_k / 32;
+        for row in 0..self.out_features {
+            for b in 0..blocks_per_row {
+                let block = &self.blocks[row * blocks_per_row + b];
+                for ni in 0..16 {
+                    let byte = block.nibbles[ni];
+                    let v0 = ((byte & 0x0F) as i8 - 8) as f32 * block.scale;
+                    let v1 = ((byte >> 4) as i8 - 8) as f32 * block.scale;
+                    let col0 = b * 32 + 2 * ni;
+                    let col1 = col0 + 1;
+                    if col0 < self.in_features {
+                        weights[row * self.in_features + col0] = v0;
+                    }
+                    if col1 < self.in_features {
+                        weights[row * self.in_features + col1] = v1;
+                    }
+                }
+            }
+        }
+        weights
+    }
+
     /// Create an empty (zero-sized) Q4Linear, used for absent weights.
     pub fn empty() -> Self {
         Q4Linear {
@@ -492,6 +519,419 @@ pub fn quantize_lewm_q4(model: &LeWorldModel) -> QuantizedQ4LeWM {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CachedQ4Linear: dequant-at-load for BLAS-speed Q4 inference
+// ---------------------------------------------------------------------------
+
+/// Q4 storage with f32 compute cache.
+///
+/// Weights quantized to Q4 for compression (7MB on disk), then dequantized
+/// to f32 at load time for fast inference via platform BLAS (Accelerate on Mac).
+/// Separation of concerns: Q4 is the storage format, f32 is the compute format.
+pub struct CachedQ4Linear {
+    f32_weights: Vec<f32>, // [out_features, in_features] dequantized
+    pub out_features: usize,
+    pub in_features: usize,
+}
+
+impl CachedQ4Linear {
+    /// Create from an existing Q4Linear by dequantizing to f32.
+    pub fn from_q4(q4: &Q4Linear) -> Self {
+        CachedQ4Linear {
+            f32_weights: q4.dequantize(),
+            out_features: q4.out_features,
+            in_features: q4.in_features,
+        }
+    }
+
+    /// Create from f32 weights: quantize to Q4, then immediately dequant.
+    /// This gives Q4-precision weights with f32 compute speed.
+    pub fn from_f32(weights: &[f32], out_features: usize, in_features: usize) -> Self {
+        let q4 = Q4Linear::from_f32(weights, out_features, in_features);
+        Self::from_q4(&q4)
+    }
+
+    /// Forward: x [m, in_features] → [m, out_features]
+    /// Uses platform-optimal matmul (Accelerate on Mac, Zig on Linux, pure-Rust on WASM).
+    pub fn forward(&self, x: &[f32], m: usize) -> Vec<f32> {
+        crate::ops::matmul::matmul_t(x, &self.f32_weights, m, self.in_features, self.out_features)
+    }
+
+    pub fn empty() -> Self {
+        CachedQ4Linear {
+            f32_weights: Vec::new(),
+            out_features: 0,
+            in_features: 0,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CachedQ4AdaLNLayer: same structure as QuantizedQ4AdaLNLayer, CachedQ4Linear
+// ---------------------------------------------------------------------------
+
+/// A DiT-style adaLN transformer layer backed by [`CachedQ4Linear`].
+///
+/// Same forward logic as [`QuantizedQ4AdaLNLayer`] but dispatches through
+/// `CachedQ4Linear::forward()` for platform-BLAS speed.
+pub struct CachedQ4AdaLNLayer {
+    pub adaln_linear: CachedQ4Linear,
+    pub adaln_bias: Vec<f32>,
+    pub to_qkv: CachedQ4Linear,
+    pub attn_out: CachedQ4Linear,
+    pub attn_out_bias: Vec<f32>,
+    pub attn_norm_weight: Vec<f32>,
+    pub attn_norm_bias: Vec<f32>,
+    pub mlp_norm_weight: Vec<f32>,
+    pub mlp_norm_bias: Vec<f32>,
+    pub mlp_up: CachedQ4Linear,
+    pub mlp_up_bias: Vec<f32>,
+    pub mlp_down: CachedQ4Linear,
+    pub mlp_down_bias: Vec<f32>,
+}
+
+impl CachedQ4AdaLNLayer {
+    /// Forward pass for one CachedQ4 DiT adaLN layer.
+    ///
+    /// Identical logic to [`QuantizedQ4AdaLNLayer::forward()`] but uses
+    /// `CachedQ4Linear::forward` instead of `Q4Linear::forward`.
+    pub fn forward(
+        &self,
+        x: &[f32],
+        conditioning: &[f32],
+        seq_len: usize,
+        hidden: usize,
+        num_heads: usize,
+        inner_dim: usize,
+        inter: usize,
+    ) -> Vec<f32> {
+        let head_dim = inner_dim / num_heads;
+        let mod_dim = 6 * hidden;
+
+        // 1. Compute adaLN modulation: conditioning [hidden] -> mod_vec [6*hidden]
+        let mut mod_vec = self.adaln_linear.forward(conditioning, 1);
+        debug_assert_eq!(mod_vec.len(), mod_dim);
+        for j in 0..mod_dim.min(self.adaln_bias.len()) {
+            mod_vec[j] += self.adaln_bias[j];
+        }
+
+        // Split into 6 vectors of [hidden]: scale1, shift1, gate1, scale2, shift2, gate2
+        let scale1 = &mod_vec[0..hidden];
+        let shift1 = &mod_vec[hidden..2 * hidden];
+        let gate1 = &mod_vec[2 * hidden..3 * hidden];
+        let scale2 = &mod_vec[3 * hidden..4 * hidden];
+        let shift2 = &mod_vec[4 * hidden..5 * hidden];
+        let gate2 = &mod_vec[5 * hidden..6 * hidden];
+
+        let mut residual = x.to_vec();
+
+        // 2. Pre-attention: layernorm + modulate
+        let normed = layernorm(x, &self.attn_norm_weight, 1e-6, hidden);
+        let mut modulated = vec![0.0f32; seq_len * hidden];
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                let idx = t * hidden + j;
+                modulated[idx] = normed[idx] * (1.0 + scale1[j]) + shift1[j];
+            }
+        }
+
+        // 3. Fused QKV attention
+        //    modulated: [seq_len, hidden] -> qkv: [seq_len, 3*inner_dim]
+        let qkv = self.to_qkv.forward(&modulated, seq_len);
+        debug_assert_eq!(qkv.len(), seq_len * 3 * inner_dim);
+
+        // Split into Q, K, V each [seq_len, inner_dim]
+        let mut q = vec![0.0f32; seq_len * inner_dim];
+        let mut k = vec![0.0f32; seq_len * inner_dim];
+        let mut v = vec![0.0f32; seq_len * inner_dim];
+        for t in 0..seq_len {
+            let qkv_off = t * 3 * inner_dim;
+            let off = t * inner_dim;
+            q[off..off + inner_dim].copy_from_slice(&qkv[qkv_off..qkv_off + inner_dim]);
+            k[off..off + inner_dim]
+                .copy_from_slice(&qkv[qkv_off + inner_dim..qkv_off + 2 * inner_dim]);
+            v[off..off + inner_dim]
+                .copy_from_slice(&qkv[qkv_off + 2 * inner_dim..qkv_off + 3 * inner_dim]);
+        }
+
+        // Bidirectional multi-head attention
+        let attn_out = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+
+        // Output projection: [seq_len, inner_dim] -> [seq_len, hidden]
+        let mut proj = self.attn_out.forward(&attn_out, seq_len);
+        for t in 0..seq_len {
+            for j in 0..hidden.min(self.attn_out_bias.len()) {
+                proj[t * hidden + j] += self.attn_out_bias[j];
+            }
+        }
+
+        // 4. Gated residual: x = x + gate1 * attn_out
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                let idx = t * hidden + j;
+                residual[idx] += gate1[j] * proj[idx];
+            }
+        }
+
+        // 5. Pre-FFN: layernorm + modulate
+        let normed2 = layernorm(&residual, &self.mlp_norm_weight, 1e-6, hidden);
+        let mut modulated2 = vec![0.0f32; seq_len * hidden];
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                let idx = t * hidden + j;
+                modulated2[idx] = normed2[idx] * (1.0 + scale2[j]) + shift2[j];
+            }
+        }
+
+        // 6. MLP: up -> GELU -> down
+        let mut up = self.mlp_up.forward(&modulated2, seq_len);
+        for t in 0..seq_len {
+            for j in 0..inter.min(self.mlp_up_bias.len()) {
+                up[t * inter + j] += self.mlp_up_bias[j];
+            }
+        }
+        for val in up.iter_mut() {
+            *val = gelu(*val);
+        }
+        let mut down = self.mlp_down.forward(&up, seq_len);
+        for t in 0..seq_len {
+            for j in 0..hidden.min(self.mlp_down_bias.len()) {
+                down[t * hidden + j] += self.mlp_down_bias[j];
+            }
+        }
+
+        // 7. Gated residual: x = x + gate2 * mlp_out
+        for t in 0..seq_len {
+            for j in 0..hidden {
+                let idx = t * hidden + j;
+                residual[idx] += gate2[j] * down[idx];
+            }
+        }
+
+        residual
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CachedQ4LeWM: same as QuantizedQ4LeWM but with CachedQ4AdaLNLayer
+// ---------------------------------------------------------------------------
+
+/// CachedQ4 LeWorldModel.
+///
+/// Predictor adaLN layers use [`CachedQ4Linear`]: Q4 compression at rest,
+/// f32/BLAS speed at compute. Encoder, action encoder, and projection heads
+/// remain in f32.
+pub struct CachedQ4LeWM {
+    pub config: LeWMConfig,
+    /// ViT encoder stays f32 (~2.8M params, not worth quantizing yet).
+    pub encoder: ViTModel,
+    /// CachedQ4 predictor layers.
+    pub predictor_layers: Vec<CachedQ4AdaLNLayer>,
+    pub predictor_pos_embed: Vec<f32>,
+    pub predictor_norm_weight: Vec<f32>,
+    pub predictor_norm_bias: Vec<f32>,
+    // Action encoder -- small, keep f32
+    pub action_conv_weight: Vec<f32>,
+    pub action_conv_bias: Vec<f32>,
+    pub action_mlp1_weight: Vec<f32>,
+    pub action_mlp1_bias: Vec<f32>,
+    pub action_mlp2_weight: Vec<f32>,
+    pub action_mlp2_bias: Vec<f32>,
+    // Projection heads -- small, keep f32
+    pub projector: ProjectionHead,
+    pub pred_proj: ProjectionHead,
+}
+
+impl CachedQ4LeWM {
+    /// Encode an observation image to a latent state in predictor space.
+    ///
+    /// Delegates to the f32 ViT encoder (not quantized).
+    pub fn encode(&self, image: &[f32], h: usize, w: usize) -> Vec<f32> {
+        let vit_out = self.encoder.forward_image(image, h, w);
+        self.projector.forward(&vit_out.embeddings)
+    }
+
+    /// Encode an action vector to an action embedding (f32 path).
+    fn encode_action(&self, action: &[f32]) -> Vec<f32> {
+        let act_dim = self.config.action_dim;
+        let hidden = self.config.predictor_hidden;
+
+        // 1. 1D conv with kernel_size=1 (equivalent to linear layer)
+        let mut conv_out = vec![0.0f32; act_dim];
+        if !self.action_conv_weight.is_empty() {
+            let weight_elems = act_dim * act_dim;
+            if self.action_conv_weight.len() >= weight_elems {
+                conv_out = crate::ops::matmul::matmul_t(
+                    action,
+                    &self.action_conv_weight,
+                    1,
+                    act_dim,
+                    act_dim,
+                );
+            }
+            for j in 0..act_dim.min(self.action_conv_bias.len()) {
+                conv_out[j] += self.action_conv_bias[j];
+            }
+        } else {
+            conv_out.copy_from_slice(action);
+        }
+
+        // 2. MLP: [act_dim] -> [inter] (GELU) -> [hidden]
+        let inter = if !self.action_mlp1_weight.is_empty() {
+            self.action_mlp1_weight.len() / act_dim
+        } else {
+            hidden * 4
+        };
+
+        let mut h1 = if !self.action_mlp1_weight.is_empty() {
+            crate::ops::matmul::matmul_t(&conv_out, &self.action_mlp1_weight, 1, act_dim, inter)
+        } else {
+            vec![0.0f32; inter]
+        };
+        for j in 0..inter.min(self.action_mlp1_bias.len()) {
+            h1[j] += self.action_mlp1_bias[j];
+        }
+        for val in h1.iter_mut() {
+            *val = gelu(*val);
+        }
+
+        let mut out = if !self.action_mlp2_weight.is_empty() {
+            crate::ops::matmul::matmul_t(&h1, &self.action_mlp2_weight, 1, inter, hidden)
+        } else {
+            vec![0.0f32; hidden]
+        };
+        for j in 0..hidden.min(self.action_mlp2_bias.len()) {
+            out[j] += self.action_mlp2_bias[j];
+        }
+
+        out
+    }
+
+    /// Predict the next latent state given current latent and action.
+    ///
+    /// Uses the CachedQ4 predictor layers for the heavy DiT forward pass.
+    pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
+        let hidden = self.config.predictor_hidden;
+        let num_heads = self.config.predictor_heads;
+        let inner_dim = self.config.predictor_inner_dim;
+        let inter = self.config.predictor_inter;
+
+        // 1. Encode action -> [hidden]
+        let a_embed = self.encode_action(action);
+
+        // 2. Build input sequence: [z_t, a_embed, target_token] each [hidden]
+        let seq_len = 3;
+        let mut seq = vec![0.0f32; seq_len * hidden];
+        seq[..hidden].copy_from_slice(z_t);
+        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
+        // seq[2*hidden..3*hidden] = zeros (target position to be predicted)
+
+        // 3. Add positional embeddings
+        if !self.predictor_pos_embed.is_empty() {
+            let pos_len = self.predictor_pos_embed.len().min(seq.len());
+            for i in 0..pos_len {
+                seq[i] += self.predictor_pos_embed[i];
+            }
+        }
+
+        // 4. Run through CachedQ4 predictor layers
+        for layer in &self.predictor_layers {
+            seq = layer.forward(&seq, &a_embed, seq_len, hidden, num_heads, inner_dim, inter);
+        }
+
+        // 5. Final norm
+        let mut normed = layernorm(&seq, &self.predictor_norm_weight, 1e-6, hidden);
+        if !self.predictor_norm_bias.is_empty() {
+            for t in 0..seq_len {
+                for j in 0..hidden {
+                    normed[t * hidden + j] += self.predictor_norm_bias[j];
+                }
+            }
+        }
+
+        // 6. Extract target position (index 2) -> [hidden]
+        let target = &normed[2 * hidden..3 * hidden];
+
+        // 7. Project back through pred_proj (f32)
+        self.pred_proj.forward(target)
+    }
+
+    /// Multi-step rollout: predict a sequence of future latent states.
+    pub fn rollout(&self, z_start: &[f32], actions: &[Vec<f32>]) -> Vec<Vec<f32>> {
+        let mut states = Vec::with_capacity(actions.len());
+        let mut z = z_start.to_vec();
+        for action in actions {
+            z = self.predict_next(&z, action);
+            states.push(z.clone());
+        }
+        states
+    }
+}
+
+/// Quantize a LeWorldModel to CachedQ4 (dequant-at-load).
+///
+/// Converts the predictor's adaLN transformer layers from f32 to Q4_0 then
+/// immediately back to f32 for BLAS-speed inference. The encoder, action
+/// encoder, and projection heads are copied as-is (f32).
+pub fn cached_q4_lewm(model: &LeWorldModel) -> CachedQ4LeWM {
+    let cfg = &model.config;
+    let hidden = cfg.predictor_hidden;
+    let inner_dim = cfg.predictor_inner_dim;
+    let inter = cfg.predictor_inter;
+
+    let predictor_layers = model
+        .predictor_layers
+        .iter()
+        .map(|layer| {
+            // adaLN modulation: [6*hidden, hidden]
+            let adaln_linear =
+                CachedQ4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden);
+            // Fused QKV: [3*inner_dim, hidden]
+            let to_qkv = CachedQ4Linear::from_f32(&layer.to_qkv, 3 * inner_dim, hidden);
+            // Output projection: [hidden, inner_dim]
+            let attn_out =
+                CachedQ4Linear::from_f32(&layer.attn_out_weight, hidden, inner_dim);
+            // MLP up: [inter, hidden]
+            let mlp_up = CachedQ4Linear::from_f32(&layer.mlp_up_weight, inter, hidden);
+            // MLP down: [hidden, inter]
+            let mlp_down = CachedQ4Linear::from_f32(&layer.mlp_down_weight, hidden, inter);
+
+            CachedQ4AdaLNLayer {
+                adaln_linear,
+                adaln_bias: layer.adaln_bias.to_vec(),
+                to_qkv,
+                attn_out,
+                attn_out_bias: layer.attn_out_bias.to_vec(),
+                attn_norm_weight: layer.attn_norm_weight.to_vec(),
+                attn_norm_bias: layer.attn_norm_bias.to_vec(),
+                mlp_norm_weight: layer.mlp_norm_weight.to_vec(),
+                mlp_norm_bias: layer.mlp_norm_bias.to_vec(),
+                mlp_up,
+                mlp_up_bias: layer.mlp_up_bias.to_vec(),
+                mlp_down,
+                mlp_down_bias: layer.mlp_down_bias.to_vec(),
+            }
+        })
+        .collect();
+
+    CachedQ4LeWM {
+        config: cfg.clone(),
+        encoder: clone_vit_encoder(&model.encoder),
+        predictor_layers,
+        predictor_pos_embed: model.predictor_pos_embed.to_vec(),
+        predictor_norm_weight: model.predictor_norm_weight.to_vec(),
+        predictor_norm_bias: model.predictor_norm_bias.to_vec(),
+        action_conv_weight: model.action_conv_weight.to_vec(),
+        action_conv_bias: model.action_conv_bias.to_vec(),
+        action_mlp1_weight: model.action_mlp1_weight.to_vec(),
+        action_mlp1_bias: model.action_mlp1_bias.to_vec(),
+        action_mlp2_weight: model.action_mlp2_weight.to_vec(),
+        action_mlp2_bias: model.action_mlp2_bias.to_vec(),
+        projector: clone_projection_head(&model.projector),
+        pred_proj: clone_projection_head(&model.pred_proj),
+    }
+}
+
 /// Clone a ViT encoder by re-creating it from its config and copying all weights.
 fn clone_vit_encoder(src: &ViTModel) -> ViTModel {
     use crate::weight_loading::AlignedBuffer;
@@ -795,6 +1235,67 @@ mod tests {
             (cos_sim - 1.0).abs() < 1e-5,
             "Encoder output should be identical (not quantized), cos_sim={cos_sim}"
         );
+    }
+
+    #[test]
+    fn q4_dequantize_roundtrip_accuracy() {
+        // Quantize f32 → Q4 → dequant → check max error is within Q4 tolerance
+        let weights: Vec<f32> = (0..1024).map(|i| (i as f32 - 512.0) * 0.01).collect();
+        let q4 = Q4Linear::from_f32(&weights, 32, 32);
+        let dequant = q4.dequantize();
+        let max_err: f32 = weights
+            .iter()
+            .zip(&dequant)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        // Q4 with 4-bit resolution: max error should be < scale/2 ≈ max_abs/7
+        assert!(max_err < 1.0, "Q4 roundtrip error too large: {max_err}");
+    }
+
+    #[test]
+    fn cached_q4_forward_matches_dequant_matmul() {
+        let weights: Vec<f32> = (0..256 * 128)
+            .map(|i| ((i % 100) as f32 - 50.0) * 0.01)
+            .collect();
+        let q4 = Q4Linear::from_f32(&weights, 256, 128);
+        let cached = CachedQ4Linear::from_q4(&q4);
+        let x: Vec<f32> = (0..3 * 128).map(|i| (i as f32) * 0.001).collect();
+
+        // CachedQ4 should produce same result as matmul_t with dequantized weights
+        let expected = crate::ops::matmul::matmul_t(&x, &q4.dequantize(), 3, 128, 256);
+        let got = cached.forward(&x, 3);
+        let max_diff: f32 = expected
+            .iter()
+            .zip(&got)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            max_diff < 1e-5,
+            "CachedQ4 forward mismatch: max_diff={max_diff}"
+        );
+    }
+
+    #[test]
+    fn cached_q4_lewm_predict_produces_finite() {
+        let cfg = small_config();
+        let model = build_test_lewm(&cfg);
+        let cached = cached_q4_lewm(&model);
+        let z = gen_weights(cfg.latent_dim, 42);
+        let action = gen_weights(cfg.action_dim, 43);
+        let result = cached.predict_next(&z, &action);
+        assert_eq!(result.len(), cfg.latent_dim);
+        assert!(result.iter().all(|v| v.is_finite()));
+    }
+
+    #[test]
+    fn cached_q4_lewm_rollout_correct_length() {
+        let cfg = small_config();
+        let model = build_test_lewm(&cfg);
+        let cached = cached_q4_lewm(&model);
+        let z = gen_weights(cfg.latent_dim, 42);
+        let actions: Vec<Vec<f32>> = (0..5).map(|i| gen_weights(cfg.action_dim, 100 + i)).collect();
+        let traj = cached.rollout(&z, &actions);
+        assert_eq!(traj.len(), 5);
     }
 
     #[test]
