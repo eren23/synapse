@@ -142,7 +142,7 @@ impl HuggingFaceConfig {
             "gelu" => FFNConfig::GELU {
                 intermediate_size: self.intermediate_size,
             },
-            "geglu" => FFNConfig::GeGLU {
+            "geglu" | "gelu_pytorch_tanh" => FFNConfig::GeGLU {
                 intermediate_size: self.intermediate_size,
             },
             _ => FFNConfig::SwiGLU {
@@ -270,6 +270,25 @@ mod tests {
         }"#;
         let cfg = ModelConfig::from_json(json).unwrap();
         assert!((cfg.architecture.embed_scale.unwrap() - 45.254833).abs() < 1e-3);
+    }
+
+    #[test]
+    fn hf_gelu_pytorch_tanh_maps_to_geglu() {
+        let json = r#"{
+            "model_type": "gemma",
+            "hidden_act": "gelu_pytorch_tanh",
+            "hidden_size": 2048,
+            "intermediate_size": 16384,
+            "max_position_embeddings": 8192,
+            "num_attention_heads": 8,
+            "num_hidden_layers": 18,
+            "vocab_size": 256000,
+            "rms_norm_eps": 1e-6,
+            "rope_theta": 10000.0,
+            "tie_word_embeddings": true
+        }"#;
+        let cfg = ModelConfig::from_hf_json(json).unwrap();
+        assert!(matches!(cfg.ffn, FFNConfig::GeGLU { intermediate_size: 16384 }));
     }
 
     #[test]
