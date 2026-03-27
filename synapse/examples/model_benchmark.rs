@@ -43,6 +43,9 @@ fn fill_model_weights(model: &mut synapse_inference::model::CausalLM) {
 
     model.embed_tokens = aligned_weights(vocab * h, 1);
     model.final_norm_weight = ones_aligned(h);
+    if model.lm_head_weight.is_some() {
+        model.lm_head_weight = Some(aligned_weights(vocab * h, 2));
+    }
 
     for (i, layer) in model.layers.iter_mut().enumerate() {
         let s = (i as u32 + 1) * 100;
@@ -80,13 +83,40 @@ fn main() {
         cfg.architecture.num_layers = 4;
         cfg.architecture.vocab_size = 512;
         cfg.architecture.max_sequence_length = 128;
-        cfg.attention = AttentionConfig::GQA {
-            num_heads: 4,
-            num_kv_heads: 2,
-            head_dim: 32,
+        cfg.attention = match &cfg.attention {
+            AttentionConfig::MHA { .. } => AttentionConfig::MHA {
+                num_heads: 4,
+                head_dim: 32,
+            },
+            AttentionConfig::MQA { .. } => AttentionConfig::MQA {
+                num_heads: 4,
+                head_dim: 32,
+            },
+            AttentionConfig::GQA { .. } => AttentionConfig::GQA {
+                num_heads: 4,
+                num_kv_heads: 2,
+                head_dim: 32,
+            },
+            AttentionConfig::SlidingWindow { window_size, .. } => {
+                AttentionConfig::SlidingWindow {
+                    num_heads: 4,
+                    num_kv_heads: 2,
+                    head_dim: 32,
+                    window_size: (*window_size).min(128),
+                }
+            }
+            AttentionConfig::Bidirectional { .. } => AttentionConfig::Bidirectional {
+                num_heads: 4,
+                head_dim: 32,
+            },
         };
-        cfg.ffn = FFNConfig::SwiGLU {
-            intermediate_size: 256,
+        cfg.ffn = match &cfg.ffn {
+            FFNConfig::GeGLU { .. } => FFNConfig::GeGLU {
+                intermediate_size: 256,
+            },
+            _ => FFNConfig::SwiGLU {
+                intermediate_size: 256,
+            },
         };
         cfg.position = PositionConfig::RoPE {
             base: 10000.0,
