@@ -96,8 +96,10 @@ impl ViTModel {
                 for w in 0..grid_w {
                     let patch_idx = h * grid_w + w;
                     for c in 0..D_MODEL {
-                        let src =
-                            b * (D_MODEL * grid_h * grid_w) + c * (grid_h * grid_w) + h * grid_w + w;
+                        let src = b * (D_MODEL * grid_h * grid_w)
+                            + c * (grid_h * grid_w)
+                            + h * grid_w
+                            + w;
                         let dst = b * (n_patches * D_MODEL) + patch_idx * D_MODEL + c;
                         seq_data[dst] = patches.data[src];
                     }

@@ -83,10 +83,7 @@ mod tests {
                 // At least all required kernels must be present
                 assert!(backend.pipeline_count() >= KERNEL_NAMES.len());
                 for name in KERNEL_NAMES {
-                    assert!(
-                        backend.pipeline(name).is_some(),
-                        "Missing pipeline: {name}"
-                    );
+                    assert!(backend.pipeline(name).is_some(), "Missing pipeline: {name}");
                 }
             }
             Err(MetalError::NoDevice) => {
@@ -190,11 +187,8 @@ mod tests {
         encoder.set_buffer(4, Some(&buf_n), 0);
         encoder.set_buffer(5, Some(&buf_k), 0);
 
-        let grid = ::metal::MTLSize::new(
-            ((n + 31) / 32 * 32) as u64,
-            ((m + 31) / 32 * 32) as u64,
-            1,
-        );
+        let grid =
+            ::metal::MTLSize::new(((n + 31) / 32 * 32) as u64, ((m + 31) / 32 * 32) as u64, 1);
         let tg = ::metal::MTLSize::new(32, 32, 1);
         encoder.dispatch_threads(grid, tg);
         encoder.end_encoding();
@@ -370,8 +364,7 @@ mod tests {
             for j in 0..causal_len {
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
-                    dot += q[(q_pos * head_dim + d) as usize]
-                        * k[(j * head_dim + d) as usize];
+                    dot += q[(q_pos * head_dim + d) as usize] * k[(j * head_dim + d) as usize];
                 }
                 scores[j as usize] = dot * scale;
             }
@@ -470,7 +463,12 @@ mod tests {
         let gpu_result = backend.matmul_t(&a, &b, m, k, n);
         let cpu_result = ComputeBackend::CpuSimd.matmul_t(&a, &b, m, k, n);
 
-        assert_approx(&gpu_result, &cpu_result, 1e-4, "dispatch Metal vs CPU matmul");
+        assert_approx(
+            &gpu_result,
+            &cpu_result,
+            1e-4,
+            "dispatch Metal vs CPU matmul",
+        );
     }
 
     /// Dispatch heuristic: small matrices → CPU (no GPU dispatch).
@@ -539,14 +537,17 @@ mod tests {
         let x: Vec<f32> = (0..batch * hidden_size)
             .map(|i| (i as f32) * 0.002 - 1.0)
             .collect();
-        let weight: Vec<f32> = (0..hidden_size)
-            .map(|i| 1.0 + (i as f32) * 0.001)
-            .collect();
+        let weight: Vec<f32> = (0..hidden_size).map(|i| 1.0 + (i as f32) * 0.001).collect();
 
         let gpu_result = backend.rmsnorm(&x, &weight, eps, hidden_size);
         let cpu_result = ComputeBackend::CpuSimd.rmsnorm(&x, &weight, eps, hidden_size);
 
-        assert_approx(&gpu_result, &cpu_result, 1e-4, "dispatch Metal vs CPU rmsnorm");
+        assert_approx(
+            &gpu_result,
+            &cpu_result,
+            1e-4,
+            "dispatch Metal vs CPU rmsnorm",
+        );
     }
 
     /// Metal backend swiglu matches CPU within tolerance.
@@ -567,7 +568,12 @@ mod tests {
         let gpu_result = backend.swiglu(&gate, &up);
         let cpu_result = ComputeBackend::CpuSimd.swiglu(&gate, &up);
 
-        assert_approx(&gpu_result, &cpu_result, 1e-4, "dispatch Metal vs CPU swiglu");
+        assert_approx(
+            &gpu_result,
+            &cpu_result,
+            1e-4,
+            "dispatch Metal vs CPU swiglu",
+        );
     }
 
     /// Engine creates CpuSimd backend when using BackendSelection::CpuSimd.
@@ -603,7 +609,10 @@ mod tests {
         };
 
         let engine = InferenceEngine::from_config_with_backend(config, BackendSelection::CpuSimd);
-        assert!(!engine.backend.is_gpu(), "CpuSimd selection should create CPU backend");
+        assert!(
+            !engine.backend.is_gpu(),
+            "CpuSimd selection should create CPU backend"
+        );
     }
 
     /// Engine creates Metal backend when using BackendSelection::Auto (if GPU available).
@@ -640,9 +649,15 @@ mod tests {
 
         let engine = InferenceEngine::from_config_with_backend(config, BackendSelection::Auto);
         if MetalBackend::is_available() {
-            assert!(engine.backend.is_gpu(), "Auto on Apple hardware should use GPU");
+            assert!(
+                engine.backend.is_gpu(),
+                "Auto on Apple hardware should use GPU"
+            );
         } else {
-            assert!(!engine.backend.is_gpu(), "Auto without GPU should fallback to CPU");
+            assert!(
+                !engine.backend.is_gpu(),
+                "Auto without GPU should fallback to CPU"
+            );
         }
     }
 
@@ -697,7 +712,9 @@ mod tests {
             })
             .collect();
         // Random per-column scales
-        let scales: Vec<f32> = (0..n).map(|j| pseudo_rand(77, j).abs() * 0.1 + 0.01).collect();
+        let scales: Vec<f32> = (0..n)
+            .map(|j| pseudo_rand(77, j).abs() * 0.1 + 0.01)
+            .collect();
 
         // CPU reference: out[j] = sum_k(a[k] * i8_to_f32(b[k*N+j])) * scale[j]
         let mut expected = vec![0.0f32; n];
@@ -815,10 +832,10 @@ mod tests {
             &mut expected,
             &cos_row,
             &sin_row,
-            1,          // seq_len = 1
+            1, // seq_len = 1
             num_heads,
             head_dim,
-            0,          // pos_offset = 0 (cos/sin already indexed for our position)
+            0, // pos_offset = 0 (cos/sin already indexed for our position)
             crate::config::position::RoPEStyle::RotateHalf,
         );
 
@@ -905,12 +922,16 @@ mod tests {
             assert!(
                 (k_result[offset + i] - k_token[i]).abs() < 1e-6,
                 "k_cache[{}]: expected {} got {}",
-                offset + i, k_token[i], k_result[offset + i]
+                offset + i,
+                k_token[i],
+                k_result[offset + i]
             );
             assert!(
                 (v_result[offset + i] - v_token[i]).abs() < 1e-6,
                 "v_cache[{}]: expected {} got {}",
-                offset + i, v_token[i], v_result[offset + i]
+                offset + i,
+                v_token[i],
+                v_result[offset + i]
             );
         }
 
@@ -962,8 +983,7 @@ mod tests {
             for j in 0..seq_len {
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
-                    dot += q[head * head_dim + d]
-                        * k_cache[j * kv_dim + kv_head * head_dim + d];
+                    dot += q[head * head_dim + d] * k_cache[j * kv_dim + kv_head * head_dim + d];
                 }
                 scores[j] = dot * scale;
             }
@@ -976,8 +996,7 @@ mod tests {
             for d in 0..head_dim {
                 let mut val = 0.0f32;
                 for j in 0..seq_len {
-                    val += weights[j]
-                        * v_cache[j * kv_dim + kv_head * head_dim + d];
+                    val += weights[j] * v_cache[j * kv_dim + kv_head * head_dim + d];
                 }
                 expected[head * head_dim + d] = val;
             }
@@ -1033,12 +1052,13 @@ mod tests {
         let eps: f32 = 1e-5;
 
         let x: Vec<f32> = (0..total).map(|i| pseudo_rand(60, i)).collect();
-        let weight: Vec<f32> = (0..head_dim).map(|i| 1.0 + pseudo_rand(70, i) * 0.5).collect();
+        let weight: Vec<f32> = (0..head_dim)
+            .map(|i| 1.0 + pseudo_rand(70, i) * 0.5)
+            .collect();
 
         // CPU reference: apply_headwise_rmsnorm from ops::norm
-        let expected = crate::ops::norm::apply_headwise_rmsnorm(
-            &x, &weight, 1, num_heads, head_dim, eps,
-        );
+        let expected =
+            crate::ops::norm::apply_headwise_rmsnorm(&x, &weight, 1, num_heads, head_dim, eps);
 
         let buf_x = make_buffer(dev, &x);
         let buf_w = make_buffer(dev, &weight);
@@ -1207,7 +1227,9 @@ mod tests {
             let mut max_abs: f32 = 0.0;
             for i in 0..k {
                 let v = weights_f32[i * n + j].abs();
-                if v > max_abs { max_abs = v; }
+                if v > max_abs {
+                    max_abs = v;
+                }
             }
             let scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
             scales[j] = scale;

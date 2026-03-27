@@ -334,9 +334,10 @@ mod tests {
         let cfg = test_world_model_config();
         let model = build_test_world_model(&cfg);
 
-        let image: Vec<f32> = (0..cfg.encoder.image_size * cfg.encoder.image_size * cfg.encoder.channels)
-            .map(|i| (i as f32) / 255.0)
-            .collect();
+        let image: Vec<f32> =
+            (0..cfg.encoder.image_size * cfg.encoder.image_size * cfg.encoder.channels)
+                .map(|i| (i as f32) / 255.0)
+                .collect();
 
         let state = model.encode(&image, cfg.encoder.image_size, cfg.encoder.image_size);
 
@@ -356,9 +357,10 @@ mod tests {
         let cfg = test_world_model_config();
         let model = build_test_world_model(&cfg);
 
-        let image: Vec<f32> = (0..cfg.encoder.image_size * cfg.encoder.image_size * cfg.encoder.channels)
-            .map(|i| (i as f32) / 255.0)
-            .collect();
+        let image: Vec<f32> =
+            (0..cfg.encoder.image_size * cfg.encoder.image_size * cfg.encoder.channels)
+                .map(|i| (i as f32) / 255.0)
+                .collect();
 
         let initial = model.encode(&image, cfg.encoder.image_size, cfg.encoder.image_size);
 
@@ -420,42 +422,116 @@ mod tests {
             }
         };
 
-        weights.insert("vit.embeddings.patch_embeddings.projection.weight".into(), rt(enc_h * patch_dim, 1));
-        weights.insert("vit.embeddings.patch_embeddings.projection.bias".into(), rt(enc_h, 2));
+        weights.insert(
+            "vit.embeddings.patch_embeddings.projection.weight".into(),
+            rt(enc_h * patch_dim, 1),
+        );
+        weights.insert(
+            "vit.embeddings.patch_embeddings.projection.bias".into(),
+            rt(enc_h, 2),
+        );
         weights.insert("vit.embeddings.cls_token".into(), rt(enc_h, 3));
-        weights.insert("vit.embeddings.position_embeddings".into(), rt(enc_seq_len * enc_h, 4));
+        weights.insert(
+            "vit.embeddings.position_embeddings".into(),
+            rt(enc_seq_len * enc_h, 4),
+        );
         weights.insert("vit.layernorm.weight".into(), ones(enc_h));
         weights.insert("vit.layernorm.bias".into(), rt(enc_h, 6));
 
         for i in 0..cfg.encoder.num_layers {
             let s = (i as u32 + 1) * 100;
-            weights.insert(format!("vit.encoder.layer.{i}.attention.attention.query.weight"), rt(enc_h * enc_h, s + 1));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.attention.query.bias"), rt(enc_h, s + 2));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.attention.key.weight"), rt(enc_h * enc_h, s + 3));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.attention.key.bias"), rt(enc_h, s + 4));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.attention.value.weight"), rt(enc_h * enc_h, s + 5));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.attention.value.bias"), rt(enc_h, s + 6));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.output.dense.weight"), rt(enc_h * enc_h, s + 7));
-            weights.insert(format!("vit.encoder.layer.{i}.attention.output.dense.bias"), rt(enc_h, s + 8));
-            weights.insert(format!("vit.encoder.layer.{i}.intermediate.dense.weight"), rt(enc_inter * enc_h, s + 9));
-            weights.insert(format!("vit.encoder.layer.{i}.intermediate.dense.bias"), rt(enc_inter, s + 10));
-            weights.insert(format!("vit.encoder.layer.{i}.output.dense.weight"), rt(enc_h * enc_inter, s + 11));
-            weights.insert(format!("vit.encoder.layer.{i}.output.dense.bias"), rt(enc_h, s + 12));
-            weights.insert(format!("vit.encoder.layer.{i}.layernorm_before.weight"), ones(enc_h));
-            weights.insert(format!("vit.encoder.layer.{i}.layernorm_before.bias"), rt(enc_h, s + 14));
-            weights.insert(format!("vit.encoder.layer.{i}.layernorm_after.weight"), ones(enc_h));
-            weights.insert(format!("vit.encoder.layer.{i}.layernorm_after.bias"), rt(enc_h, s + 16));
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.attention.query.weight"),
+                rt(enc_h * enc_h, s + 1),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.attention.query.bias"),
+                rt(enc_h, s + 2),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.attention.key.weight"),
+                rt(enc_h * enc_h, s + 3),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.attention.key.bias"),
+                rt(enc_h, s + 4),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.attention.value.weight"),
+                rt(enc_h * enc_h, s + 5),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.attention.value.bias"),
+                rt(enc_h, s + 6),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.output.dense.weight"),
+                rt(enc_h * enc_h, s + 7),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.attention.output.dense.bias"),
+                rt(enc_h, s + 8),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.intermediate.dense.weight"),
+                rt(enc_inter * enc_h, s + 9),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.intermediate.dense.bias"),
+                rt(enc_inter, s + 10),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.output.dense.weight"),
+                rt(enc_h * enc_inter, s + 11),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.output.dense.bias"),
+                rt(enc_h, s + 12),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.layernorm_before.weight"),
+                ones(enc_h),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.layernorm_before.bias"),
+                rt(enc_h, s + 14),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.layernorm_after.weight"),
+                ones(enc_h),
+            );
+            weights.insert(
+                format!("vit.encoder.layer.{i}.layernorm_after.bias"),
+                rt(enc_h, s + 16),
+            );
         }
 
         let mapper = WeightMapper::vit();
-        let result = model.load_encoder_weights(weights, &mapper).expect("load failed");
+        let result = model
+            .load_encoder_weights(weights, &mapper)
+            .expect("load failed");
 
         // Verify encoder weights loaded
-        assert!(!model.encoder.patch_proj.is_empty(), "encoder patch_proj should be loaded");
-        assert!(!model.encoder.cls_token.is_empty(), "encoder cls_token should be loaded");
-        assert!(!model.encoder.pos_embed.is_empty(), "encoder pos_embed should be loaded");
-        assert!(!model.encoder.final_norm_weight.is_empty(), "encoder final_norm should be loaded");
-        assert!(!model.encoder.layers[0].w_q.is_empty(), "encoder layer 0 w_q should be loaded");
+        assert!(
+            !model.encoder.patch_proj.is_empty(),
+            "encoder patch_proj should be loaded"
+        );
+        assert!(
+            !model.encoder.cls_token.is_empty(),
+            "encoder cls_token should be loaded"
+        );
+        assert!(
+            !model.encoder.pos_embed.is_empty(),
+            "encoder pos_embed should be loaded"
+        );
+        assert!(
+            !model.encoder.final_norm_weight.is_empty(),
+            "encoder final_norm should be loaded"
+        );
+        assert!(
+            !model.encoder.layers[0].w_q.is_empty(),
+            "encoder layer 0 w_q should be loaded"
+        );
 
         assert!(
             result.unexpected.is_empty(),

@@ -155,8 +155,8 @@ const I8x4 = @Vector(4, i8);
 ///
 /// C[1,N] = scale_a * diag(scales_b) * (A[1,K] @ B[K,N])
 ///
-/// No packing needed. Processes 32 output columns at a time with
-/// 8 × I32x4 accumulators. Uses vector loads + @intCast widening
+/// No packing needed. Processes 64 output columns at a time with
+/// 16 × I32x4 accumulators. Uses vector loads + @intCast widening
 /// (compiles to NEON sxtl) instead of scalar byte loads.
 /// 4-unrolled over K to hide load latency.
 fn int8GemvRow(
@@ -171,13 +171,13 @@ fn int8GemvRow(
     scales_b: [*]const f32,
 ) void {
     _ = _lda;
-    const GEMV_NR: usize = 32; // Process 32 columns = 8 × I32x4
+    const GEMV_NR: usize = 64; // Process 64 columns = 16 × I32x4
 
-    // Process 32 columns at a time (8 × I32x4 accumulators)
+    // Process 64 columns at a time (16 × I32x4 accumulators)
     var j: usize = 0;
     while (j + GEMV_NR <= n) : (j += GEMV_NR) {
         const zero: I32x4 = @splat(@as(i32, 0));
-        var acc: [8]I32x4 = .{zero} ** 8;
+        var acc: [16]I32x4 = .{zero} ** 16;
 
         // Main K loop — 4-unrolled for ILP
         var p: usize = 0;
@@ -187,7 +187,7 @@ fn int8GemvRow(
                 const a_val: i32 = a[p + u];
                 const a_bcast: I32x4 = @splat(a_val);
                 const b_base = b + (p + u) * ldb + j;
-                inline for (0..8) |v| {
+                inline for (0..16) |v| {
                     const b_i8: I8x4 = (b_base + v * 4)[0..4].*;
                     const b_i32: I32x4 = @intCast(b_i8);
                     acc[v] += a_bcast * b_i32;
@@ -199,7 +199,7 @@ fn int8GemvRow(
             const a_val: i32 = a[p];
             const a_bcast: I32x4 = @splat(a_val);
             const b_base = b + p * ldb + j;
-            inline for (0..8) |v| {
+            inline for (0..16) |v| {
                 const b_i8: I8x4 = (b_base + v * 4)[0..4].*;
                 const b_i32: I32x4 = @intCast(b_i8);
                 acc[v] += a_bcast * b_i32;
@@ -208,7 +208,7 @@ fn int8GemvRow(
 
         // Convert to f32, apply scales, write to C
         const sa: F32x4 = @splat(scale_a);
-        inline for (0..8) |v| {
+        inline for (0..16) |v| {
             const f_acc: F32x4 = @floatFromInt(acc[v]);
             const sb: F32x4 = (scales_b + j + v * 4)[0..VEC_LEN].*;
             (c + j + v * 4)[0..VEC_LEN].* = f_acc * sa * sb;

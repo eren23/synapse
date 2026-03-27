@@ -70,8 +70,10 @@ fn conv2d_forward(
                                 {
                                     let ih = ih - padding;
                                     let iw = iw - padding;
-                                    let input_idx =
-                                        n * (c_in * h_in * w_in) + ic * (h_in * w_in) + ih * w_in + iw;
+                                    let input_idx = n * (c_in * h_in * w_in)
+                                        + ic * (h_in * w_in)
+                                        + ih * w_in
+                                        + iw;
                                     let weight_idx =
                                         oc * (c_in * kh * kw) + ic * (kh * kw) + ki * kw + kj;
                                     sum += input.data[input_idx] * weight.data[weight_idx];
@@ -237,7 +239,10 @@ fn generate_data(n_samples: usize, batch_size: usize) -> Vec<(Tensor, Tensor)> {
 }
 
 fn main() {
-    println!("CIFAR-10 CNN Example (reduced resolution {}x{})", IMG_H, IMG_W);
+    println!(
+        "CIFAR-10 CNN Example (reduced resolution {}x{})",
+        IMG_H, IMG_W
+    );
     println!("Generating synthetic data...");
 
     let train_data = generate_data(960, BATCH_SIZE);

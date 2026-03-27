@@ -1,7 +1,7 @@
 //! Positional encoding implementations: RoPE and Learned embeddings.
 
-use synapse_core::{SynapseError, Tensor};
 use super::PositionVariant;
+use synapse_core::{SynapseError, Tensor};
 
 // ── RoPE ─────────────────────────────────────────────────────────────
 
@@ -38,7 +38,13 @@ impl RoPEPosition {
             }
         }
 
-        Self { base, max_position_embeddings, head_dim, cos_data, sin_data }
+        Self {
+            base,
+            max_position_embeddings,
+            head_dim,
+            cos_data,
+            sin_data,
+        }
     }
 
     /// Apply RoPE to a 4-D tensor `[batch, heads, seq, head_dim]`.
@@ -60,13 +66,21 @@ impl RoPEPosition {
         ))
     }
 
-    pub fn head_dim(&self) -> usize { self.head_dim }
+    pub fn head_dim(&self) -> usize {
+        self.head_dim
+    }
 }
 
 impl PositionVariant for RoPEPosition {
-    fn max_position_embeddings(&self) -> usize { self.max_position_embeddings }
-    fn base(&self) -> Option<f64> { Some(self.base) }
-    fn name(&self) -> &str { "RoPE" }
+    fn max_position_embeddings(&self) -> usize {
+        self.max_position_embeddings
+    }
+    fn base(&self) -> Option<f64> {
+        Some(self.base)
+    }
+    fn name(&self) -> &str {
+        "RoPE"
+    }
 }
 
 // ── Learned Positional Embeddings ────────────────────────────────────
@@ -93,7 +107,10 @@ impl LearnedPosition {
 
     /// Set the embedding table. Must have `max_position_embeddings * hidden_size` elements.
     pub fn set_embeddings(&mut self, embeddings: Vec<f32>) {
-        assert_eq!(embeddings.len(), self.max_position_embeddings * self.hidden_size);
+        assert_eq!(
+            embeddings.len(),
+            self.max_position_embeddings * self.hidden_size
+        );
         self.embeddings = embeddings;
     }
 
@@ -101,7 +118,11 @@ impl LearnedPosition {
     ///
     /// `offset` is the starting position index (for KV-cache decode).
     pub fn apply(
-        &self, input: &mut [f32], batch: usize, seq_len: usize, offset: usize,
+        &self,
+        input: &mut [f32],
+        batch: usize,
+        seq_len: usize,
+        offset: usize,
     ) -> Result<(), SynapseError> {
         if offset + seq_len > self.max_position_embeddings {
             return Err(SynapseError::InvalidArg);
@@ -119,12 +140,18 @@ impl LearnedPosition {
         Ok(())
     }
 
-    pub fn hidden_size(&self) -> usize { self.hidden_size }
+    pub fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
 }
 
 impl PositionVariant for LearnedPosition {
-    fn max_position_embeddings(&self) -> usize { self.max_position_embeddings }
-    fn name(&self) -> &str { "Learned" }
+    fn max_position_embeddings(&self) -> usize {
+        self.max_position_embeddings
+    }
+    fn name(&self) -> &str {
+        "Learned"
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -153,7 +180,9 @@ mod tests {
         for i in 0..8 {
             assert!(
                 (out_data[i] - data[i]).abs() < 1e-4,
-                "pos-0 should be identity: got {} vs {}", out_data[i], data[i]
+                "pos-0 should be identity: got {} vs {}",
+                out_data[i],
+                data[i]
             );
         }
     }
@@ -167,8 +196,14 @@ mod tests {
         let out0 = rope.apply(&input, 0).unwrap().to_vec().unwrap();
         let out5 = rope.apply(&input, 5).unwrap().to_vec().unwrap();
 
-        let differs = out0.iter().zip(out5.iter()).any(|(a, b)| (a - b).abs() > 1e-6);
-        assert!(differs, "Different positions should produce different outputs");
+        let differs = out0
+            .iter()
+            .zip(out5.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(
+            differs,
+            "Different positions should produce different outputs"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
+use super::causal_lm::ModelOutput;
 use crate::config::ModelConfig;
 use crate::kv_cache::KVCache;
-use super::causal_lm::ModelOutput;
 
 /// Trait for models that can run forward passes for inference.
 ///
@@ -13,6 +13,19 @@ pub trait Model {
 
     /// Prefill: process all prompt tokens, populate KV cache, return last logits.
     fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput;
+
+    /// Prefill with backend dispatch.
+    /// Default: falls back to CPU forward_prefill.
+    #[cfg(feature = "metal")]
+    fn forward_prefill_gpu(
+        &self,
+        token_ids: &[u32],
+        cache: &mut KVCache,
+        backend: &crate::metal::ComputeBackend,
+    ) -> ModelOutput {
+        let _ = backend;
+        self.forward_prefill(token_ids, cache)
+    }
 
     /// Single-token decode using KV cache.
     fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput;

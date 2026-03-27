@@ -3,9 +3,7 @@ pub(crate) fn silu(x: f32) -> f32 {
 }
 
 pub(crate) fn gelu(x: f32) -> f32 {
-    0.5 * x
-        * (1.0
-            + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
+    0.5 * x * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
 }
 
 pub(crate) fn softmax_slice(x: &mut [f32]) {

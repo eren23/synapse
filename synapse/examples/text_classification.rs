@@ -12,7 +12,7 @@ use synapse_nn::{
     TransformerEncoderConfig,
 };
 use synapse_optim::{Adam, LinearWarmup, Optimizer, Param};
-use synapse_train::{Trainer, TrainerConfig, TrainLoop};
+use synapse_train::{TrainLoop, Trainer, TrainerConfig};
 
 use rand::Rng;
 

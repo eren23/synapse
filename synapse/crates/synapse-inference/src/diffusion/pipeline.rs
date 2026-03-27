@@ -79,10 +79,12 @@ impl DiffusionPipeline {
         _scheduler: &mut dyn NoiseScheduler,
         _config: &DiffusionConfig,
     ) -> DiffusionOutput {
-        todo!("Diffusion pipeline not yet implemented. Steps needed:\n\
+        todo!(
+            "Diffusion pipeline not yet implemented. Steps needed:\n\
                1. Text encoding (CLIP)\n\
                2. Latent noise generation\n\
                3. Denoising loop (UNet + scheduler)\n\
-               4. VAE decoding")
+               4. VAE decoding"
+        )
     }
 }

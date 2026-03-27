@@ -9,8 +9,8 @@
 
 use std::collections::HashMap;
 
-use synapse_inference::config::*;
 use synapse_inference::config::position::RoPEScaling;
+use synapse_inference::config::*;
 use synapse_inference::kv_cache::KVCache;
 use synapse_inference::model::{CausalLM, ModelBuilder};
 use synapse_inference::quantization::quantize_model;
@@ -619,8 +619,10 @@ fn build_vit(cfg: &ViTConfig) -> ViTModel {
     }
 
     if cfg.num_classes > 0 {
-        model.classifier_head =
-            Some(AlignedBuffer::from_slice(&gen_weights(cfg.num_classes * h, 999)));
+        model.classifier_head = Some(AlignedBuffer::from_slice(&gen_weights(
+            cfg.num_classes * h,
+            999,
+        )));
     }
 
     model
@@ -645,7 +647,10 @@ fn test_vit_forward_produces_finite_embeddings() {
     );
 
     // Logits should be [num_classes] and finite
-    let logits = output.logits.as_ref().expect("expected logits for classification model");
+    let logits = output
+        .logits
+        .as_ref()
+        .expect("expected logits for classification model");
     assert_eq!(logits.len(), VIT_CLASSES);
     assert!(
         logits.iter().all(|v| v.is_finite()),
@@ -675,7 +680,10 @@ fn test_vit_patch_embed_shape() {
     );
 
     let expected_patches = cfg.num_patches();
-    assert_eq!(expected_patches, 4, "8x8 image with 4x4 patches should give 4 patches");
+    assert_eq!(
+        expected_patches, 4,
+        "8x8 image with 4x4 patches should give 4 patches"
+    );
     assert_eq!(
         result.len(),
         expected_patches * h,

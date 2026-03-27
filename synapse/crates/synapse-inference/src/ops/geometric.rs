@@ -34,9 +34,14 @@ pub fn geometric_attention(
     let mut out = vec![0.0f32; n * d];
     let status = unsafe {
         synapse_sys::syn_geometric_attention(
-            n, d, pos_dim,
-            q.as_ptr(), k.as_ptr(), v.as_ptr(),
-            positions.as_ptr(), out.as_mut_ptr(),
+            n,
+            d,
+            pos_dim,
+            q.as_ptr(),
+            k.as_ptr(),
+            v.as_ptr(),
+            positions.as_ptr(),
+            out.as_mut_ptr(),
             sigma,
         )
     };
@@ -87,7 +92,10 @@ mod tests {
                     .sqrt()
             })
             .collect();
-        assert!(norms.iter().all(|n| *n > 0.0), "all output norms should be positive");
+        assert!(
+            norms.iter().all(|n| *n > 0.0),
+            "all output norms should be positive"
+        );
     }
 
     #[test]
@@ -109,6 +117,9 @@ mod tests {
         let out_far = geometric_attention(n, d, 3, &q, &k, &v, &pos_far, 1.0);
 
         // Outputs should differ because distance changes attention distribution
-        assert_ne!(out_close, out_far, "different distances should produce different outputs");
+        assert_ne!(
+            out_close, out_far,
+            "different distances should produce different outputs"
+        );
     }
 }

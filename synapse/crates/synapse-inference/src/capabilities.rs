@@ -35,7 +35,9 @@ pub enum SupportLevel {
 #[serde(rename_all = "snake_case")]
 pub enum ModelSupportLevel {
     Validated,
+    BenchmarkedLocal,
     ConfigReady,
+    InProgress,
     Experimental,
 }
 
@@ -247,7 +249,7 @@ mod tests {
         let report = CapabilityReport::for_current_build();
         assert!(!report.backends.is_empty());
         assert!(!report.quantization.is_empty());
-        assert_eq!(report.manifest_version, 1);
+        assert_eq!(report.manifest_version, 2);
         assert_eq!(report.model_families.len(), 5);
         if !cfg!(target_arch = "wasm32") {
             assert!(report.native_kernel.is_some());

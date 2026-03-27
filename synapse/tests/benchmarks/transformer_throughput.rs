@@ -152,7 +152,8 @@ fn transformer_throughput_tokens_per_sec() {
 
     // Generate training batches — more steps in release, fewer in debug
     let n_batches = if cfg!(debug_assertions) { 5 } else { 10 };
-    let batches: Vec<(Tensor, Tensor)> = (0..n_batches).map(|i| make_batch(i as u32 + 42)).collect();
+    let batches: Vec<(Tensor, Tensor)> =
+        (0..n_batches).map(|i| make_batch(i as u32 + 42)).collect();
 
     // Warmup
     for (input, target) in &batches[..1] {

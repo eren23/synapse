@@ -60,10 +60,7 @@ pub fn sequence_pad_collate(samples: &[Vec<Tensor>]) -> Vec<Tensor> {
     assert!(!samples.is_empty(), "cannot collate empty batch");
 
     let token_tensors: Vec<Tensor> = samples.iter().map(|s| s[0].clone()).collect();
-    let lengths: Vec<f32> = token_tensors
-        .iter()
-        .map(|t| t.shape()[0] as f32)
-        .collect();
+    let lengths: Vec<f32> = token_tensors.iter().map(|t| t.shape()[0] as f32).collect();
     let batch_size = samples.len();
 
     // Pad token sequences to max length in batch.
@@ -84,11 +81,7 @@ mod tests {
     use crate::tokenizer::WhitespaceTokenizer;
 
     fn make_tokenizer_and_lines() -> (WhitespaceTokenizer, Vec<&'static str>) {
-        let lines = vec![
-            "0\tthe cat sat",
-            "1\tthe dog ran",
-            "0\tthe cat slept",
-        ];
+        let lines = vec!["0\tthe cat sat", "1\tthe dog ran", "0\tthe cat slept"];
         let mut tok = WhitespaceTokenizer::new();
         tok.build_vocab(&["the cat sat dog ran slept"]);
         (tok, lines)

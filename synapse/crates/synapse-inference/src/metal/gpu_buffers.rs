@@ -11,14 +11,14 @@ use crate::model::decoder_layer::DecoderLayer;
 
 /// Pre-uploaded weight buffers for one decoder layer.
 pub struct MetalLayerWeights {
-    pub wq: Buffer,            // pre-transposed [K, q_dim] f32
+    pub wq: Buffer, // pre-transposed [K, q_dim] f32
     pub wk: Buffer,
     pub wv: Buffer,
     pub wo: Buffer,
     pub gate: Buffer,
     pub up: Buffer,
     pub down: Buffer,
-    pub attn_norm: Buffer,     // [h]
+    pub attn_norm: Buffer, // [h]
     pub ffn_norm: Buffer,
     pub q_bias: Option<Buffer>,
     pub k_bias: Option<Buffer>,
@@ -27,14 +27,14 @@ pub struct MetalLayerWeights {
     pub k_norm: Option<Buffer>,
     pub has_gate: bool,
     // ── INT8 quantized weights (optional, for GPU INT8 path) ────
-    pub wq_int8: Option<Buffer>,    // [K, q_dim] int8
+    pub wq_int8: Option<Buffer>, // [K, q_dim] int8
     pub wk_int8: Option<Buffer>,
     pub wv_int8: Option<Buffer>,
     pub wo_int8: Option<Buffer>,
     pub gate_int8: Option<Buffer>,
     pub up_int8: Option<Buffer>,
     pub down_int8: Option<Buffer>,
-    pub wq_scale: Option<Buffer>,   // [q_dim] f32 per-column scale
+    pub wq_scale: Option<Buffer>, // [q_dim] f32 per-column scale
     pub wk_scale: Option<Buffer>,
     pub wv_scale: Option<Buffer>,
     pub wo_scale: Option<Buffer>,
@@ -53,26 +53,26 @@ pub struct MetalKVCache {
 }
 
 pub struct MetalKVCacheLayer {
-    pub k_cache: Buffer,   // [max_seq * kv_dim]
-    pub v_cache: Buffer,   // [max_seq * kv_dim]
+    pub k_cache: Buffer, // [max_seq * kv_dim]
+    pub v_cache: Buffer, // [max_seq * kv_dim]
     pub kv_dim: usize,
 }
 
 /// Reusable scratch buffers for one decode step.
 pub struct ScratchBuffers {
-    pub x: Buffer,         // [h] -- layer input/output
-    pub norm_x: Buffer,    // [h]
-    pub q: Buffer,         // [q_dim]
-    pub k: Buffer,         // [kv_dim]
-    pub v: Buffer,         // [kv_dim]
-    pub attn_out: Buffer,  // [q_dim]
-    pub o: Buffer,         // [h]
-    pub residual: Buffer,  // [h]
-    pub norm_r: Buffer,    // [h]
-    pub gate_buf: Buffer,  // [inter]
-    pub up_buf: Buffer,    // [inter]
-    pub hidden: Buffer,    // [inter]
-    pub down_buf: Buffer,  // [h]
+    pub x: Buffer,        // [h] -- layer input/output
+    pub norm_x: Buffer,   // [h]
+    pub q: Buffer,        // [q_dim]
+    pub k: Buffer,        // [kv_dim]
+    pub v: Buffer,        // [kv_dim]
+    pub attn_out: Buffer, // [q_dim]
+    pub o: Buffer,        // [h]
+    pub residual: Buffer, // [h]
+    pub norm_r: Buffer,   // [h]
+    pub gate_buf: Buffer, // [inter]
+    pub up_buf: Buffer,   // [inter]
+    pub hidden: Buffer,   // [inter]
+    pub down_buf: Buffer, // [h]
 }
 
 /// All GPU-resident model buffers.
@@ -90,15 +90,15 @@ pub struct MetalModelBuffers {
 /// Pre-allocated Metal constant buffers for dimension values that never change.
 /// Eliminates ~1500 buffer allocations per token.
 pub struct ConstantBuffers {
-    pub h: Buffer,            // hidden_size
-    pub q_dim: Buffer,        // num_heads * head_dim
-    pub kv_dim: Buffer,       // num_kv_heads * head_dim
-    pub inter: Buffer,        // intermediate_size
+    pub h: Buffer,      // hidden_size
+    pub q_dim: Buffer,  // num_heads * head_dim
+    pub kv_dim: Buffer, // num_kv_heads * head_dim
+    pub inter: Buffer,  // intermediate_size
     pub head_dim: Buffer,
     pub num_heads: Buffer,
     pub num_kv_heads: Buffer,
-    pub eps: Buffer,          // f32
-    pub one: Buffer,          // M=1 for matmul
+    pub eps: Buffer, // f32
+    pub one: Buffer, // M=1 for matmul
 }
 
 // ---- Helpers ---------------------------------------------------------------
@@ -158,14 +158,24 @@ fn upload_norm(device: &Device, data: &[f32]) -> Option<Buffer> {
 
 /// Public wrapper for `quantize_and_upload_int8` exposed for testing.
 #[cfg(test)]
-pub fn quantize_and_upload_int8_public(device: &Device, transposed: &[f32], k: usize, n: usize) -> (Buffer, Buffer) {
+pub fn quantize_and_upload_int8_public(
+    device: &Device,
+    transposed: &[f32],
+    k: usize,
+    n: usize,
+) -> (Buffer, Buffer) {
     quantize_and_upload_int8(device, transposed, k, n)
 }
 
 /// Quantize a transposed weight matrix to INT8 and upload both int8 data + scales.
 /// Input: f32 transposed weights [K, N] (row-major).
 /// Output: (int8_buf [K, N], scale_buf [N]).
-fn quantize_and_upload_int8(device: &Device, transposed: &[f32], k: usize, n: usize) -> (Buffer, Buffer) {
+fn quantize_and_upload_int8(
+    device: &Device,
+    transposed: &[f32],
+    k: usize,
+    n: usize,
+) -> (Buffer, Buffer) {
     // Per-column quantization: for each column j, find max(|w|), scale = max/127
     let mut scales = vec![0.0f32; n];
     let mut int8_data = vec![0i8; k * n];
@@ -174,7 +184,9 @@ fn quantize_and_upload_int8(device: &Device, transposed: &[f32], k: usize, n: us
         let mut max_abs: f32 = 0.0;
         for i in 0..k {
             let v = transposed[i * n + j].abs();
-            if v > max_abs { max_abs = v; }
+            if v > max_abs {
+                max_abs = v;
+            }
         }
         let scale = if max_abs > 0.0 { max_abs / 127.0 } else { 1.0 };
         scales[j] = scale;
@@ -257,16 +269,35 @@ impl MetalLayerWeights {
         };
 
         Self {
-            wq, wk, wv, wo,
-            gate, up, down,
-            attn_norm, ffn_norm,
-            q_bias, k_bias, v_bias,
-            q_norm, k_norm,
+            wq,
+            wk,
+            wv,
+            wo,
+            gate,
+            up,
+            down,
+            attn_norm,
+            ffn_norm,
+            q_bias,
+            k_bias,
+            v_bias,
+            q_norm,
+            k_norm,
             has_gate,
-            wq_int8: Some(wq_i8), wk_int8: Some(wk_i8), wv_int8: Some(wv_i8),
-            wo_int8: Some(wo_i8), gate_int8: gate_i8, up_int8: Some(up_i8), down_int8: Some(down_i8),
-            wq_scale: Some(wq_sc), wk_scale: Some(wk_sc), wv_scale: Some(wv_sc),
-            wo_scale: Some(wo_sc), gate_scale: gate_sc, up_scale: Some(up_sc), down_scale: Some(down_sc),
+            wq_int8: Some(wq_i8),
+            wk_int8: Some(wk_i8),
+            wv_int8: Some(wv_i8),
+            wo_int8: Some(wo_i8),
+            gate_int8: gate_i8,
+            up_int8: Some(up_i8),
+            down_int8: Some(down_i8),
+            wq_scale: Some(wq_sc),
+            wk_scale: Some(wk_sc),
+            wv_scale: Some(wv_sc),
+            wo_scale: Some(wo_sc),
+            gate_scale: gate_sc,
+            up_scale: Some(up_sc),
+            down_scale: Some(down_sc),
             has_int8: true,
         }
     }
@@ -300,9 +331,12 @@ impl MetalKVCache {
     /// Copies each layer's K and V data from the Zig-backed CPU cache into
     /// the Metal shared-memory buffers so the GPU decode loop can access them.
     pub fn populate_from_cpu_cache(&mut self, cpu_cache: &crate::kv_cache::KVCache) {
-        let seq_len = cpu_cache.current_len().expect("failed to read cache length");
+        let seq_len = cpu_cache
+            .current_len()
+            .expect("failed to read cache length");
         for (i, gpu_layer) in self.layers.iter().enumerate() {
-            let (k_data, v_data, layer_len) = cpu_cache.get(i).expect("failed to read CPU KV cache layer");
+            let (k_data, v_data, layer_len) =
+                cpu_cache.get(i).expect("failed to read CPU KV cache layer");
             debug_assert_eq!(layer_len, seq_len);
             let copy_len = seq_len * gpu_layer.kv_dim;
             unsafe {
@@ -370,9 +404,20 @@ impl MetalModelBuffers {
         let seq_len_buf = alloc_empty(device, 1);
 
         // Pre-allocate constant buffers
-        let eps = model.layers.first().map_or(1e-6, |l| l.attn_norm.eps() as f32);
+        let eps = model
+            .layers
+            .first()
+            .map_or(1e-6, |l| l.attn_norm.eps() as f32);
         let consts = ConstantBuffers::new(
-            h, q_dim, kv_dim, inter, head_dim, num_heads, num_kv_heads, eps, device,
+            h,
+            q_dim,
+            kv_dim,
+            inter,
+            head_dim,
+            num_heads,
+            num_kv_heads,
+            eps,
+            device,
         );
 
         Self {
@@ -389,9 +434,15 @@ impl MetalModelBuffers {
 
 impl ConstantBuffers {
     fn new(
-        h: usize, q_dim: usize, kv_dim: usize, inter: usize,
-        head_dim: usize, num_heads: usize, num_kv_heads: usize,
-        eps: f32, device: &Device,
+        h: usize,
+        q_dim: usize,
+        kv_dim: usize,
+        inter: usize,
+        head_dim: usize,
+        num_heads: usize,
+        num_kv_heads: usize,
+        eps: f32,
+        device: &Device,
     ) -> Self {
         let make_u32 = |val: u32| -> Buffer {
             let data = [f32::from_bits(val)];

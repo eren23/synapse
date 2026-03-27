@@ -263,7 +263,11 @@ fn top_k_filter(logits: &mut [f32], k: usize) {
     let k = k.min(logits.len());
     // Find the k-th largest value
     let mut indices: Vec<usize> = (0..logits.len()).collect();
-    indices.sort_unstable_by(|&a, &b| logits[b].partial_cmp(&logits[a]).unwrap_or(std::cmp::Ordering::Equal));
+    indices.sort_unstable_by(|&a, &b| {
+        logits[b]
+            .partial_cmp(&logits[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let threshold = logits[indices[k - 1]];
     for l in logits.iter_mut() {
@@ -278,7 +282,10 @@ fn top_p_filter(logits: &mut [f32], p: f32) {
     // Convert to probabilities
     let mut probs: Vec<(usize, f32)> = logits.iter().cloned().enumerate().collect();
     // Softmax first to get probabilities
-    let max_val = probs.iter().map(|(_, v)| *v).fold(f32::NEG_INFINITY, f32::max);
+    let max_val = probs
+        .iter()
+        .map(|(_, v)| *v)
+        .fold(f32::NEG_INFINITY, f32::max);
     let mut sum = 0.0f32;
     for (_, v) in probs.iter_mut() {
         *v = (*v - max_val).exp();
@@ -333,7 +340,10 @@ mod tests {
             let mut logits = base_logits.clone();
             results.push(sampler.sample(&mut logits, &mut rng));
         }
-        assert!(results.iter().all(|&r| r == results[0]), "Greedy must be deterministic");
+        assert!(
+            results.iter().all(|&r| r == results[0]),
+            "Greedy must be deterministic"
+        );
         assert_eq!(results[0], 3); // index of 0.9
     }
 
@@ -403,7 +413,10 @@ mod tests {
         }
         // With uniform logits, each should get ~200 samples. Check all > 50.
         for (i, &c) in counts.iter().enumerate() {
-            assert!(c > 50, "Token {i} only sampled {c} times out of 1000, expected ~200");
+            assert!(
+                c > 50,
+                "Token {i} only sampled {c} times out of 1000, expected ~200"
+            );
         }
     }
 
@@ -445,10 +458,16 @@ mod tests {
         softmax_inplace(&mut logits);
 
         // All non-negative
-        assert!(logits.iter().all(|&p| p >= 0.0), "Probabilities must be non-negative");
+        assert!(
+            logits.iter().all(|&p| p >= 0.0),
+            "Probabilities must be non-negative"
+        );
         // Sum to 1
         let sum: f32 = logits.iter().sum();
-        assert!((sum - 1.0).abs() < 1e-5, "Probabilities must sum to 1, got {sum}");
+        assert!(
+            (sum - 1.0).abs() < 1e-5,
+            "Probabilities must sum to 1, got {sum}"
+        );
     }
 
     #[test]

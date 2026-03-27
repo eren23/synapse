@@ -1,16 +1,12 @@
 # Testing
 
-Synapse has 225+ tests across the workspace, covering unit tests, integration tests, and multi-architecture validation.
+Synapse uses three different validation lanes:
 
-## Test Suite Overview
+1. **Core correctness tests** for the inference crate
+2. **Multi-model validation** for architecture coverage across supported families
+3. **Benchmark matrix runs** for performance evidence and public-status synchronization
 
-| Category | Count | Scope |
-|----------|-------|-------|
-| Library tests (`--lib`) | 210 | Unit tests in inference crate |
-| Integration tests | 15+ | End-to-end inference, KV cache, quantization |
-| Benchmark tests | varies | Matmul, attention, throughput, memory |
-
-## Running Tests
+## Core Commands
 
 Run the core inference tests:
 
@@ -18,67 +14,62 @@ Run the core inference tests:
 cargo test -p synapse-inference --lib
 ```
 
-Run all workspace tests:
+Run the multi-family validation suite:
 
 ```bash
-cargo test --workspace
+cargo test --test multi_model_validation --release
 ```
 
-Run a specific test by name:
+Run targeted performance tests:
 
 ```bash
-cargo test -p synapse-inference --lib test_qwen3_logits
+cargo test --test quantization_speedup --release -- --nocapture
+cargo test --test prefill_throughput --release -- --nocapture
+cargo test --test kvcache_speedup --release -- --nocapture
 ```
 
-## What the Tests Cover
+## Benchmark Matrix
 
-**Model loading**: Verifies config parsing, weight mapping, and tensor shape validation for all 5 model families.
-
-**Quantization accuracy**: Compares INT8 quantized output against f32 reference, checking that error stays within tolerance.
-
-**KV cache correctness**: Ensures incremental decode produces the same results as full-sequence prefill.
-
-**Attention**: Tests masked attention, causal masking, and multi-head splitting.
-
-**GGUF loading**: Validates dequantization for each supported quantization type (Q4_0, Q4_1, Q4_K, Q6_K, Q8_0).
-
-**Chat templates**: Tests template rendering for each model family and edge cases (empty messages, system-only, etc.).
-
-## Integration Tests
-
-Located in `tests/`:
+The canonical benchmark/reporting entrypoint is:
 
 ```bash
-cargo test -p synapse-inference --test '*'
+python3 scripts/benchmark_matrix.py --include-exploratory
 ```
 
-These run full inference pipelines and verify output token sequences.
+That command:
 
-## Logit Verification
+- runs the selected test and benchmark suites,
+- measures real local checkpoint rows where available,
+- records synthetic and exploratory rows separately,
+- writes the machine-readable artifact to `status/benchmark_matrix.json`,
+- writes the human summary to `status/benchmark_matrix.md`,
+- updates the public snapshot in `status/public_status.json`.
 
-To verify Synapse output against HuggingFace Transformers:
+The shell wrapper is just a convenience alias:
 
 ```bash
-python scripts/verify_logits.py --model-dir /path/to/qwen3-0.6b --prompt "Hello"
+bash scripts/bench_suite.sh --include-exploratory
 ```
 
-This script:
-1. Runs the same prompt through both HuggingFace and Synapse
-2. Compares logits element-wise
-3. Reports max absolute error and cosine similarity
+## Public Docs Sync
 
-## Benchmark Scripts
+README and mdBook status blocks are rendered from `status/public_status.json`.
 
-Full performance benchmark:
+Check that the public files are in sync:
 
 ```bash
-bash scripts/bench_suite.sh --model-dir /path/to/qwen3-0.6b
+python3 scripts/sync_public_status.py --check
 ```
 
-Compare against llama.cpp:
+Build the docs after status regeneration:
 
 ```bash
-bash bench_vs_llamacpp.sh /path/to/model.gguf
+cd docs && mdbook build
 ```
 
-These scripts output structured results to `benchmark_results_*.md`.
+## Evidence Rules
+
+- Public performance tables may contain only measured local end-to-end rows.
+- Synthetic rows are useful for regression tracking, but they do not count as public real-model claims.
+- Exploratory checkpoints are kept in the artifact appendix, not the headline support table.
+- Metal rows count only when the runtime line confirms `backend=metal`.

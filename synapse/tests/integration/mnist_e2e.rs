@@ -3,7 +3,7 @@
 use synapse_autograd::{backward, Graph, NoGradGuard, Tensor};
 use synapse_nn::init::kaiming_uniform;
 use synapse_optim::{Adam, Optimizer, Param};
-use synapse_train::{Trainer, TrainerConfig, TrainLoop};
+use synapse_train::{TrainLoop, Trainer, TrainerConfig};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -15,9 +15,12 @@ const HIDDEN2: usize = 128;
 const BATCH_SIZE: usize = 64;
 
 struct MnistMLP {
-    w1: Tensor, b1: Tensor,
-    w2: Tensor, b2: Tensor,
-    w3: Tensor, b3: Tensor,
+    w1: Tensor,
+    b1: Tensor,
+    w2: Tensor,
+    b2: Tensor,
+    w3: Tensor,
+    b3: Tensor,
     optimizer: Adam,
     train_data: Vec<(Tensor, Tensor)>,
     val_data: Vec<(Tensor, Tensor)>,
@@ -121,7 +124,12 @@ impl TrainLoop for MnistMLP {
         }
 
         let accuracy = correct as f32 / total.max(1) as f32;
-        eprintln!("  val accuracy: {:.2}% ({}/{})", accuracy * 100.0, correct, total);
+        eprintln!(
+            "  val accuracy: {:.2}% ({}/{})",
+            accuracy * 100.0,
+            correct,
+            total
+        );
         // Return negative accuracy as "loss" (lower is better for callbacks)
         Some(1.0 - accuracy)
     }
@@ -130,7 +138,11 @@ impl TrainLoop for MnistMLP {
 fn generate_prototypes(seed: u64) -> Vec<Vec<f32>> {
     let mut rng = StdRng::seed_from_u64(seed);
     (0..NUM_CLASSES)
-        .map(|_| (0..INPUT_DIM).map(|_| rng.gen_range(-1.0..1.0f32)).collect())
+        .map(|_| {
+            (0..INPUT_DIM)
+                .map(|_| rng.gen_range(-1.0..1.0f32))
+                .collect()
+        })
         .collect()
 }
 

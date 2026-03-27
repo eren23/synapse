@@ -180,8 +180,7 @@ impl RotaryPositionalEmbedding {
         let mut sin_data = vec![0.0f32; max_len * half_d];
         for s in 0..max_len {
             for i in 0..half_d {
-                let theta =
-                    (s as f32) / 10000.0f32.powf(2.0 * i as f32 / d_head as f32);
+                let theta = (s as f32) / 10000.0f32.powf(2.0 * i as f32 / d_head as f32);
                 cos_data[s * half_d + i] = theta.cos();
                 sin_data[s * half_d + i] = theta.sin();
             }
@@ -438,8 +437,7 @@ mod tests {
 
         for s in 0..max_len {
             for i in 0..half_d {
-                let theta = (s as f32)
-                    / 10000.0f32.powf(2.0 * i as f32 / d_head as f32);
+                let theta = (s as f32) / 10000.0f32.powf(2.0 * i as f32 / d_head as f32);
                 assert!(
                     (rope.cos_table.data[s * half_d + i] - theta.cos()).abs() < 1e-6,
                     "cos mismatch at pos={}, i={}",
@@ -587,7 +585,11 @@ mod tests {
         let input = Tensor::ones(&[1, 4, 8]);
         for module in &modules {
             let output = module.forward(&input);
-            assert!(!output.data.is_empty(), "{} produced empty output", module.name());
+            assert!(
+                !output.data.is_empty(),
+                "{} produced empty output",
+                module.name()
+            );
         }
     }
 

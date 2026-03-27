@@ -28,6 +28,10 @@ def format_model_status(status: str) -> str:
     return status.replace("_", " ").title()
 
 
+def format_evidence(evidence: str) -> str:
+    return evidence.replace("_", " ").title()
+
+
 def kb_label(num_bytes: int | None) -> str:
     if num_bytes is None:
         return "n/a"
@@ -40,17 +44,18 @@ def read_size(path: Path) -> int | None:
 
 def md_benchmark_table(manifest: dict) -> str:
     rows = [
-        "| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |",
-        "|---------------|-----------------|----------------|---------|-------|",
+        "| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |",
+        "|--------|---------------|--------|-----------------|----------------|-------|",
     ]
     for item in manifest["benchmarks"]["configs"]:
         rows.append(
-            f"| {item['label']} | {item['prefill_tps']:g} | {item['decode_tps']:g} | "
-            f"{format_support(item['support'])} | {item['notes']} |"
+            f"| {item['family']} | {item['label']} | {item['prompt_id']} | "
+            f"{item['prefill_tps']:g} | {item['decode_tps']:g} | {item['notes']} |"
         )
     ref = manifest["benchmarks"]["reference"]
     rows.append(
-        f"| {ref['label']} | {ref['prefill_tps']:g} | {ref['decode_tps']:g} | Reference | {ref['notes']} |"
+        f"| {ref.get('family', 'Reference')} | {ref['label']} | {ref.get('prompt_id', 'reference')} | "
+        f"{ref['prefill_tps']:g} | {ref['decode_tps']:g} | {ref['notes']} |"
     )
     return "\n".join(rows)
 
@@ -78,12 +83,13 @@ def md_feature_list(manifest: dict) -> str:
 
 def md_model_matrix(manifest: dict) -> str:
     rows = [
-        "| Model Family | Status | Notes |",
-        "|--------------|--------|-------|",
+        "| Model Family | Status | Evidence | Notes |",
+        "|--------------|--------|----------|-------|",
     ]
     for item in manifest["model_families"]:
         rows.append(
-            f"| {item['label']} | {format_model_status(item['status'])} | {item['notes']} |"
+            f"| {item['label']} | {format_model_status(item['status'])} | "
+            f"{format_evidence(item.get('evidence', 'unknown'))} | {item['notes']} |"
         )
     return "\n".join(rows)
 
@@ -95,16 +101,14 @@ def md_root_positioning(manifest: dict) -> str:
             "",
             f"- {manifest['positioning']['native_runtime']}",
             f"- {manifest['positioning']['wasm_runtime']}",
-            f"- Verified benchmark baseline is {manifest['benchmarks']['model']} on {manifest['benchmarks']['device']}.",
+            f"- Public benchmark rows are measured on {manifest['benchmarks']['device']} and synced from {manifest['benchmarks'].get('matrix_artifact', 'the local matrix artifact')}.",
         ]
     )
 
 
 def md_status_note(manifest: dict) -> str:
-    return (
-        f"Measured against {manifest['benchmarks']['model']} on {manifest['benchmarks']['device']}. "
-        f"Last verified: {manifest['last_verified']}."
-    )
+    scope = manifest["benchmarks"].get("scope") or manifest["benchmarks"].get("model")
+    return f"Measured on {manifest['benchmarks']['device']} ({scope}). Last verified: {manifest['last_verified']}."
 
 
 def html_subtitle(manifest: dict) -> str:

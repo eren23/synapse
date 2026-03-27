@@ -6,8 +6,15 @@ use crate::variable::VariableId;
 // ── im2col / col2im helpers ────────────────────────────────────────
 
 fn im2col(
-    input: &[f32], batch: usize, c: usize, h: usize, w: usize,
-    kh: usize, kw: usize, stride: usize, pad: usize,
+    input: &[f32],
+    batch: usize,
+    c: usize,
+    h: usize,
+    w: usize,
+    kh: usize,
+    kw: usize,
+    stride: usize,
+    pad: usize,
 ) -> Vec<f32> {
     let h_out = (h + 2 * pad - kh) / stride + 1;
     let w_out = (w + 2 * pad - kw) / stride + 1;
@@ -25,8 +32,10 @@ fn im2col(
                             let iw = (ow * stride + kj) as isize - pad as isize;
                             let col = ci * kh * kw + ki * kw + kj;
                             if ih >= 0 && ih < h as isize && iw >= 0 && iw < w as isize {
-                                cols[row * col_cols + col] =
-                                    input[ni * c * h * w + ci as usize * h * w + ih as usize * w + iw as usize];
+                                cols[row * col_cols + col] = input[ni * c * h * w
+                                    + ci as usize * h * w
+                                    + ih as usize * w
+                                    + iw as usize];
                             }
                         }
                     }
@@ -38,8 +47,15 @@ fn im2col(
 }
 
 fn col2im(
-    cols: &[f32], batch: usize, c: usize, h: usize, w: usize,
-    kh: usize, kw: usize, stride: usize, pad: usize,
+    cols: &[f32],
+    batch: usize,
+    c: usize,
+    h: usize,
+    w: usize,
+    kh: usize,
+    kw: usize,
+    stride: usize,
+    pad: usize,
 ) -> Vec<f32> {
     let h_out = (h + 2 * pad - kh) / stride + 1;
     let w_out = (w + 2 * pad - kw) / stride + 1;
@@ -56,8 +72,10 @@ fn col2im(
                             let iw = (ow * stride + kj) as isize - pad as isize;
                             let col = ci * kh * kw + ki * kw + kj;
                             if ih >= 0 && ih < h as isize && iw >= 0 && iw < w as isize {
-                                output[ni * c * h * w + ci as usize * h * w + ih as usize * w + iw as usize]
-                                    += cols[row * col_cols + col];
+                                output[ni * c * h * w
+                                    + ci as usize * h * w
+                                    + ih as usize * w
+                                    + iw as usize] += cols[row * col_cols + col];
                             }
                         }
                     }
@@ -91,7 +109,17 @@ impl GradFn for Conv2dBackward {
         let w_out = (w + 2 * self.padding - kw) / self.stride + 1;
 
         // Recompute im2col columns
-        let cols_data = im2col(&self.input_data.data, batch, c_in, h, w, kh, kw, self.stride, self.padding);
+        let cols_data = im2col(
+            &self.input_data.data,
+            batch,
+            c_in,
+            h,
+            w,
+            kh,
+            kw,
+            self.stride,
+            self.padding,
+        );
         let cols = Tensor::new(cols_data, vec![batch * h_out * w_out, c_in * kh * kw]);
 
         // Rearrange grad_output [N,Cout,Hout,Wout] → [N*Hout*Wout, Cout]
@@ -120,7 +148,17 @@ impl GradFn for Conv2dBackward {
         let grad_cols = dout_mat.matmul(&weight_mat);
 
         // grad_input via col2im
-        let grad_input_data = col2im(&grad_cols.data, batch, c_in, h, w, kh, kw, self.stride, self.padding);
+        let grad_input_data = col2im(
+            &grad_cols.data,
+            batch,
+            c_in,
+            h,
+            w,
+            kh,
+            kw,
+            self.stride,
+            self.padding,
+        );
         let grad_input = Tensor::new(grad_input_data, self.input_data.shape.clone());
 
         vec![Some(grad_input), Some(grad_weight)]
@@ -135,8 +173,11 @@ impl GradFn for Conv2dBackward {
 impl Graph {
     /// Conv2d: input [N,Cin,H,W] * weight [Cout,Cin,kH,kW] → [N,Cout,Hout,Wout]
     pub fn conv2d(
-        &mut self, input: VariableId, weight: VariableId,
-        stride: usize, padding: usize,
+        &mut self,
+        input: VariableId,
+        weight: VariableId,
+        stride: usize,
+        padding: usize,
     ) -> VariableId {
         let input_data = self.variables[&input].data.clone();
         let weight_data = self.variables[&weight].data.clone();
@@ -179,7 +220,13 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(Conv2dBackward { input_ids: vec![input, weight], input_data, weight_data, stride, padding }),
+            Box::new(Conv2dBackward {
+                input_ids: vec![input, weight],
+                input_data,
+                weight_data,
+                stride,
+                padding,
+            }),
             &[input, weight],
             output,
         )

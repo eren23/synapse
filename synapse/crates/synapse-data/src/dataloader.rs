@@ -289,10 +289,7 @@ mod tests {
         let mut loader = DataLoader::new(ds, 5).shuffle(true).seed(42);
 
         let batches: Vec<_> = loader.iter().collect();
-        let mut all_values: Vec<f32> = batches
-            .iter()
-            .flat_map(|b| b[0].data().to_vec())
-            .collect();
+        let mut all_values: Vec<f32> = batches.iter().flat_map(|b| b[0].data().to_vec()).collect();
         all_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
         let expected: Vec<f32> = (0..20).map(|i| i as f32).collect();
@@ -341,10 +338,7 @@ mod tests {
         assert_eq!(batches.len(), 4); // ceil(10/3) = 4
 
         // Verify all elements present
-        let mut all_values: Vec<f32> = batches
-            .iter()
-            .flat_map(|b| b[0].data().to_vec())
-            .collect();
+        let mut all_values: Vec<f32> = batches.iter().flat_map(|b| b[0].data().to_vec()).collect();
         all_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let expected: Vec<f32> = (0..10).map(|i| i as f32).collect();
         assert_eq!(all_values, expected);
@@ -357,10 +351,7 @@ mod tests {
         let batches: Vec<_> = loader.iter().collect();
         assert_eq!(batches.len(), 4);
 
-        let mut all_values: Vec<f32> = batches
-            .iter()
-            .flat_map(|b| b[0].data().to_vec())
-            .collect();
+        let mut all_values: Vec<f32> = batches.iter().flat_map(|b| b[0].data().to_vec()).collect();
         all_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let expected: Vec<f32> = (0..20).map(|i| i as f32).collect();
         assert_eq!(all_values, expected);

@@ -22,7 +22,9 @@ fn training_throughput_5000_samples_per_sec() {
     let mut optimizer = Adam::new(0.001);
 
     // Generate random batch
-    let input_data: Vec<f32> = (0..BATCH_SIZE * INPUT_DIM).map(|i| (i as f32 * 0.001).sin()).collect();
+    let input_data: Vec<f32> = (0..BATCH_SIZE * INPUT_DIM)
+        .map(|i| (i as f32 * 0.001).sin())
+        .collect();
     let input = Tensor::new(input_data, vec![BATCH_SIZE, INPUT_DIM]);
 
     let mut target_data = vec![0.0f32; BATCH_SIZE * OUTPUT_DIM];
@@ -52,12 +54,16 @@ fn training_throughput_5000_samples_per_sec() {
         let vars = [w1v, b1v, w2v, b2v];
         let tensors: [&Tensor; 4] = [&w1, &b1, &w2, &b2];
         let shapes: Vec<Vec<usize>> = tensors.iter().map(|t| t.shape.clone()).collect();
-        let mut params: Vec<Param> = tensors.iter().zip(&vars).map(|(tensor, &var)| {
-            let grad = graph.grad(var).map(|g| g.data.clone());
-            let mut p = Param::new(tensor.data.clone());
-            p.grad = grad;
-            p
-        }).collect();
+        let mut params: Vec<Param> = tensors
+            .iter()
+            .zip(&vars)
+            .map(|(tensor, &var)| {
+                let grad = graph.grad(var).map(|g| g.data.clone());
+                let mut p = Param::new(tensor.data.clone());
+                p.grad = grad;
+                p
+            })
+            .collect();
         optimizer.step(&mut params);
         w1 = Tensor::new(params[0].data.clone(), shapes[0].clone());
         b1 = Tensor::new(params[1].data.clone(), shapes[1].clone());
@@ -89,12 +95,16 @@ fn training_throughput_5000_samples_per_sec() {
         let vars = [w1v, b1v, w2v, b2v];
         let tensors: [&Tensor; 4] = [&w1, &b1, &w2, &b2];
         let shapes: Vec<Vec<usize>> = tensors.iter().map(|t| t.shape.clone()).collect();
-        let mut params: Vec<Param> = tensors.iter().zip(&vars).map(|(tensor, &var)| {
-            let grad = graph.grad(var).map(|g| g.data.clone());
-            let mut p = Param::new(tensor.data.clone());
-            p.grad = grad;
-            p
-        }).collect();
+        let mut params: Vec<Param> = tensors
+            .iter()
+            .zip(&vars)
+            .map(|(tensor, &var)| {
+                let grad = graph.grad(var).map(|g| g.data.clone());
+                let mut p = Param::new(tensor.data.clone());
+                p.grad = grad;
+                p
+            })
+            .collect();
         optimizer.step(&mut params);
         w1 = Tensor::new(params[0].data.clone(), shapes[0].clone());
         b1 = Tensor::new(params[1].data.clone(), shapes[1].clone());
@@ -114,7 +124,11 @@ fn training_throughput_5000_samples_per_sec() {
     );
 
     // [claude] Made threshold build-mode-aware — debug builds hit ~832 samples/sec, not 5000
-    let threshold = if cfg!(debug_assertions) { 500.0 } else { 5000.0 };
+    let threshold = if cfg!(debug_assertions) {
+        500.0
+    } else {
+        5000.0
+    };
     assert!(
         samples_per_sec >= threshold,
         "Expected >= {:.0} samples/sec, got {:.0}",

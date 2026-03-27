@@ -50,12 +50,7 @@ where
 }
 
 /// Evaluate the graph with one input replaced, returning the output sum as f64.
-fn eval_at<F>(
-    build_graph: &F,
-    inputs: &[Tensor],
-    replace_idx: usize,
-    replacement: &Tensor,
-) -> f64
+fn eval_at<F>(build_graph: &F, inputs: &[Tensor], replace_idx: usize, replacement: &Tensor) -> f64
 where
     F: Fn(&mut Graph, &[VariableId]) -> VariableId,
 {

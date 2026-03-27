@@ -104,7 +104,10 @@ mod tests {
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].shape(), &[3, 3]); // [batch=3, features=3]
         assert_eq!(batch[1].shape(), &[3, 1]); // [batch=3, label=1]
-        assert_eq!(batch[0].data(), &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]);
+        assert_eq!(
+            batch[0].data(),
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+        );
         assert_eq!(batch[1].data(), &[0.0, 1.0, 2.0]);
     }
 

@@ -30,7 +30,11 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(MatMulBackward { input_ids: vec![a, b], a_data, b_data }),
+            Box::new(MatMulBackward {
+                input_ids: vec![a, b],
+                a_data,
+                b_data,
+            }),
             &[a, b],
             output,
         )

@@ -263,12 +263,16 @@ impl TransformerDecoderLayer {
     pub fn forward_with_memory(&self, tgt: &Tensor, memory: &Tensor, causal: bool) -> Tensor {
         // Causal self-attention with pre-norm
         let normed = self.norm1.forward(tgt);
-        let self_attn_out = self.self_attn.forward_with_mask(&normed, &normed, &normed, causal);
+        let self_attn_out = self
+            .self_attn
+            .forward_with_mask(&normed, &normed, &normed, causal);
         let x = tgt.add_broadcast(&self_attn_out);
 
         // Cross-attention with pre-norm (query=decoder, key/value=encoder memory)
         let normed = self.norm2.forward(&x);
-        let cross_attn_out = self.cross_attn.forward_with_mask(&normed, memory, memory, false);
+        let cross_attn_out = self
+            .cross_attn
+            .forward_with_mask(&normed, memory, memory, false);
         let x = x.add_broadcast(&cross_attn_out);
 
         // Feed-forward with pre-norm
@@ -286,7 +290,9 @@ impl Module for TransformerDecoderLayer {
     /// For the full decoder layer with cross-attention, use `forward_with_memory`.
     fn forward(&self, input: &Tensor) -> Tensor {
         let normed = self.norm1.forward(input);
-        let self_attn_out = self.self_attn.forward_with_mask(&normed, &normed, &normed, true);
+        let self_attn_out = self
+            .self_attn
+            .forward_with_mask(&normed, &normed, &normed, true);
         let x = input.add_broadcast(&self_attn_out);
 
         // Skip cross-attention (no memory available)
@@ -443,7 +449,12 @@ mod tests {
         Tensor::new(data, shape.to_vec())
     }
 
-    fn encoder_config(d_model: usize, n_heads: usize, d_ff: usize, n_layers: usize) -> TransformerEncoderConfig {
+    fn encoder_config(
+        d_model: usize,
+        n_heads: usize,
+        d_ff: usize,
+        n_layers: usize,
+    ) -> TransformerEncoderConfig {
         TransformerEncoderConfig {
             d_model,
             n_heads,
@@ -454,7 +465,12 @@ mod tests {
         }
     }
 
-    fn decoder_config(d_model: usize, n_heads: usize, d_ff: usize, n_layers: usize) -> TransformerDecoderConfig {
+    fn decoder_config(
+        d_model: usize,
+        n_heads: usize,
+        d_ff: usize,
+        n_layers: usize,
+    ) -> TransformerDecoderConfig {
         TransformerDecoderConfig {
             d_model,
             n_heads,
@@ -522,7 +538,11 @@ mod tests {
         // norm1: D + D, norm2: D + D
         // ff1: D*Dff + Dff, ff2: Dff*D + D
         let expected = 4 * d * d + 4 * d + 2 * d + 2 * d + d * d_ff + d_ff + d_ff * d + d;
-        assert_eq!(total, expected, "encoder layer param count mismatch: got {} expected {}", total, expected);
+        assert_eq!(
+            total, expected,
+            "encoder layer param count mismatch: got {} expected {}",
+            total, expected
+        );
     }
 
     #[test]
@@ -536,7 +556,11 @@ mod tests {
         // norm1,2,3: 3*(D + D)
         // ff1: D*Dff + Dff, ff2: Dff*D + D
         let expected = 2 * (4 * d * d + 4 * d) + 3 * 2 * d + d * d_ff + d_ff + d_ff * d + d;
-        assert_eq!(total, expected, "decoder layer param count mismatch: got {} expected {}", total, expected);
+        assert_eq!(
+            total, expected,
+            "decoder layer param count mismatch: got {} expected {}",
+            total, expected
+        );
     }
 
     #[test]
@@ -717,7 +741,9 @@ mod tests {
             assert!(
                 (a - b).abs() < 1e-5,
                 "encoder residual: mismatch at index {} (input={}, output={})",
-                i, a, b
+                i,
+                a,
+                b
             );
         }
     }
@@ -741,7 +767,9 @@ mod tests {
             assert!(
                 (a - b).abs() < 1e-5,
                 "decoder residual: mismatch at index {} (input={}, output={})",
-                i, a, b
+                i,
+                a,
+                b
             );
         }
     }
@@ -841,18 +869,48 @@ mod tests {
     // ── Helpers ───────────────────────────────────────────────
 
     fn zero_mha(mha: &mut MultiHeadAttention) {
-        for val in mha.w_q.weight.data.iter_mut() { *val = 0.0; }
-        if let Some(ref mut b) = mha.w_q.bias { for val in b.data.iter_mut() { *val = 0.0; } }
-        for val in mha.w_k.weight.data.iter_mut() { *val = 0.0; }
-        if let Some(ref mut b) = mha.w_k.bias { for val in b.data.iter_mut() { *val = 0.0; } }
-        for val in mha.w_v.weight.data.iter_mut() { *val = 0.0; }
-        if let Some(ref mut b) = mha.w_v.bias { for val in b.data.iter_mut() { *val = 0.0; } }
-        for val in mha.w_o.weight.data.iter_mut() { *val = 0.0; }
-        if let Some(ref mut b) = mha.w_o.bias { for val in b.data.iter_mut() { *val = 0.0; } }
+        for val in mha.w_q.weight.data.iter_mut() {
+            *val = 0.0;
+        }
+        if let Some(ref mut b) = mha.w_q.bias {
+            for val in b.data.iter_mut() {
+                *val = 0.0;
+            }
+        }
+        for val in mha.w_k.weight.data.iter_mut() {
+            *val = 0.0;
+        }
+        if let Some(ref mut b) = mha.w_k.bias {
+            for val in b.data.iter_mut() {
+                *val = 0.0;
+            }
+        }
+        for val in mha.w_v.weight.data.iter_mut() {
+            *val = 0.0;
+        }
+        if let Some(ref mut b) = mha.w_v.bias {
+            for val in b.data.iter_mut() {
+                *val = 0.0;
+            }
+        }
+        for val in mha.w_o.weight.data.iter_mut() {
+            *val = 0.0;
+        }
+        if let Some(ref mut b) = mha.w_o.bias {
+            for val in b.data.iter_mut() {
+                *val = 0.0;
+            }
+        }
     }
 
     fn zero_linear(linear: &mut Linear) {
-        for val in linear.weight.data.iter_mut() { *val = 0.0; }
-        if let Some(ref mut b) = linear.bias { for val in b.data.iter_mut() { *val = 0.0; } }
+        for val in linear.weight.data.iter_mut() {
+            *val = 0.0;
+        }
+        if let Some(ref mut b) = linear.bias {
+            for val in b.data.iter_mut() {
+                *val = 0.0;
+            }
+        }
     }
 }

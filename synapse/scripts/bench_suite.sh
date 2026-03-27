@@ -1,63 +1,41 @@
 #!/bin/bash
-# Synapse Benchmark Suite
-# Runs f32, INT8 decode and prefill benchmarks, plus isolated matmul comparisons.
+# Synapse benchmark wrapper.
 #
 # Usage:
-#   ./scripts/bench_suite.sh [--model-dir /path/to/model]
-#
-# If --model-dir is provided, runs real model benchmarks.
-# Otherwise runs synthetic benchmarks only.
+#   ./scripts/bench_suite.sh
+#   ./scripts/bench_suite.sh --model-dir /path/to/qwen3
+#   ./scripts/bench_suite.sh --include-exploratory
 
-set -e
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
+ARGS=()
 MODEL_DIR=""
-for arg in "$@"; do
-    case "$arg" in
-        --model-dir) shift; MODEL_DIR="$1"; shift ;;
+INCLUDE_EXPLORATORY=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --model-dir)
+            MODEL_DIR="${2:?--model-dir requires a path}"
+            shift 2
+            ;;
+        --include-exploratory)
+            INCLUDE_EXPLORATORY=1
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
     esac
 done
 
-echo "═══════════════════════════════════════════════════════════════"
-echo " Synapse Benchmark Suite — $(date '+%Y-%m-%d %H:%M')"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
-
-# ── Isolated matmul benchmarks ────────────────────────────────────
-echo "▶ Isolated matmul: f32 vs INT8 vs Q4 (M=1 decode dimensions)"
-echo "─────────────────────────────────────────────────────────────"
-cargo test --test quantization_speedup --release -- --nocapture isolated_matmul 2>&1 | grep -E "^(FFN|Attn|Prefill)"
-echo ""
-
-# ── INT8 vs f32 full-model benchmark ──────────────────────────────
-echo "▶ Full-model quantization speedup (tiny model, synthetic)"
-echo "─────────────────────────────────────────────────────────────"
-cargo test --test quantization_speedup --release -- --nocapture quantization_speedup_int8_vs_f32 2>&1 | grep -E "^(f32|INT8|Speedup)"
-echo ""
-
-# ── Real model benchmarks (if model dir provided) ────────────────
-if [ -n "$MODEL_DIR" ]; then
-    echo "▶ Real model benchmarks: $MODEL_DIR"
-    echo "─────────────────────────────────────────────────────────────"
-
-    echo ""
-    echo "  [f32 CPU]"
-    echo "hello" | cargo run --example qwen3_chat --release -- --model-dir "$MODEL_DIR" 2>&1 | grep "Prefill:"
-
-    echo ""
-    echo "  [INT8 CPU]"
-    echo "hello" | cargo run --example qwen3_chat --release -- --model-dir "$MODEL_DIR" --quantize 2>&1 | grep "Prefill:"
-
-    echo ""
-    echo "  [f32 + Metal]"
-    echo "hello" | cargo run --example qwen3_chat --release --features metal -- --model-dir "$MODEL_DIR" 2>&1 | grep "Prefill:" || echo "  (Metal not available)"
-
-    echo ""
-    echo "  [INT8 + Metal]"
-    echo "hello" | cargo run --example qwen3_chat --release --features metal -- --model-dir "$MODEL_DIR" --quantize 2>&1 | grep "Prefill:" || echo "  (Metal not available)"
+if [[ -n "$MODEL_DIR" ]]; then
+    ARGS+=("--official-model" "qwen3=$MODEL_DIR")
 fi
 
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo " Tests: $(cargo test -p synapse-inference --lib 2>&1 | grep 'test result:' | head -1)"
-echo "═══════════════════════════════════════════════════════════════"
+if [[ "$INCLUDE_EXPLORATORY" -eq 1 ]]; then
+    ARGS+=("--include-exploratory")
+fi
+
+python3 scripts/benchmark_matrix.py --format text "${ARGS[@]}"

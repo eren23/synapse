@@ -5,26 +5,32 @@ A modular local inference engine built in Rust with Zig SIMD kernels, optional M
 ## Performance
 
 <!-- status:synapse-benchmark:start -->
-| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
-|---------------|-----------------|----------------|---------|-------|
-| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
-| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
-| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
-| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
-| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |
+|--------|---------------|--------|-----------------|----------------|-------|
+| Qwen3 | f32 CPU | hello | 11 | 7.3 | Runtime backend=cpu_simd; prompt=hello |
+| Qwen3 | INT8 CPU | hello | 23 | 27.3 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | f32 CPU | hello | 1 | 2.1 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | INT8 CPU | hello | 8 | 9.7 | Runtime backend=cpu_simd; prompt=hello |
+| Reference | llama.cpp Q4_K_M | reference_only | 5518 | 173 | Reference only, not a parity claim |
 <!-- status:synapse-benchmark:end -->
+
+The public table above is intentionally narrow: it only shows measured local end-to-end rows that were produced by the benchmark matrix on this machine and then synced into the docs. Synthetic benchmark rows, exploratory checkpoints, and failed/fallback runs are kept out of the headline table and written to `status/benchmark_matrix.md` instead.
+
+The important architectural point is that the recent decode recovery came from shared causal-LM infrastructure, not a one-off prompt hack. The `M=1` INT8 GEMV path, quantized LM head, and cached decode flow are shared kernels. Qwen3 benefits first because it is the most exercised real-checkpoint path here; LLaMA, Mistral, and similar decoder families should inherit those wins once their end-to-end checkpoint path is benchmarked locally, but Synapse does not publish future throughput numbers as promises.
 
 ## GPU Acceleration (Metal)
 
-Synapse supports GPU-resident decode on Apple Silicon via Metal:
+Synapse can be built with Metal support on Apple Silicon, but the active runtime path should be treated as a measured value, not an assumption:
 
 | Path | Decode | When to use |
 |------|--------|-------------|
-| CPU f32 | 6.7 tok/s | Default, no flags |
-| CPU INT8 | 14.0 tok/s | `--quantize` |
-| Metal INT8 GPU | 14.5 tok/s | `--features metal` |
+| Default build | See `Runtime:` line | `cargo run --example qwen3_chat --release ...` |
+| Metal-feature build | See `Runtime:` line | `cargo run --example qwen3_chat --release --features metal ...` |
+| Benchmark matrix | Exact local measurement | `bash scripts/bench_suite.sh --model-dir ...` |
 
-The Metal path keeps all 28 decoder layers on GPU in a single command buffer -- zero CPU-GPU round-trips during decode. Weights are auto-quantized to INT8 at load time.
+The chat example now prints a `Runtime:` line before generation so you can see the active model family, compute path, and selected prefill/decode strategies. For Qwen3, the interactive CLI defaults to `thinking=disabled`; pass `--thinking auto` to restore the model's default think-first behavior. Use `--inspect-prompt --prompt "..."` to dump the rendered prompt and token IDs, and `--prompt "..." --profile-stages` to print render/encode/prefill/decode timings for a single prompt.
+
+Metal rows are only allowed into the public benchmark table when the runtime line actually reports `backend=metal`. A metal-feature build that falls back to `cpu_simd` is recorded in the raw matrix artifact, but it is not presented as a GPU throughput claim.
 
 ## Features
 
@@ -49,10 +55,19 @@ huggingface-cli download Qwen/Qwen3-0.6B --local-dir /tmp/qwen3-0.6b
 # Chat (f32)
 cargo run --example qwen3_chat --release -- --model-dir /tmp/qwen3-0.6b
 
-# Chat (INT8 quantized — 2x faster)
+# Chat (INT8 quantized)
 cargo run --example qwen3_chat --release -- --model-dir /tmp/qwen3-0.6b --quantize
 
-# With Metal GPU (macOS)
+# Qwen3 with explicit think-first behavior
+cargo run --example qwen3_chat --release -- --model-dir /tmp/qwen3-0.6b --thinking auto
+
+# Inspect the rendered Qwen3 prompt and token IDs
+cargo run --example qwen3_chat --release -- --model-dir /tmp/qwen3-0.6b --inspect-prompt --prompt "hello"
+
+# Run one prompt and print render/encode/prefill/decode timings
+cargo run --example qwen3_chat --release -- --model-dir /tmp/qwen3-0.6b --quantize --prompt "hello" --profile-stages
+
+# With Metal feature enabled (macOS)
 cargo run --example qwen3_chat --release --features metal -- --model-dir /tmp/qwen3-0.6b --quantize
 ```
 
@@ -80,21 +95,28 @@ synapse/
 ## Supported Models
 
 <!-- status:synapse-models:start -->
-| Model Family | Status | Notes |
-|--------------|--------|-------|
-| Qwen3 | Validated | Logits verified |
-| LLaMA 3.2 | Config Ready | Config and weight mapper path present |
-| Mistral 7B | Config Ready | Sliding-window config path present |
-| Phi-3 | Config Ready | Weight-mapper support in progress |
-| Gemma | Config Ready | Same core transformer path |
+| Model Family | Status | Evidence | Notes |
+|--------------|--------|----------|-------|
+| Qwen3 | Validated | Benchmarked Local | Real checkpoint benchmarked locally; logits verified |
+| LLaMA 3.2 | Benchmarked Local | Benchmarked Local | Real checkpoint benchmarked locally on this machine |
+| Mistral 7B | Config Ready | Synthetic Validated | Sliding-window config path present; synthetic correctness tests pass, but the scaled synthetic throughput benchmark is currently failing |
+| Phi-3 | In Progress | Synthetic Validated | Weight-mapper support in progress; synthetic validation passing |
+| Gemma | Config Ready | Synthetic Validated | Same core transformer path; synthetic validation passing |
 <!-- status:synapse-models:end -->
+
+The model matrix carries two dimensions:
+
+- `Status` is support maturity for that family.
+- `Evidence` is the strongest proof currently available, such as a real local benchmark, logit verification, or synthetic validation.
+
+That split keeps the docs honest. A family can be structurally supported and exercised through fake-weight tests without being presented as a measured end-to-end checkpoint path yet.
 
 ## Quantization Formats
 
 | Format | Source | Compute | Notes |
 |--------|--------|---------|-------|
 | f32 | safetensors | f32 GEMV | Baseline |
-| INT8 | Runtime quantize | INT8 GEMV | `--quantize` flag, 6.3x speedup |
+| INT8 | Runtime quantize | INT8 GEMV | `--quantize` uses a fully quantized cached decode LM head |
 | Q4_0 | GGUF | Q4 GEMV | Native 4-bit compute |
 | Q4_K / Q6_K | GGUF | Dequant→f32 | Q4_K_M compatible |
 | Q8_0 | GGUF | Dequant→f32 | — |
@@ -102,24 +124,34 @@ synapse/
 ## Benchmarks
 
 ```bash
-# Run full benchmark suite
-bash scripts/bench_suite.sh --model-dir /tmp/qwen3-0.6b
+# Run the canonical validation + benchmark matrix
+python3 scripts/benchmark_matrix.py --include-exploratory
+
+# Human-friendly wrapper for the same pipeline
+bash scripts/bench_suite.sh --include-exploratory
 
 # Isolated matmul comparison
 cargo test --test quantization_speedup --release -- --nocapture isolated_matmul
 ```
 
+Artifacts written by the matrix runner:
+
+- `status/benchmark_matrix.json`: raw structured results
+- `status/benchmark_matrix.md`: human-readable report with measured, synthetic, and exploratory rows
+- `status/public_status.json`: public snapshot consumed by README and mdBook status blocks
+
 ## Testing
 
 ```bash
-# Library tests (210)
+# Core inference tests
 cargo test -p synapse-inference --lib
 
-# Multi-architecture validation (15 tests, 5 model families)
+# Multi-architecture validation
 cargo test --test multi_model_validation
 
-# All tests
-cargo test --release
+# Regenerate and validate public benchmark/docs status
+python3 scripts/benchmark_matrix.py
+python3 scripts/sync_public_status.py --check
 ```
 
 ## License

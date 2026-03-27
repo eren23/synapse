@@ -34,6 +34,7 @@ out/
 
 # Zig
 .zig-cache/
+**/.zig-global-cache/
 zig-cache/
 zig-out/
 

@@ -1,8 +1,8 @@
 //! Comprehensive tests for synapse-nn.
 
 use synapse_autograd::Tensor;
-use synapse_nn::*;
 use synapse_nn::module::Module;
+use synapse_nn::*;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Init tests
@@ -60,7 +60,10 @@ fn test_calculate_fans() {
     // 2D
     assert_eq!(synapse_nn::init::calculate_fans(&[64, 128]), (128, 64));
     // 4D
-    assert_eq!(synapse_nn::init::calculate_fans(&[64, 3, 5, 5]), (3 * 25, 64 * 25));
+    assert_eq!(
+        synapse_nn::init::calculate_fans(&[64, 3, 5, 5]),
+        (3 * 25, 64 * 25)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -289,10 +292,10 @@ fn test_batchnorm2d_normalizes() {
     // Create input with known statistics
     let input = Tensor::new(
         vec![
-            1.0, 2.0, 3.0, 4.0,  // channel 0, batch 0
-            5.0, 6.0, 7.0, 8.0,  // channel 1, batch 0
-            5.0, 6.0, 7.0, 8.0,  // channel 0, batch 1
-            1.0, 2.0, 3.0, 4.0,  // channel 1, batch 1
+            1.0, 2.0, 3.0, 4.0, // channel 0, batch 0
+            5.0, 6.0, 7.0, 8.0, // channel 1, batch 0
+            5.0, 6.0, 7.0, 8.0, // channel 0, batch 1
+            1.0, 2.0, 3.0, 4.0, // channel 1, batch 1
         ],
         vec![2, 2, 2, 2],
     );
@@ -386,10 +389,7 @@ fn test_maxpool2d_output_shape() {
     let pool = MaxPool2d::new((2, 2), (2, 2), (0, 0));
     let input = Tensor::new(
         vec![
-            1.0, 2.0, 3.0, 4.0,
-            5.0, 6.0, 7.0, 8.0,
-            9.0, 10.0, 11.0, 12.0,
-            13.0, 14.0, 15.0, 16.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
         vec![1, 1, 4, 4],
     );
@@ -411,10 +411,7 @@ fn test_avgpool2d_output_shape() {
     let pool = AvgPool2d::new((2, 2), (2, 2), (0, 0));
     let input = Tensor::new(
         vec![
-            1.0, 2.0, 3.0, 4.0,
-            5.0, 6.0, 7.0, 8.0,
-            9.0, 10.0, 11.0, 12.0,
-            13.0, 14.0, 15.0, 16.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
         vec![1, 1, 4, 4],
     );
@@ -455,8 +452,12 @@ fn test_adaptive_avg_pool2d_to_4x4() {
 
 #[test]
 fn test_pooling_no_parameters() {
-    assert!(MaxPool2d::new((2, 2), (2, 2), (0, 0)).parameters().is_empty());
-    assert!(AvgPool2d::new((2, 2), (2, 2), (0, 0)).parameters().is_empty());
+    assert!(MaxPool2d::new((2, 2), (2, 2), (0, 0))
+        .parameters()
+        .is_empty());
+    assert!(AvgPool2d::new((2, 2), (2, 2), (0, 0))
+        .parameters()
+        .is_empty());
     assert!(AdaptiveAvgPool2d::new((1, 1)).parameters().is_empty());
 }
 
@@ -727,10 +728,14 @@ fn test_5_layer_cnn_output_shape() {
     // Expected: conv1(16*3*3*3+16) + bn1(32) + conv2(32*16*3*3+32) + bn2(64) +
     //           conv3(64*32*3*3+64) + bn3(128) + conv4(128*64*3*3+128) + bn4(256) +
     //           linear(128*10+10) = lots
-    let expected = (16 * 3 * 3 * 3 + 16) + 32
-        + (32 * 16 * 3 * 3 + 32) + 64
-        + (64 * 32 * 3 * 3 + 64) + 128
-        + (128 * 64 * 3 * 3 + 128) + 256
+    let expected = (16 * 3 * 3 * 3 + 16)
+        + 32
+        + (32 * 16 * 3 * 3 + 32)
+        + 64
+        + (64 * 32 * 3 * 3 + 64)
+        + 128
+        + (128 * 64 * 3 * 3 + 128)
+        + 256
         + (128 * 10 + 10);
     assert_eq!(total, expected);
 }
@@ -765,12 +770,7 @@ fn test_conv2d_output_formula() {
 #[test]
 fn test_pool_output_formula() {
     // Same formula for pooling
-    for &(h, k, s, expected) in &[
-        (8, 2, 2, 4),
-        (16, 2, 2, 8),
-        (7, 3, 1, 5),
-        (32, 4, 4, 8),
-    ] {
+    for &(h, k, s, expected) in &[(8, 2, 2, 4), (16, 2, 2, 8), (7, 3, 1, 5), (32, 4, 4, 8)] {
         let pool = MaxPool2d::new((k, k), (s, s), (0, 0));
         let input = Tensor::ones(&[1, 1, h, h]);
         let output = pool.forward(&input);
@@ -838,7 +838,10 @@ fn test_empty_sequential() {
 #[test]
 fn test_module_name() {
     assert_eq!(Linear::new(1, 1, false).name(), "Linear");
-    assert_eq!(Conv2d::new(1, 1, (1, 1), (1, 1), (0, 0), false).name(), "Conv2d");
+    assert_eq!(
+        Conv2d::new(1, 1, (1, 1), (1, 1), (0, 0), false).name(),
+        "Conv2d"
+    );
     assert_eq!(BatchNorm1d::new(1).name(), "BatchNorm1d");
     assert_eq!(BatchNorm2d::new(1).name(), "BatchNorm2d");
     assert_eq!(Dropout::new(0.5).name(), "Dropout");

@@ -146,35 +146,29 @@ fn main() {
         "  Context embeddings: {} patches x {} dim",
         context_count, vit_config.hidden_size
     );
-    println!(
-        "    L2 norm (mean): {:.4}",
-        {
-            let mut sum = 0.0;
-            for i in 0..context_count {
-                let start = i * vit_config.hidden_size;
-                let end = start + vit_config.hidden_size;
-                sum += l2_norm(&output.context_embeddings[start..end]);
-            }
-            sum / context_count as f32
+    println!("    L2 norm (mean): {:.4}", {
+        let mut sum = 0.0;
+        for i in 0..context_count {
+            let start = i * vit_config.hidden_size;
+            let end = start + vit_config.hidden_size;
+            sum += l2_norm(&output.context_embeddings[start..end]);
         }
-    );
+        sum / context_count as f32
+    });
 
     println!(
         "  Predicted target embeddings: {} patches x {} dim",
         target_count, vit_config.hidden_size
     );
-    println!(
-        "    L2 norm (mean): {:.4}",
-        {
-            let mut sum = 0.0;
-            for i in 0..target_count {
-                let start = i * vit_config.hidden_size;
-                let end = start + vit_config.hidden_size;
-                sum += l2_norm(&output.predicted_embeddings[start..end]);
-            }
-            sum / target_count as f32
+    println!("    L2 norm (mean): {:.4}", {
+        let mut sum = 0.0;
+        for i in 0..target_count {
+            let start = i * vit_config.hidden_size;
+            let end = start + vit_config.hidden_size;
+            sum += l2_norm(&output.predicted_embeddings[start..end]);
         }
-    );
+        sum / target_count as f32
+    });
 
     println!(
         "  All finite: context={}, predicted={}",

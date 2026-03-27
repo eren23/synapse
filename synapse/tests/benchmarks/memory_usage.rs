@@ -24,9 +24,13 @@ fn compute_f32_memory_bytes(cfg: &ModelConfig) -> usize {
         + kv_dim * h               // w_k
         + kv_dim * h               // w_v
         + h * q_dim                // w_o
-        + 3 * inter * h;           // SwiGLU: gate + up + down
+        + 3 * inter * h; // SwiGLU: gate + up + down
     let norm = h;
-    let lm_head = if cfg.architecture.tie_word_embeddings { 0 } else { vocab * h };
+    let lm_head = if cfg.architecture.tie_word_embeddings {
+        0
+    } else {
+        vocab * h
+    };
 
     let total_params = embed + nl * per_layer + norm + lm_head;
     total_params * std::mem::size_of::<f32>()
@@ -74,7 +78,11 @@ fn compute_int8_memory_bytes(cfg: &ModelConfig) -> usize {
     let norm = h * sz_f32;
 
     // LM head: f32 (or tied = 0)
-    let lm_head = if cfg.architecture.tie_word_embeddings { 0 } else { vocab * h * sz_f32 };
+    let lm_head = if cfg.architecture.tie_word_embeddings {
+        0
+    } else {
+        vocab * h * sz_f32
+    };
 
     embed + nl * (per_layer_norms + per_layer_linear) + norm + lm_head
 }
@@ -115,9 +123,7 @@ fn memory_usage_int8_smaller_than_f32() {
     let int8_bytes = compute_int8_memory_bytes(&cfg);
 
     let ratio = int8_bytes as f64 / f32_bytes as f64;
-    eprintln!(
-        "INT8/f32 memory ratio: {ratio:.3} ({int8_bytes} / {f32_bytes})"
-    );
+    eprintln!("INT8/f32 memory ratio: {ratio:.3} ({int8_bytes} / {f32_bytes})");
 
     assert!(
         int8_bytes < f32_bytes,

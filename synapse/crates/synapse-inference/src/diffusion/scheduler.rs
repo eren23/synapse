@@ -18,20 +18,10 @@ pub trait NoiseScheduler {
     fn timesteps(&self) -> &[usize];
 
     /// Compute the previous sample given current sample + model prediction.
-    fn step(
-        &self,
-        model_output: &[f32],
-        timestep: usize,
-        sample: &[f32],
-    ) -> Vec<f32>;
+    fn step(&self, model_output: &[f32], timestep: usize, sample: &[f32]) -> Vec<f32>;
 
     /// Add noise to clean samples at a given timestep.
-    fn add_noise(
-        &self,
-        original: &[f32],
-        noise: &[f32],
-        timestep: usize,
-    ) -> Vec<f32>;
+    fn add_noise(&self, original: &[f32], noise: &[f32], timestep: usize) -> Vec<f32>;
 }
 
 /// DDPM (Denoising Diffusion Probabilistic Models) scheduler.

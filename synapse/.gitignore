@@ -1,6 +1,7 @@
 # Build artifacts
 target/
 zig/.zig-cache/
+zig/.zig-global-cache/
 
 # WASM build output
 synapse-wasm/pkg/

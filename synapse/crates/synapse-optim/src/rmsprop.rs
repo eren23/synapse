@@ -129,11 +129,7 @@ impl RMSProp {
                 .map(|(&sq, &ga)| (sq - ga * ga).sqrt() + eps)
                 .collect()
         } else {
-            state
-                .square_avg
-                .iter()
-                .map(|&sq| sq.sqrt() + eps)
-                .collect()
+            state.square_avg.iter().map(|&sq| sq.sqrt() + eps).collect()
         };
 
         if momentum > 0.0 {
@@ -170,7 +166,16 @@ impl Optimizer for RMSProp {
 
         for i in 0..params.len() {
             if !grouped.contains(&i) {
-                self.step_param(i, &mut params[i], lr, alpha, eps, weight_decay, momentum, centered);
+                self.step_param(
+                    i,
+                    &mut params[i],
+                    lr,
+                    alpha,
+                    eps,
+                    weight_decay,
+                    momentum,
+                    centered,
+                );
             }
         }
 
@@ -226,9 +231,7 @@ impl Optimizer for RMSProp {
                 .get(&format!("rmsprop.{}.square_avg", idx))
                 .cloned()
                 .unwrap_or_default();
-            let grad_avg = state
-                .get(&format!("rmsprop.{}.grad_avg", idx))
-                .cloned();
+            let grad_avg = state.get(&format!("rmsprop.{}.grad_avg", idx)).cloned();
             let momentum_buffer = state
                 .get(&format!("rmsprop.{}.momentum_buffer", idx))
                 .cloned();

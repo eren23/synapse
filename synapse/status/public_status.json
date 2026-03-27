@@ -1,55 +1,104 @@
 {
-  "manifest_version": 1,
-  "last_verified": "2026-03-26",
+  "manifest_version": 2,
+  "last_verified": "2026-03-27",
   "positioning": {
     "headline": "Edge-native inference stack for local ML across native and browser targets.",
     "native_runtime": "Native builds use Rust orchestration with Zig SIMD kernels and optional Metal acceleration.",
     "wasm_runtime": "Browser builds use a pure-Rust WASM runtime for portability and client-side demos."
   },
   "benchmarks": {
-    "device": "Apple M5",
+    "device": "Apple Silicon",
     "model": "Qwen3-0.6B (596M params)",
     "baseline_decode_tps": 2.3,
     "configs": [
       {
-        "id": "f32_cpu",
+        "id": "qwen3_f32_cpu_hello",
+        "family": "Qwen3",
         "label": "f32 CPU",
-        "prefill_tps": 18.0,
-        "decode_tps": 6.6,
-        "support": "stable",
-        "notes": "CPU SIMD path"
+        "prompt_id": "hello",
+        "prefill_tps": 11.0,
+        "decode_tps": 7.3,
+        "evidence": "measured_local",
+        "runtime_summary": {
+          "family": "qwen3",
+          "backend": "cpu_simd",
+          "quantized": false,
+          "prefill": "cpu_cached",
+          "prefill_strategy": "cpu_cached_prefill",
+          "decode": "cpu_cached",
+          "decode_strategy": "cpu_cached_decode"
+        },
+        "notes": "Runtime backend=cpu_simd; prompt=hello"
       },
       {
-        "id": "int8_cpu",
+        "id": "qwen3_int8_cpu_hello",
+        "family": "Qwen3",
         "label": "INT8 CPU",
-        "prefill_tps": 31.0,
-        "decode_tps": 14.6,
-        "support": "stable",
-        "notes": "Quantized CPU decode"
+        "prompt_id": "hello",
+        "prefill_tps": 23.0,
+        "decode_tps": 27.3,
+        "evidence": "measured_local",
+        "runtime_summary": {
+          "family": "qwen3",
+          "backend": "cpu_simd",
+          "quantized": true,
+          "prefill": "quantized_cpu",
+          "prefill_strategy": "quantized_prefill_cpu",
+          "decode": "quantized_cpu",
+          "decode_strategy": "quantized_cached_decode_cpu"
+        },
+        "notes": "Runtime backend=cpu_simd; prompt=hello"
       },
       {
-        "id": "metal_f32",
-        "label": "Metal f32",
-        "prefill_tps": 19.0,
-        "decode_tps": 8.0,
-        "support": "beta",
-        "notes": "Metal-enabled native build"
+        "id": "llama_3_2_f32_cpu_hello",
+        "family": "LLaMA 3.2",
+        "label": "f32 CPU",
+        "prompt_id": "hello",
+        "prefill_tps": 1.0,
+        "decode_tps": 2.1,
+        "evidence": "measured_local",
+        "runtime_summary": {
+          "family": "generic",
+          "backend": "cpu_simd",
+          "quantized": false,
+          "prefill": "cpu_cached",
+          "prefill_strategy": "cpu_cached_prefill",
+          "decode": "cpu_cached",
+          "decode_strategy": "cpu_cached_decode"
+        },
+        "notes": "Runtime backend=cpu_simd; prompt=hello"
       },
       {
-        "id": "metal_int8_gpu",
-        "label": "Metal INT8 GPU",
-        "prefill_tps": 30.0,
-        "decode_tps": 14.5,
-        "support": "beta",
-        "notes": "GPU-resident decode on Apple Silicon"
+        "id": "llama_3_2_int8_cpu_hello",
+        "family": "LLaMA 3.2",
+        "label": "INT8 CPU",
+        "prompt_id": "hello",
+        "prefill_tps": 8.0,
+        "decode_tps": 9.7,
+        "evidence": "measured_local",
+        "runtime_summary": {
+          "family": "generic",
+          "backend": "cpu_simd",
+          "quantized": true,
+          "prefill": "quantized_cpu",
+          "prefill_strategy": "quantized_prefill_cpu",
+          "decode": "quantized_cpu",
+          "decode_strategy": "quantized_cached_decode_cpu"
+        },
+        "notes": "Runtime backend=cpu_simd; prompt=hello"
       }
     ],
     "reference": {
       "label": "llama.cpp Q4_K_M",
+      "family": "Reference",
+      "prompt_id": "reference_only",
       "prefill_tps": 5518.0,
       "decode_tps": 173.0,
-      "notes": "Reference only, not a parity claim"
-    }
+      "notes": "Reference only, not a parity claim",
+      "evidence": "reference"
+    },
+    "scope": "Tiered local matrix on this machine",
+    "matrix_artifact": "status/benchmark_matrix.json"
   },
   "runtime_profiles": [
     {
@@ -115,31 +164,36 @@
       "id": "qwen3",
       "label": "Qwen3",
       "status": "validated",
-      "notes": "Logits verified"
+      "evidence": "benchmarked_local",
+      "notes": "Real checkpoint benchmarked locally; logits verified"
     },
     {
       "id": "llama_3_2",
       "label": "LLaMA 3.2",
-      "status": "config_ready",
-      "notes": "Config and weight mapper path present"
+      "status": "benchmarked_local",
+      "evidence": "benchmarked_local",
+      "notes": "Real checkpoint benchmarked locally on this machine"
     },
     {
       "id": "mistral_7b",
       "label": "Mistral 7B",
       "status": "config_ready",
-      "notes": "Sliding-window config path present"
+      "evidence": "synthetic_validated",
+      "notes": "Sliding-window config path present; synthetic correctness tests pass, but the scaled synthetic throughput benchmark is currently failing"
     },
     {
       "id": "phi_3",
       "label": "Phi-3",
-      "status": "config_ready",
-      "notes": "Weight-mapper support in progress"
+      "status": "in_progress",
+      "evidence": "synthetic_validated",
+      "notes": "Weight-mapper support in progress; synthetic validation passing"
     },
     {
       "id": "gemma",
       "label": "Gemma",
       "status": "config_ready",
-      "notes": "Same core transformer path"
+      "evidence": "synthetic_validated",
+      "notes": "Same core transformer path; synthetic validation passing"
     }
   ],
   "features": [

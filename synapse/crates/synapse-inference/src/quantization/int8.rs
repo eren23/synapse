@@ -1,15 +1,18 @@
 use std::mem;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use crate::config::position::RoPEStyle;
 use crate::config::ModelConfig;
 use crate::kv_cache::{KVCache, KVCacheLayer};
 use crate::model::causal_lm::ModelOutput;
+use crate::model::CausalLM;
 use crate::ops::activation::{gelu, silu, softmax_slice};
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::{apply_headwise_rmsnorm, apply_norm};
 use crate::ops::rope::apply_rope_inplace;
 use crate::ops::vector::{add_vecs, add_vecs_inplace};
-use crate::model::CausalLM;
 use crate::quantization::QuantizedLinear;
 use crate::registry::{
     create_attention, create_ffn, create_norm, AttentionVariant, FFNVariant, NormVariant,
@@ -56,6 +59,16 @@ pub struct QuantizedCausalLM {
     pub lm_head_quantized: Option<QuantizedLinear>,
     pub rope_cos: Vec<f32>,
     pub rope_sin: Vec<f32>,
+}
+
+fn decode_profile_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("SYNAPSE_PROFILE_INT8_DECODE").is_some())
+}
+
+fn should_emit_decode_profile() -> bool {
+    static EMITTED: AtomicBool = AtomicBool::new(false);
+    decode_profile_enabled() && !EMITTED.swap(true, Ordering::Relaxed)
 }
 
 /// Quantize all Linear layers in a CausalLM to weight-only INT8.
@@ -112,12 +125,17 @@ pub fn quantize_model(model: &CausalLM) -> QuantizedCausalLM {
         .collect();
 
     // Quantize LM head if it exists (not tied to embeddings)
-    let lm_head_quantized = model.lm_head_weight.as_ref().map(|w| {
-        QuantizedLinear::from_f32(w, cfg.architecture.vocab_size, h)
-    });
+    let lm_head_quantized = model
+        .lm_head_weight
+        .as_ref()
+        .map(|w| QuantizedLinear::from_f32(w, cfg.architecture.vocab_size, h));
     // For tied embeddings, quantize from embed_tokens
     let lm_head_quantized = lm_head_quantized.or_else(|| {
-        Some(QuantizedLinear::from_f32(&model.embed_tokens, cfg.architecture.vocab_size, h))
+        Some(QuantizedLinear::from_f32(
+            &model.embed_tokens,
+            cfg.architecture.vocab_size,
+            h,
+        ))
     });
 
     QuantizedCausalLM {
@@ -206,17 +224,59 @@ impl QuantizedDecoderLayer {
         rope_cos: &[f32],
         rope_sin: &[f32],
     ) -> Vec<f32> {
+        self.forward_one_impl(hidden, cache_layer, pos, rope_cos, rope_sin, None)
+    }
+
+    fn forward_one_profiled(
+        &self,
+        hidden: &[f32],
+        cache_layer: &mut KVCacheLayer,
+        pos: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+        layer_idx: usize,
+    ) -> Vec<f32> {
+        self.forward_one_impl(hidden, cache_layer, pos, rope_cos, rope_sin, Some(layer_idx))
+    }
+
+    fn forward_one_impl(
+        &self,
+        hidden: &[f32],
+        cache_layer: &mut KVCacheLayer,
+        pos: usize,
+        rope_cos: &[f32],
+        rope_sin: &[f32],
+        profile_layer_idx: Option<usize>,
+    ) -> Vec<f32> {
         let h = self.hidden_size;
 
         // 1. Attention sub-layer
+        let attn_norm_start = profile_layer_idx.map(|_| Instant::now());
         let normed = apply_norm(hidden, &self.attn_norm_weight, &*self.attn_norm, h);
+        let attn_norm_elapsed = attn_norm_start.map(|start| start.elapsed());
+        let attention_start = profile_layer_idx.map(|_| Instant::now());
         let attn_out = self.apply_attention_cached(&normed, cache_layer, pos, rope_cos, rope_sin);
+        let attention_elapsed = attention_start.map(|start| start.elapsed());
         let mut residual = add_vecs(hidden, &attn_out);
 
         // 2. FFN sub-layer
+        let ffn_norm_start = profile_layer_idx.map(|_| Instant::now());
         let normed = apply_norm(&residual, &self.ffn_norm_weight, &*self.ffn_norm, h);
+        let ffn_norm_elapsed = ffn_norm_start.map(|start| start.elapsed());
+        let ffn_start = profile_layer_idx.map(|_| Instant::now());
         let ffn_out = self.apply_ffn(&normed);
+        let ffn_elapsed = ffn_start.map(|start| start.elapsed());
         add_vecs_inplace(&mut residual, &ffn_out);
+
+        if let Some(layer_idx) = profile_layer_idx {
+            eprintln!(
+                "INT8 decode layer[{layer_idx:02}]: attn_norm={:.1}ms attention={:.1}ms ffn_norm={:.1}ms ffn={:.1}ms",
+                attn_norm_elapsed.unwrap().as_secs_f64() * 1000.0,
+                attention_elapsed.unwrap().as_secs_f64() * 1000.0,
+                ffn_norm_elapsed.unwrap().as_secs_f64() * 1000.0,
+                ffn_elapsed.unwrap().as_secs_f64() * 1000.0,
+            );
+        }
 
         residual
     }
@@ -238,9 +298,8 @@ impl QuantizedDecoderLayer {
 
         // Quantize x once and share across Q/K/V projections.
         let k_dim = self.hidden_size;
-        let (x_int8, scales_x) =
-            synapse_core::quantize_per_channel_int8(x, seq_len, k_dim)
-                .expect("quantize_per_channel_int8 failed for attention input");
+        let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, seq_len, k_dim)
+            .expect("quantize_per_channel_int8 failed for attention input");
         let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
         Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
         let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
@@ -250,10 +309,36 @@ impl QuantizedDecoderLayer {
 
         // Apply headwise Q/K norms, then RoPE
         let eps = self.attn_norm.eps() as f32;
-        let mut q = apply_headwise_rmsnorm(&q, &self.q_norm_weight, seq_len, num_heads, head_dim, eps);
-        let mut k = apply_headwise_rmsnorm(&k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim, eps);
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
+        let mut q =
+            apply_headwise_rmsnorm(&q, &self.q_norm_weight, seq_len, num_heads, head_dim, eps);
+        let mut k = apply_headwise_rmsnorm(
+            &k,
+            &self.k_norm_weight,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            eps,
+        );
+        apply_rope_inplace(
+            &mut q,
+            rope_cos,
+            rope_sin,
+            seq_len,
+            num_heads,
+            head_dim,
+            0,
+            self.rope_style,
+        );
+        apply_rope_inplace(
+            &mut k,
+            rope_cos,
+            rope_sin,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            0,
+            self.rope_style,
+        );
 
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
 
@@ -303,9 +388,8 @@ impl QuantizedDecoderLayer {
 
         // INT8 Q/K/V projections (quantize input once, share across projections)
         let k_in = self.hidden_size;
-        let (x_int8, scales_x) =
-            synapse_core::quantize_per_channel_int8(x, seq_len, k_in)
-                .expect("quantize failed for prefill attention");
+        let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, seq_len, k_in)
+            .expect("quantize failed for prefill attention");
         let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, seq_len);
         Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
         let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, seq_len);
@@ -314,10 +398,19 @@ impl QuantizedDecoderLayer {
         Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
 
         let attn_out = crate::ops::attention::cached_attention_prefill(
-            &q, &k, &v,
-            seq_len, num_heads, num_kv_heads, head_dim,
-            cache_layer, rope_cos, rope_sin, self.rope_style,
-            &self.q_norm_weight, &self.k_norm_weight,
+            &q,
+            &k,
+            &v,
+            seq_len,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            cache_layer,
+            rope_cos,
+            rope_sin,
+            self.rope_style,
+            &self.q_norm_weight,
+            &self.k_norm_weight,
             self.attn_norm.eps() as f32,
         );
 
@@ -338,26 +431,38 @@ impl QuantizedDecoderLayer {
         let head_dim = self.attention.head_dim();
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
+        let tokens = 1;
 
-        // INT8 Q/K/V projections for single token
-        let mut q = self.w_q.forward(x, 1);
-        Self::add_bias(&mut q, &self.q_bias, 1, q_dim);
-        let mut k = self.w_k.forward(x, 1);
-        Self::add_bias(&mut k, &self.k_bias, 1, kv_dim);
-        let mut v = self.w_v.forward(x, 1);
-        Self::add_bias(&mut v, &self.v_bias, 1, kv_dim);
+        // Quantize the single-token input once and share it across Q/K/V.
+        let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, tokens, self.hidden_size)
+            .expect("quantize failed for cached attention input");
+        let mut q = self.w_q.forward_pre_quantized(&x_int8, &scales_x, tokens);
+        Self::add_bias(&mut q, &self.q_bias, tokens, q_dim);
+        let mut k = self.w_k.forward_pre_quantized(&x_int8, &scales_x, tokens);
+        Self::add_bias(&mut k, &self.k_bias, tokens, kv_dim);
+        let mut v = self.w_v.forward_pre_quantized(&x_int8, &scales_x, tokens);
+        Self::add_bias(&mut v, &self.v_bias, tokens, kv_dim);
 
         let attn_out = crate::ops::attention::cached_attention_decode(
-            &q, &k, &v,
-            num_heads, num_kv_heads, head_dim,
-            cache_layer, pos, rope_cos, rope_sin, self.rope_style,
-            &self.q_norm_weight, &self.k_norm_weight,
+            &q,
+            &k,
+            &v,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            cache_layer,
+            pos,
+            rope_cos,
+            rope_sin,
+            self.rope_style,
+            &self.q_norm_weight,
+            &self.k_norm_weight,
             self.attn_norm.eps() as f32,
             self.attention.window_size(),
         );
 
         // INT8 output projection
-        self.w_o.forward(&attn_out, 1)
+        self.w_o.forward(&attn_out, tokens)
     }
 
     fn apply_ffn(&self, x: &[f32]) -> Vec<f32> {
@@ -368,11 +473,14 @@ impl QuantizedDecoderLayer {
         match self.ffn.name() {
             "SwiGLU" => {
                 // Quantize x once and share across gate/up projections.
-                let (x_int8, scales_x) =
-                    synapse_core::quantize_per_channel_int8(x, tokens, h)
-                        .expect("quantize_per_channel_int8 failed for SwiGLU input");
-                let gate = self.ffn_gate.forward_pre_quantized(&x_int8, &scales_x, tokens);
-                let up = self.ffn_up.forward_pre_quantized(&x_int8, &scales_x, tokens);
+                let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, tokens, h)
+                    .expect("quantize_per_channel_int8 failed for SwiGLU input");
+                let gate = self
+                    .ffn_gate
+                    .forward_pre_quantized(&x_int8, &scales_x, tokens);
+                let up = self
+                    .ffn_up
+                    .forward_pre_quantized(&x_int8, &scales_x, tokens);
                 let mut hidden = vec![0.0f32; tokens * inter];
                 for i in 0..hidden.len() {
                     hidden[i] = silu(gate[i]) * up[i];
@@ -381,11 +489,14 @@ impl QuantizedDecoderLayer {
             }
             "GeGLU" => {
                 // Quantize x once and share across gate/up projections.
-                let (x_int8, scales_x) =
-                    synapse_core::quantize_per_channel_int8(x, tokens, h)
-                        .expect("quantize_per_channel_int8 failed for GeGLU input");
-                let gate = self.ffn_gate.forward_pre_quantized(&x_int8, &scales_x, tokens);
-                let up = self.ffn_up.forward_pre_quantized(&x_int8, &scales_x, tokens);
+                let (x_int8, scales_x) = synapse_core::quantize_per_channel_int8(x, tokens, h)
+                    .expect("quantize_per_channel_int8 failed for GeGLU input");
+                let gate = self
+                    .ffn_gate
+                    .forward_pre_quantized(&x_int8, &scales_x, tokens);
+                let up = self
+                    .ffn_up
+                    .forward_pre_quantized(&x_int8, &scales_x, tokens);
                 let mut hidden = vec![0.0f32; tokens * inter];
                 for i in 0..hidden.len() {
                     hidden[i] = gelu(gate[i]) * up[i];
@@ -477,7 +588,11 @@ impl QuantizedCausalLM {
         // 2. Quantized decoder layers with cache populate
         for (i, layer) in self.layers.iter().enumerate() {
             x = layer.forward_prefill_batched(
-                &x, seq_len, cache.layer_mut(i), &self.rope_cos, &self.rope_sin,
+                &x,
+                seq_len,
+                cache.layer_mut(i),
+                &self.rope_cos,
+                &self.rope_sin,
             );
         }
 
@@ -486,8 +601,12 @@ impl QuantizedCausalLM {
         let normed = apply_norm(last_hidden, &self.final_norm_weight, &*self.final_norm, h);
 
         // 4. LM head projection → [1, vocab]
-        let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
-        let logits = matmul_t(&normed, lm_weight, 1, h, vocab);
+        let logits = if let Some(ref lm_q) = self.lm_head_quantized {
+            lm_q.forward(&normed, 1)
+        } else {
+            let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
+            matmul_t(&normed, lm_weight, 1, h, vocab)
+        };
 
         ModelOutput {
             logits,
@@ -500,25 +619,68 @@ impl QuantizedCausalLM {
         let h = self.config.architecture.hidden_size;
         let vocab = self.config.architecture.vocab_size;
         let pos = cache.current_len().expect("failed to query cache length");
+        let emit_profile = should_emit_decode_profile();
 
         // 1. Embedding lookup → [1, h]
+        let embed_start = if emit_profile {
+            Some(Instant::now())
+        } else {
+            None
+        };
         let mut x = vec![0.0f32; h];
         let id = token as usize;
         if id < vocab {
             x.copy_from_slice(&self.embed_tokens[id * h..(id + 1) * h]);
         }
+        let embed_elapsed = embed_start.map(|start| start.elapsed());
 
         // 2. Quantized decoder layers with KV cache
+        let layers_start = if emit_profile {
+            Some(Instant::now())
+        } else {
+            None
+        };
         for (i, layer) in self.layers.iter().enumerate() {
-            x = layer.forward_one(&x, cache.layer_mut(i), pos, &self.rope_cos, &self.rope_sin);
+            x = if emit_profile {
+                layer.forward_one_profiled(&x, cache.layer_mut(i), pos, &self.rope_cos, &self.rope_sin, i)
+            } else {
+                layer.forward_one(&x, cache.layer_mut(i), pos, &self.rope_cos, &self.rope_sin)
+            };
         }
+        let layers_elapsed = layers_start.map(|start| start.elapsed());
 
         // 3. Final norm
+        let norm_start = if emit_profile {
+            Some(Instant::now())
+        } else {
+            None
+        };
         x = apply_norm(&x, &self.final_norm_weight, &*self.final_norm, h);
+        let norm_elapsed = norm_start.map(|start| start.elapsed());
 
         // 4. LM head projection → [1, vocab]
-        let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
-        let logits = matmul_t(&x, lm_weight, 1, h, vocab);
+        let lm_head_start = if emit_profile {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        let logits = if let Some(ref lm_q) = self.lm_head_quantized {
+            lm_q.forward(&x, 1)
+        } else {
+            let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
+            matmul_t(&x, lm_weight, 1, h, vocab)
+        };
+        let lm_head_elapsed = lm_head_start.map(|start| start.elapsed());
+
+        if emit_profile {
+            eprintln!(
+                "INT8 decode token summary: embed={:.1}ms layers={:.1}ms final_norm={:.1}ms lm_head={:.1}ms",
+                embed_elapsed.unwrap().as_secs_f64() * 1000.0,
+                layers_elapsed.unwrap().as_secs_f64() * 1000.0,
+                norm_elapsed.unwrap().as_secs_f64() * 1000.0,
+                lm_head_elapsed.unwrap().as_secs_f64() * 1000.0,
+            );
+        }
 
         ModelOutput {
             logits,
@@ -584,9 +746,201 @@ pub fn f32_model_memory_bytes(model: &CausalLM) -> usize {
         })
         .sum();
     let norm = model.final_norm_weight.len() * sz;
-    let lm_head = model
-        .lm_head_weight
-        .as_ref()
-        .map_or(0, |w| w.len() * sz);
+    let lm_head = model.lm_head_weight.as_ref().map_or(0, |w| w.len() * sz);
     embed + layers + norm + lm_head
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    use crate::config::*;
+    use crate::model::ModelBuilder;
+    use crate::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
+
+    fn test_config() -> ModelConfig {
+        ModelConfig {
+            name: "QuantizedCausalLMTest".to_string(),
+            architecture: ArchitectureConfig {
+                hidden_size: 64,
+                num_layers: 4,
+                vocab_size: 256,
+                max_sequence_length: 64,
+                tie_word_embeddings: true,
+            },
+            attention: AttentionConfig::GQA {
+                num_heads: 4,
+                num_kv_heads: 2,
+                head_dim: 16,
+            },
+            norm: NormConfig::RMSNorm { eps: 1e-6 },
+            ffn: FFNConfig::SwiGLU {
+                intermediate_size: 128,
+            },
+            position: PositionConfig::RoPE {
+                base: 10000.0,
+                max_position_embeddings: 64,
+                style: Default::default(),
+                scaling: Default::default(),
+            },
+            quantization: QuantConfig::F32,
+        }
+    }
+
+    fn gen_weights(len: usize, seed: u32) -> Vec<f32> {
+        (0..len)
+            .map(|i| {
+                let x = ((i as u32).wrapping_mul(2654435761).wrapping_add(seed)) as f32;
+                (x / u32::MAX as f32) * 0.36 - 0.18
+            })
+            .collect()
+    }
+
+    fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
+        let h = cfg.architecture.hidden_size;
+        let vocab = cfg.architecture.vocab_size;
+        let q_dim = cfg.attention.num_heads() * cfg.attention.head_dim();
+        let kv_dim = cfg.attention.num_kv_heads() * cfg.attention.head_dim();
+        let inter = cfg.ffn.intermediate_size();
+        let nl = cfg.architecture.num_layers;
+
+        let fake = |shape: Vec<usize>, seed: u32| -> RawTensor {
+            let n: usize = shape.iter().product();
+            RawTensor {
+                data: AlignedBuffer::from_slice(&gen_weights(n, seed)),
+                shape,
+            }
+        };
+
+        let mut w = HashMap::new();
+        w.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h], 1));
+        for i in 0..nl {
+            let s = (i as u32 + 1) * 100;
+            w.insert(
+                format!("model.layers.{i}.input_layernorm.weight"),
+                fake(vec![h], s),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.q_proj.weight"),
+                fake(vec![q_dim, h], s + 1),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_proj.weight"),
+                fake(vec![kv_dim, h], s + 2),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.v_proj.weight"),
+                fake(vec![kv_dim, h], s + 3),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.o_proj.weight"),
+                fake(vec![h, q_dim], s + 4),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.q_norm.weight"),
+                fake(vec![cfg.attention.head_dim()], s + 5),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_norm.weight"),
+                fake(vec![cfg.attention.head_dim()], s + 6),
+            );
+            w.insert(
+                format!("model.layers.{i}.post_attention_layernorm.weight"),
+                fake(vec![h], s + 7),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.gate_proj.weight"),
+                fake(vec![inter, h], s + 8),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.up_proj.weight"),
+                fake(vec![inter, h], s + 9),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.down_proj.weight"),
+                fake(vec![h, inter], s + 10),
+            );
+        }
+        w.insert("model.norm.weight".into(), fake(vec![h], 9999));
+        w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
+        w
+    }
+
+    fn build_quantized_test_model() -> QuantizedCausalLM {
+        let cfg = test_config();
+        let mut model = ModelBuilder::from_config(&cfg);
+        let mapper = WeightMapper::qwen3();
+        let weights = generate_fake_hf_weights(&cfg);
+        let result = model.load_weights(weights, &mapper).unwrap();
+        assert!(result.missing.is_empty());
+        quantize_model(&model)
+    }
+
+    fn make_cache(cfg: &ModelConfig, max_seq: usize) -> KVCache {
+        KVCache::new(
+            cfg.architecture.num_layers,
+            max_seq,
+            cfg.attention.num_kv_heads(),
+            cfg.attention.head_dim(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn quantized_prefill_matches_quantized_forward_last_logits() {
+        let model = build_quantized_test_model();
+        let prompt = vec![1u32, 2, 3, 4];
+        let vocab = model.config.architecture.vocab_size;
+
+        let full_out = model.forward(&prompt);
+        let full_last_logits = &full_out.logits[(prompt.len() - 1) * vocab..prompt.len() * vocab];
+
+        let mut cache = make_cache(&model.config, prompt.len() + 1);
+        let prefill_out = model.forward_prefill(&prompt, &mut cache);
+
+        assert_eq!(prefill_out.logits.len(), vocab);
+        for (i, (&a, &b)) in prefill_out
+            .logits
+            .iter()
+            .zip(full_last_logits.iter())
+            .enumerate()
+        {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "Quantized prefill mismatch at logit {i}: cached={a}, full={b}"
+            );
+        }
+    }
+
+    #[test]
+    fn quantized_prefill_then_one_matches_quantized_forward_last_logits() {
+        let model = build_quantized_test_model();
+        let prompt = vec![1u32, 2, 3];
+        let next_token = 42u32;
+        let vocab = model.config.architecture.vocab_size;
+
+        let mut cache = make_cache(&model.config, prompt.len() + 2);
+        let _ = model.forward_prefill(&prompt, &mut cache);
+        let one_out = model.forward_one(next_token, &mut cache);
+
+        let mut full_tokens = prompt.clone();
+        full_tokens.push(next_token);
+        let full_out = model.forward(&full_tokens);
+        let full_last_logits =
+            &full_out.logits[(full_tokens.len() - 1) * vocab..full_tokens.len() * vocab];
+
+        assert_eq!(one_out.logits.len(), vocab);
+        for (i, (&a, &b)) in one_out
+            .logits
+            .iter()
+            .zip(full_last_logits.iter())
+            .enumerate()
+        {
+            assert!(
+                (a - b).abs() < 1e-5,
+                "Quantized decode mismatch at logit {i}: cached={a}, full={b}"
+            );
+        }
+    }
 }

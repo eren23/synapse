@@ -113,7 +113,10 @@ impl<'a> GenerationPipeline<'a> {
         Self {
             model,
             backend: Some(backend),
-            gpu_resident: Some(GpuResidentRefs { model_bufs, metal_backend }),
+            gpu_resident: Some(GpuResidentRefs {
+                model_bufs,
+                metal_backend,
+            }),
         }
     }
 
@@ -137,9 +140,7 @@ impl<'a> GenerationPipeline<'a> {
             conditions.push(StopCondition::EosToken(eos));
         }
         if !config.stop_sequences.is_empty() {
-            conditions.push(StopCondition::StopSequences(
-                config.stop_sequences.clone(),
-            ));
+            conditions.push(StopCondition::StopSequences(config.stop_sequences.clone()));
         }
         let stop_checker = StopChecker::new(conditions);
 
@@ -193,15 +194,19 @@ impl<'a> GenerationPipeline<'a> {
         let mut generated_tokens: Vec<u32> = Vec::new();
 
         // ── Prefill (populate KV-cache for all prompt tokens) ────────
-        let prefill_output = self.model.forward_prefill(prompt_tokens, cache);
+        let prefill_output = {
+            #[cfg(feature = "metal")]
+            if let Some(backend) = self.backend {
+                self.model
+                    .forward_prefill_gpu(prompt_tokens, cache, backend)
+            } else {
+                self.model.forward_prefill(prompt_tokens, cache)
+            }
+            #[cfg(not(feature = "metal"))]
+            self.model.forward_prefill(prompt_tokens, cache)
+        };
         let prefill_elapsed = start.elapsed();
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
-
-        // If GPU-resident path is available, copy the CPU KV cache to GPU
-        #[cfg(feature = "metal")]
-        if let Some(ref gr) = self.gpu_resident {
-            gr.model_bufs.borrow_mut().kv_cache.populate_from_cpu_cache(cache);
-        }
 
         // Sample first token
         let first_token = self.sample_token(&mut logits_buf, &generated_tokens, config, rng);
@@ -350,7 +355,9 @@ impl<'a> GenerationPipeline<'a> {
                     generated_tokens.len(),
                 )
             {
-                let bonus_out = self.model.forward_one(*generated_tokens.last().unwrap(), cache);
+                let bonus_out = self
+                    .model
+                    .forward_one(*generated_tokens.last().unwrap(), cache);
                 logits_buf.clear();
                 logits_buf.extend_from_slice(&bonus_out.logits);
                 let bonus = self.sample_token(&mut logits_buf, &generated_tokens, config, rng);
@@ -409,8 +416,7 @@ impl<'a> GenerationPipeline<'a> {
         ) {
             let output = self.model.forward(&all_tokens);
             let seq_len = output.shape[1];
-            let last_logits =
-                &output.logits[(seq_len - 1) * vocab_size..seq_len * vocab_size];
+            let last_logits = &output.logits[(seq_len - 1) * vocab_size..seq_len * vocab_size];
             logits_buf.clear();
             logits_buf.extend_from_slice(last_logits);
 
@@ -518,9 +524,7 @@ mod tests {
         let fake = |shape: Vec<usize>| -> RawTensor {
             let n: usize = shape.iter().product();
             RawTensor {
-                data: (0..n)
-                    .map(|i| (i as f32 * 0.001) % 0.1 + 0.01)
-                    .collect(),
+                data: (0..n).map(|i| (i as f32 * 0.001) % 0.1 + 0.01).collect(),
                 shape,
             }
         };
@@ -667,7 +671,10 @@ mod tests {
 
         let streamed_tokens = streamed.lock().unwrap();
         let generated = &output.token_ids[3..]; // skip prompt
-        assert_eq!(&*streamed_tokens, generated, "Streamed tokens must match generated tokens");
+        assert_eq!(
+            &*streamed_tokens, generated,
+            "Streamed tokens must match generated tokens"
+        );
         assert_eq!(streamed_tokens.len(), 5);
     }
 
@@ -684,11 +691,14 @@ mod tests {
         let full_output = model.forward(&prompt);
         let vocab = full_output.shape[2];
         let seq_len = full_output.shape[1];
-        let full_last_logits =
-            &full_output.logits[(seq_len - 1) * vocab..seq_len * vocab];
+        let full_last_logits = &full_output.logits[(seq_len - 1) * vocab..seq_len * vocab];
 
         assert_eq!(prefill_logits.len(), full_last_logits.len());
-        for (i, (&a, &b)) in prefill_logits.iter().zip(full_last_logits.iter()).enumerate() {
+        for (i, (&a, &b)) in prefill_logits
+            .iter()
+            .zip(full_last_logits.iter())
+            .enumerate()
+        {
             assert!(
                 (a - b).abs() < 1e-6,
                 "Logit {i} mismatch: prefill={a}, full={b}"
@@ -708,7 +718,10 @@ mod tests {
         };
         let output = pipeline.generate(&prompt, config, None);
 
-        assert!(output.elapsed.as_nanos() > 0, "Elapsed time should be positive");
+        assert!(
+            output.elapsed.as_nanos() > 0,
+            "Elapsed time should be positive"
+        );
         assert!(output.tokens_per_sec > 0.0, "Tokens/sec should be positive");
     }
 

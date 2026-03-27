@@ -63,7 +63,11 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(MseLossBackward { input_ids: vec![pred, target], pred_data, target_data }),
+            Box::new(MseLossBackward {
+                input_ids: vec![pred, target],
+                pred_data,
+                target_data,
+            }),
             &[pred, target],
             output,
         )

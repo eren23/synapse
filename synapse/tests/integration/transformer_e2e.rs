@@ -12,7 +12,7 @@ use synapse_nn::{
     TransformerEncoderConfig,
 };
 use synapse_optim::{Adam, Optimizer, Param};
-use synapse_train::{Trainer, TrainerConfig, TrainLoop};
+use synapse_train::{TrainLoop, Trainer, TrainerConfig};
 
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -171,11 +171,7 @@ impl TrainLoop for TransformerClassifier {
 /// Class 1: tokens in [120, 180) (92% signal, 8% random)
 /// Class 2: tokens in [250, 330) (92% signal, 8% random)
 /// Class 3: tokens in [380, 460) (92% signal, 8% random)
-fn generate_data(
-    n_samples: usize,
-    batch_size: usize,
-    seed: u64,
-) -> Vec<(Tensor, Tensor)> {
+fn generate_data(n_samples: usize, batch_size: usize, seed: u64) -> Vec<(Tensor, Tensor)> {
     let mut rng = StdRng::seed_from_u64(seed);
     let n_batches = n_samples / batch_size;
 

@@ -58,11 +58,7 @@ impl AlignedBuffer {
         }
         let mut buf = Self::new_zeroed(count);
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                buf.as_mut_ptr() as *mut u8,
-                bytes.len(),
-            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr() as *mut u8, bytes.len());
         }
         buf
     }

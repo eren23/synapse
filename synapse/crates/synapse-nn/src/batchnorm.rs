@@ -10,10 +10,10 @@ use crate::module::Module;
 /// Normalizes over the batch (and spatial) dimensions, per-channel.
 pub struct BatchNorm1d {
     pub num_features: usize,
-    pub gamma: Tensor,          // scale, shape [C]
-    pub beta: Tensor,           // shift, shape [C]
-    pub running_mean: Tensor,   // [C]
-    pub running_var: Tensor,    // [C]
+    pub gamma: Tensor,        // scale, shape [C]
+    pub beta: Tensor,         // shift, shape [C]
+    pub running_mean: Tensor, // [C]
+    pub running_var: Tensor,  // [C]
     pub eps: f32,
     pub momentum: f32,
     training: bool,
@@ -114,10 +114,10 @@ impl Module for BatchNorm1d {
 /// Normalizes over N, H, W dimensions per channel.
 pub struct BatchNorm2d {
     pub num_features: usize,
-    pub gamma: Tensor,          // [C]
-    pub beta: Tensor,           // [C]
-    pub running_mean: Tensor,   // [C]
-    pub running_var: Tensor,    // [C]
+    pub gamma: Tensor,        // [C]
+    pub beta: Tensor,         // [C]
+    pub running_mean: Tensor, // [C]
+    pub running_var: Tensor,  // [C]
     pub eps: f32,
     pub momentum: f32,
     training: bool,
@@ -141,7 +141,11 @@ impl BatchNorm2d {
 impl Module for BatchNorm2d {
     /// Forward: input [N, C, H, W] -> same shape
     fn forward(&self, input: &Tensor) -> Tensor {
-        assert_eq!(input.shape.len(), 4, "BatchNorm2d expects 4D input [N, C, H, W]");
+        assert_eq!(
+            input.shape.len(),
+            4,
+            "BatchNorm2d expects 4D input [N, C, H, W]"
+        );
         let batch = input.shape[0];
         let c = input.shape[1];
         let h = input.shape[2];

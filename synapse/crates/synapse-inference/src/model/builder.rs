@@ -1,5 +1,5 @@
-use crate::config::{ModelConfig, PositionConfig};
 use crate::config::position::{RoPEScaling, RoPEStyle};
+use crate::config::{ModelConfig, PositionConfig};
 use crate::registry::{create_attention, create_ffn, create_norm};
 use crate::weight_loading::AlignedBuffer;
 
@@ -25,7 +25,10 @@ impl ModelBuilder {
 
         // Models that use per-head Q/K norms (e.g. Qwen3).
         // LLaMA and Mistral do not have per-head norms.
-        let has_head_norms = !matches!(config.name.as_str(), "llama" | "mistral" | "phi" | "phi3" | "gemma" | "gemma2" | "qwen2" | "qwen2.5" | "vit");
+        let has_head_norms = !matches!(
+            config.name.as_str(),
+            "llama" | "mistral" | "phi" | "phi3" | "gemma" | "gemma2" | "qwen2" | "qwen2.5" | "vit"
+        );
 
         let rope_style = match &config.position {
             PositionConfig::RoPE { style, .. } => *style,
@@ -84,17 +87,26 @@ impl ModelBuilder {
 /// Returns `(cos, sin)` each shaped `[max_pos, head_dim / 2]` (flat).
 fn precompute_rope_tables(config: &ModelConfig) -> (Vec<f32>, Vec<f32>) {
     let (base, max_pos, scaling) = match &config.position {
-        PositionConfig::RoPE { base, max_position_embeddings, scaling, .. } => {
-            (*base, *max_position_embeddings, *scaling)
-        }
-        _ => (10_000.0, config.architecture.max_sequence_length, RoPEScaling::None),
+        PositionConfig::RoPE {
+            base,
+            max_position_embeddings,
+            scaling,
+            ..
+        } => (*base, *max_position_embeddings, *scaling),
+        _ => (
+            10_000.0,
+            config.architecture.max_sequence_length,
+            RoPEScaling::None,
+        ),
     };
     let head_dim = config.attention.head_dim();
     let half_d = head_dim / 2;
 
     // Apply dynamic NTK scaling to base frequency
     let effective_base = match scaling {
-        RoPEScaling::Dynamic { factor } => base * factor.powf((head_dim as f64) / ((head_dim as f64) - 2.0)),
+        RoPEScaling::Dynamic { factor } => {
+            base * factor.powf((head_dim as f64) / ((head_dim as f64) - 2.0))
+        }
         _ => base,
     };
 

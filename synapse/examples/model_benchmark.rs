@@ -103,8 +103,11 @@ fn main() {
     println!("  Hidden:     {}", cfg.architecture.hidden_size);
     println!("  Layers:     {}", cfg.architecture.num_layers);
     println!("  Vocab:      {}", cfg.architecture.vocab_size);
-    println!("  Heads:      {}/{} (Q/KV)",
-        cfg.attention.num_heads(), cfg.attention.num_kv_heads());
+    println!(
+        "  Heads:      {}/{} (Q/KV)",
+        cfg.attention.num_heads(),
+        cfg.attention.num_kv_heads()
+    );
     println!("  Head dim:   {}", cfg.attention.head_dim());
     println!("  FFN inter:  {}", cfg.ffn.intermediate_size());
     println!("═══════════════════════════════════════════════");
@@ -115,7 +118,11 @@ fn main() {
     let mut model = ModelBuilder::from_config(&cfg);
     fill_model_weights(&mut model);
     let build_time = start.elapsed();
-    println!(" {:.3}s ({} params)", build_time.as_secs_f64(), model.param_count());
+    println!(
+        " {:.3}s ({} params)",
+        build_time.as_secs_f64(),
+        model.param_count()
+    );
 
     let f32_mem = f32_model_memory_bytes(&model);
     println!("  f32 memory: {:.2} MB", f32_mem as f64 / (1024.0 * 1024.0));
@@ -127,9 +134,11 @@ fn main() {
     let quant_time = start.elapsed();
     let int8_mem = quantized.memory_bytes();
     println!(" {:.3}s", quant_time.as_secs_f64());
-    println!("  INT8 memory: {:.2} MB ({:.1}% of f32)",
+    println!(
+        "  INT8 memory: {:.2} MB ({:.1}% of f32)",
         int8_mem as f64 / (1024.0 * 1024.0),
-        int8_mem as f64 / f32_mem as f64 * 100.0);
+        int8_mem as f64 / f32_mem as f64 * 100.0
+    );
 
     // ── SIMD Prefill benchmark ─────────────────────────────────────────
     let pipeline = GenerationPipeline::new(&model);
@@ -200,8 +209,13 @@ fn main() {
     let elapsed = start.elapsed();
     let cached_tps = output.num_generated_tokens as f64 / elapsed.as_secs_f64();
     let speedup = cached_tps / tps;
-    println!("  {cache_num_tokens} tokens: {cached_tps:.1} tok/s (cached, {speedup:.1}x vs recompute)");
-    println!("  KV-cache memory: {:.2} MB", kv_mem as f64 / (1024.0 * 1024.0));
+    println!(
+        "  {cache_num_tokens} tokens: {cached_tps:.1} tok/s (cached, {speedup:.1}x vs recompute)"
+    );
+    println!(
+        "  KV-cache memory: {:.2} MB",
+        kv_mem as f64 / (1024.0 * 1024.0)
+    );
 
     // ── Decode benchmark (INT8) ──────────────────────────────────────
     println!("\n── Decode Benchmark (INT8) ──────────────────");
@@ -232,24 +246,35 @@ fn main() {
     let kv_mb = kv_mem as f64 / (1024.0 * 1024.0);
     let total_mb = f32_mb + kv_mb;
     println!("  f32 weights:  {f32_mb:.2} MB");
-    println!("  INT8 weights: {int8_mb:.2} MB ({:.1}% of f32)",
-        int8_mem as f64 / f32_mem as f64 * 100.0);
-    println!("  KV-cache:     {kv_mb:.2} MB ({}L, {}ctx)",
+    println!(
+        "  INT8 weights: {int8_mb:.2} MB ({:.1}% of f32)",
+        int8_mem as f64 / f32_mem as f64 * 100.0
+    );
+    println!(
+        "  KV-cache:     {kv_mb:.2} MB ({}L, {}ctx)",
         cfg.architecture.num_layers,
-        prompt.len() + cache_num_tokens);
+        prompt.len() + cache_num_tokens
+    );
     println!("  Total (f32+KV): {total_mb:.2} MB");
 
     // ── Phase 4 Summary ─────────────────────────────────────────────
     println!("\n═══════════════════════════════════════════════");
     println!("  Phase 4 Metrics Summary");
     println!("═══════════════════════════════════════════════");
-    println!("  {:.<30} {:>8.0} tok/s", "SIMD prefill (avg)", overall_prefill_tps);
+    println!(
+        "  {:.<30} {:>8.0} tok/s",
+        "SIMD prefill (avg)", overall_prefill_tps
+    );
     println!("  {:.<30} {:>8.1} tok/s", "KV-cache decode", cached_tps);
     println!("  {:.<30} {:>8.1}x", "KV-cache vs recompute", speedup);
     println!("  {:.<30} {:>8.2} MB", "f32 model memory", f32_mb);
     println!("  {:.<30} {:>8.2} MB", "INT8 model memory", int8_mb);
     println!("  {:.<30} {:>8.2} MB", "KV-cache memory", kv_mb);
-    println!("  {:.<30} {:>8.1}%", "INT8 compression ratio", int8_mem as f64 / f32_mem as f64 * 100.0);
+    println!(
+        "  {:.<30} {:>8.1}%",
+        "INT8 compression ratio",
+        int8_mem as f64 / f32_mem as f64 * 100.0
+    );
     println!("───────────────────────────────────────────────");
     println!("  Phase 4 targets (Qwen3-0.6B full scale):");
     println!("    SIMD decode  >= 5 tok/s    (from 0.3)");

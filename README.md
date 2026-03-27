@@ -11,19 +11,19 @@ Edge-native inference stack for local ML across native and browser targets.
 
 - Native builds use Rust orchestration with Zig SIMD kernels and optional Metal acceleration.
 - Browser builds use a pure-Rust WASM runtime for portability and client-side demos.
-- Verified benchmark baseline is Qwen3-0.6B (596M params) on Apple M5.
+- Public benchmark rows are measured on Apple Silicon and synced from status/benchmark_matrix.json.
 <!-- status:root-positioning:end -->
 
 ## Benchmark Snapshot
 
 <!-- status:root-benchmark:start -->
-| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
-|---------------|-----------------|----------------|---------|-------|
-| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
-| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
-| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
-| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
-| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |
+|--------|---------------|--------|-----------------|----------------|-------|
+| Qwen3 | f32 CPU | hello | 11 | 7.3 | Runtime backend=cpu_simd; prompt=hello |
+| Qwen3 | INT8 CPU | hello | 23 | 27.3 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | f32 CPU | hello | 1 | 2.1 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | INT8 CPU | hello | 8 | 9.7 | Runtime backend=cpu_simd; prompt=hello |
+| Reference | llama.cpp Q4_K_M | reference_only | 5518 | 173 | Reference only, not a parity claim |
 <!-- status:root-benchmark:end -->
 
 ## Runtime Profiles

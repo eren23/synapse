@@ -118,12 +118,18 @@ impl Graph {
     pub fn add(&mut self, a: VariableId, b: VariableId) -> VariableId {
         let a_shape = self.variables[&a].data.shape.clone();
         let b_shape = self.variables[&b].data.shape.clone();
-        let output = self.variables[&a].data.add_broadcast(&self.variables[&b].data);
+        let output = self.variables[&a]
+            .data
+            .add_broadcast(&self.variables[&b].data);
         if !self.should_track(&[a, b]) {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(AddBackward { input_ids: vec![a, b], a_shape, b_shape }),
+            Box::new(AddBackward {
+                input_ids: vec![a, b],
+                a_shape,
+                b_shape,
+            }),
             &[a, b],
             output,
         )
@@ -132,12 +138,18 @@ impl Graph {
     pub fn sub(&mut self, a: VariableId, b: VariableId) -> VariableId {
         let a_shape = self.variables[&a].data.shape.clone();
         let b_shape = self.variables[&b].data.shape.clone();
-        let output = self.variables[&a].data.sub_broadcast(&self.variables[&b].data);
+        let output = self.variables[&a]
+            .data
+            .sub_broadcast(&self.variables[&b].data);
         if !self.should_track(&[a, b]) {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(SubBackward { input_ids: vec![a, b], a_shape, b_shape }),
+            Box::new(SubBackward {
+                input_ids: vec![a, b],
+                a_shape,
+                b_shape,
+            }),
             &[a, b],
             output,
         )
@@ -153,7 +165,13 @@ impl Graph {
         let a_shape = a_data.shape.clone();
         let b_shape = b_data.shape.clone();
         self.record_op(
-            Box::new(MulBackward { input_ids: vec![a, b], a_data, b_data, a_shape, b_shape }),
+            Box::new(MulBackward {
+                input_ids: vec![a, b],
+                a_data,
+                b_data,
+                a_shape,
+                b_shape,
+            }),
             &[a, b],
             output,
         )
@@ -169,7 +187,13 @@ impl Graph {
         let a_shape = a_data.shape.clone();
         let b_shape = b_data.shape.clone();
         self.record_op(
-            Box::new(DivBackward { input_ids: vec![a, b], a_data, b_data, a_shape, b_shape }),
+            Box::new(DivBackward {
+                input_ids: vec![a, b],
+                a_data,
+                b_data,
+                a_shape,
+                b_shape,
+            }),
             &[a, b],
             output,
         )
@@ -180,10 +204,6 @@ impl Graph {
         if !self.should_track(&[a]) {
             return self.untracked(output);
         }
-        self.record_op(
-            Box::new(NegBackward { input_ids: vec![a] }),
-            &[a],
-            output,
-        )
+        self.record_op(Box::new(NegBackward { input_ids: vec![a] }), &[a], output)
     }
 }

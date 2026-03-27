@@ -26,7 +26,10 @@ fn bench_matmul(m: usize, k: usize, n: usize, iterations: usize) -> f64 {
 
     eprintln!(
         "  matmul [{} x {}] @ [{} x {}]: {:.3}ms/iter, {:.2} GFLOPS",
-        m, k, k, n,
+        m,
+        k,
+        k,
+        n,
         elapsed.as_secs_f64() * 1000.0 / iterations as f64,
         gflops
     );

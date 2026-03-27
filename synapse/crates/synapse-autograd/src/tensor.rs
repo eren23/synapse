@@ -109,9 +109,22 @@ impl Tensor {
         let ndim = a.len().max(b.len());
         let mut result = vec![0usize; ndim];
         for i in 0..ndim {
-            let da = if i < ndim - a.len() { 1 } else { a[i - (ndim - a.len())] };
-            let db = if i < ndim - b.len() { 1 } else { b[i - (ndim - b.len())] };
-            assert!(da == db || da == 1 || db == 1, "cannot broadcast dims {} and {}", da, db);
+            let da = if i < ndim - a.len() {
+                1
+            } else {
+                a[i - (ndim - a.len())]
+            };
+            let db = if i < ndim - b.len() {
+                1
+            } else {
+                b[i - (ndim - b.len())]
+            };
+            assert!(
+                da == db || da == 1 || db == 1,
+                "cannot broadcast dims {} and {}",
+                da,
+                db
+            );
             result[i] = da.max(db);
         }
         result
@@ -154,7 +167,10 @@ impl Tensor {
             }
             data[out_flat] = self.data[src_flat];
         }
-        Tensor { data, shape: shape.to_vec() }
+        Tensor {
+            data,
+            shape: shape.to_vec(),
+        }
     }
 
     pub fn reduce_sum_to(&self, target_shape: &[usize]) -> Tensor {
@@ -191,99 +207,160 @@ impl Tensor {
             }
             result[target_flat] += self.data[flat];
         }
-        Tensor { data: result, shape: target_shape.to_vec() }
+        Tensor {
+            data: result,
+            shape: target_shape.to_vec(),
+        }
     }
 
     // ── Element-wise with broadcasting ──────────────────────────────
 
     pub fn add_broadcast(&self, other: &Tensor) -> Tensor {
-        if self.shape == other.shape { return self.add(other); }
+        if self.shape == other.shape {
+            return self.add(other);
+        }
         let out_shape = Self::broadcast_shapes(&self.shape, &other.shape);
-        self.broadcast_to(&out_shape).add(&other.broadcast_to(&out_shape))
+        self.broadcast_to(&out_shape)
+            .add(&other.broadcast_to(&out_shape))
     }
 
     pub fn sub_broadcast(&self, other: &Tensor) -> Tensor {
-        if self.shape == other.shape { return self.sub(other); }
+        if self.shape == other.shape {
+            return self.sub(other);
+        }
         let out_shape = Self::broadcast_shapes(&self.shape, &other.shape);
-        self.broadcast_to(&out_shape).sub(&other.broadcast_to(&out_shape))
+        self.broadcast_to(&out_shape)
+            .sub(&other.broadcast_to(&out_shape))
     }
 
     pub fn mul_broadcast(&self, other: &Tensor) -> Tensor {
-        if self.shape == other.shape { return self.mul(other); }
+        if self.shape == other.shape {
+            return self.mul(other);
+        }
         let out_shape = Self::broadcast_shapes(&self.shape, &other.shape);
-        self.broadcast_to(&out_shape).mul(&other.broadcast_to(&out_shape))
+        self.broadcast_to(&out_shape)
+            .mul(&other.broadcast_to(&out_shape))
     }
 
     pub fn div(&self, other: &Tensor) -> Tensor {
         assert_eq!(self.shape, other.shape, "shape mismatch in div");
-        let data = self.data.iter().zip(&other.data).map(|(a, b)| a / b).collect();
-        Tensor { data, shape: self.shape.clone() }
+        let data = self
+            .data
+            .iter()
+            .zip(&other.data)
+            .map(|(a, b)| a / b)
+            .collect();
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn div_broadcast(&self, other: &Tensor) -> Tensor {
-        if self.shape == other.shape { return self.div(other); }
+        if self.shape == other.shape {
+            return self.div(other);
+        }
         let out_shape = Self::broadcast_shapes(&self.shape, &other.shape);
-        self.broadcast_to(&out_shape).div(&other.broadcast_to(&out_shape))
+        self.broadcast_to(&out_shape)
+            .div(&other.broadcast_to(&out_shape))
     }
 
     // ── Scalar ops ──────────────────────────────────────────────────
 
     pub fn scale(&self, s: f32) -> Tensor {
         let data = self.data.iter().map(|&x| x * s).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn add_scalar(&self, s: f32) -> Tensor {
         let data = self.data.iter().map(|&x| x + s).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     // ── Math ────────────────────────────────────────────────────────
 
     pub fn exp(&self) -> Tensor {
         let data = self.data.iter().map(|&x| x.exp()).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn log(&self) -> Tensor {
         let data = self.data.iter().map(|&x| x.ln()).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn sqrt(&self) -> Tensor {
         let data = self.data.iter().map(|&x| x.sqrt()).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn pow_scalar(&self, p: f32) -> Tensor {
         let data = self.data.iter().map(|&x| x.powf(p)).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     // ── Activations ─────────────────────────────────────────────────
 
     pub fn relu(&self) -> Tensor {
         let data = self.data.iter().map(|&x| x.max(0.0)).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn sigmoid(&self) -> Tensor {
-        let data = self.data.iter().map(|&x| 1.0 / (1.0 + (-x).exp())).collect();
-        Tensor { data, shape: self.shape.clone() }
+        let data = self
+            .data
+            .iter()
+            .map(|&x| 1.0 / (1.0 + (-x).exp()))
+            .collect();
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn tanh_act(&self) -> Tensor {
         let data = self.data.iter().map(|&x| x.tanh()).collect();
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn gelu(&self) -> Tensor {
         let c = (2.0f32 / std::f32::consts::PI).sqrt();
-        let data = self.data.iter().map(|&x| {
-            let inner = c * (x + 0.044715 * x * x * x);
-            0.5 * x * (1.0 + inner.tanh())
-        }).collect();
-        Tensor { data, shape: self.shape.clone() }
+        let data = self
+            .data
+            .iter()
+            .map(|&x| {
+                let inner = c * (x + 0.044715 * x * x * x);
+                0.5 * x * (1.0 + inner.tanh())
+            })
+            .collect();
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     // ── Matrix operations ───────────────────────────────────────────
@@ -305,7 +382,10 @@ impl Tensor {
                 data[i * n + j] = sum;
             }
         }
-        Tensor { data, shape: vec![m, n] }
+        Tensor {
+            data,
+            shape: vec![m, n],
+        }
     }
 
     pub fn transpose_2d(&self) -> Tensor {
@@ -317,13 +397,18 @@ impl Tensor {
                 data[j * m + i] = self.data[i * n + j];
             }
         }
-        Tensor { data, shape: vec![n, m] }
+        Tensor {
+            data,
+            shape: vec![n, m],
+        }
     }
 
     pub fn transpose_dims(&self, dim0: usize, dim1: usize) -> Tensor {
         let ndim = self.shape.len();
         assert!(dim0 < ndim && dim1 < ndim);
-        if dim0 == dim1 { return self.clone(); }
+        if dim0 == dim1 {
+            return self.clone();
+        }
         let mut new_shape = self.shape.clone();
         new_shape.swap(dim0, dim1);
         let n = self.numel();
@@ -350,7 +435,10 @@ impl Tensor {
             }
             data[dst_flat] = self.data[src_flat];
         }
-        Tensor { data, shape: new_shape }
+        Tensor {
+            data,
+            shape: new_shape,
+        }
     }
 
     // ── Reductions ──────────────────────────────────────────────────
@@ -387,12 +475,20 @@ impl Tensor {
             data[out_flat] += self.data[flat];
         }
         if keepdim {
-            Tensor { data, shape: out_shape_kd }
+            Tensor {
+                data,
+                shape: out_shape_kd,
+            }
         } else {
             let mut final_shape: Vec<usize> = self.shape.clone();
             final_shape.remove(axis);
-            if final_shape.is_empty() { final_shape.push(1); }
-            Tensor { data, shape: final_shape }
+            if final_shape.is_empty() {
+                final_shape.push(1);
+            }
+            Tensor {
+                data,
+                shape: final_shape,
+            }
         }
     }
 
@@ -401,7 +497,8 @@ impl Tensor {
     }
 
     pub fn mean_axis(&self, axis: usize, keepdim: bool) -> Tensor {
-        self.sum_axis(axis, keepdim).scale(1.0 / self.shape[axis] as f32)
+        self.sum_axis(axis, keepdim)
+            .scale(1.0 / self.shape[axis] as f32)
     }
 
     pub fn variance_axis(&self, axis: usize, keepdim: bool) -> Tensor {
@@ -415,13 +512,19 @@ impl Tensor {
     pub fn reshape(&self, shape: &[usize]) -> Tensor {
         let n: usize = shape.iter().product();
         assert_eq!(n, self.numel(), "reshape: incompatible shapes");
-        Tensor { data: self.data.clone(), shape: shape.to_vec() }
+        Tensor {
+            data: self.data.clone(),
+            shape: shape.to_vec(),
+        }
     }
 
     pub fn unsqueeze(&self, dim: usize) -> Tensor {
         let mut shape = self.shape.clone();
         shape.insert(dim, 1);
-        Tensor { data: self.data.clone(), shape }
+        Tensor {
+            data: self.data.clone(),
+            shape,
+        }
     }
 
     // ── Softmax ─────────────────────────────────────────────────────
@@ -453,7 +556,10 @@ impl Tensor {
                 }
             }
         }
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 
     pub fn log_softmax_axis(&self, axis: usize) -> Tensor {
@@ -482,7 +588,10 @@ impl Tensor {
                 }
             }
         }
-        Tensor { data, shape: self.shape.clone() }
+        Tensor {
+            data,
+            shape: self.shape.clone(),
+        }
     }
 }
 

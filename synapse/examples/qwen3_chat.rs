@@ -4,9 +4,12 @@
 //!   cargo run --example qwen3_chat --release -- --model-dir /path/to/Qwen3-0.6B
 //!   cargo run --example qwen3_chat --release -- --demo
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use synapse_inference::capabilities::CapabilityReport;
 use synapse_inference::chat_template::ChatMessage;
@@ -14,6 +17,8 @@ use synapse_inference::config::*;
 use synapse_inference::engine::InferenceEngine;
 use synapse_inference::generation::{CombinedSampler, GenerationConfig, GenerationPipeline};
 use synapse_inference::model::ModelBuilder;
+use synapse_inference::model_adapter::ModelAdapterKind;
+use synapse_inference::model_adapter::ThinkingMode;
 use synapse_inference::weight_loading::{RawTensor, WeightMapper};
 
 fn gen_weights(len: usize, seed: u32) -> Vec<f32> {
@@ -140,6 +145,7 @@ fn demo_engine() -> InferenceEngine {
         model,
         quantized_model: None,
         config: cfg,
+        model_adapter_kind: ModelAdapterKind::Qwen3,
         tokenizer: None,
         chat_template: None,
         #[cfg(feature = "metal")]
@@ -155,26 +161,71 @@ enum Mode {
         dir: PathBuf,
         quantize: bool,
         speculative: bool,
+        thinking_mode: Option<ThinkingMode>,
+        profile_stages: bool,
+        max_new_tokens: usize,
+        prompt: Option<String>,
     },
     Verify(PathBuf),
+    InspectPrompt {
+        dir: PathBuf,
+        prompt: String,
+        thinking_mode: Option<ThinkingMode>,
+    },
     Capabilities(Option<PathBuf>),
+}
+
+struct PreparedPrompt {
+    prompt: String,
+    prompt_tokens: Vec<u32>,
+    render_elapsed: Duration,
+    encode_elapsed: Duration,
+    reasoning_start_id: Option<u32>,
+    reasoning_end_id: Option<u32>,
 }
 
 fn parse_args() -> Result<Mode, String> {
     let mut args = std::env::args().skip(1);
     let mut model_dir = None;
     let mut verify = false;
+    let mut inspect_prompt = false;
     let mut quantize = false;
     let mut speculative = false;
     let mut capabilities = false;
+    let mut thinking_mode = None;
+    let mut profile_stages = false;
+    let mut max_new_tokens = 256usize;
+    let mut prompt = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--demo" => return Ok(Mode::Demo),
             "--verify" => verify = true,
+            "--inspect-prompt" => inspect_prompt = true,
             "--capabilities" => capabilities = true,
             "--quantize" | "-q" => quantize = true,
             "--speculative" | "-s" => speculative = true,
+            "--profile-stages" => profile_stages = true,
+            "--max-new-tokens" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--max-new-tokens requires a value".to_string())?;
+                max_new_tokens = value
+                    .parse::<usize>()
+                    .map_err(|_| "--max-new-tokens must be an integer".to_string())?;
+            }
+            "--thinking" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--thinking requires a mode".to_string())?;
+                thinking_mode = Some(ThinkingMode::parse_cli(&value)?);
+            }
+            "--prompt" => {
+                prompt = Some(
+                    args.next()
+                        .ok_or_else(|| "--prompt requires a value".to_string())?,
+                );
+            }
             "--model-dir" => {
                 let value = args
                     .next()
@@ -192,6 +243,21 @@ fn parse_args() -> Result<Mode, String> {
                 println!(
                     "  cargo run --example qwen3_chat --release -- --model-dir /path --quantize"
                 );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --thinking auto"
+                );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --prompt \"hello\""
+                );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --prompt \"hello\" --profile-stages"
+                );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --prompt \"hello\" --max-new-tokens 32"
+                );
+                println!(
+                    "  cargo run --example qwen3_chat --release -- --model-dir /path --inspect-prompt --prompt \"hello\""
+                );
                 println!("  cargo run --example qwen3_chat --release -- --capabilities");
                 println!("  cargo run --example qwen3_chat --release -- --capabilities --model-dir /path");
                 println!("  cargo run --example qwen3_chat --release -- --demo");
@@ -204,6 +270,17 @@ fn parse_args() -> Result<Mode, String> {
     if capabilities {
         return Ok(Mode::Capabilities(model_dir));
     }
+    if verify && inspect_prompt {
+        return Err("--verify and --inspect-prompt are mutually exclusive".to_string());
+    }
+    if inspect_prompt {
+        let dir = model_dir.ok_or_else(|| "--inspect-prompt requires --model-dir".to_string())?;
+        return Ok(Mode::InspectPrompt {
+            dir,
+            prompt: prompt.unwrap_or_else(|| "hello".to_string()),
+            thinking_mode,
+        });
+    }
 
     match (model_dir, verify) {
         (Some(dir), true) => Ok(Mode::Verify(dir)),
@@ -211,6 +288,10 @@ fn parse_args() -> Result<Mode, String> {
             dir,
             quantize,
             speculative,
+            thinking_mode,
+            profile_stages,
+            max_new_tokens,
+            prompt,
         }),
         (None, _) => Ok(Mode::Demo),
     }
@@ -221,16 +302,116 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match mode {
         Mode::Verify(dir) => run_verify(dir)?,
+        Mode::InspectPrompt {
+            dir,
+            prompt,
+            thinking_mode,
+        } => run_inspect_prompt(dir, prompt, thinking_mode)?,
         Mode::Chat {
             dir,
             quantize,
             speculative,
-        } => run_pretrained_chat(dir, quantize, speculative)?,
+            thinking_mode,
+            profile_stages,
+            max_new_tokens,
+            prompt,
+        } => run_pretrained_chat(
+            dir,
+            quantize,
+            speculative,
+            thinking_mode,
+            profile_stages,
+            max_new_tokens,
+            prompt,
+        )?,
         Mode::Capabilities(dir) => run_capabilities(dir)?,
         Mode::Demo => run_demo_chat(),
     }
 
     Ok(())
+}
+
+fn prepare_prompt(
+    engine: &InferenceEngine,
+    tokenizer: &synapse_inference::tokenizer::Tokenizer,
+    line: &str,
+    thinking_mode: ThinkingMode,
+) -> Result<PreparedPrompt, Box<dyn std::error::Error>> {
+    let render_start = Instant::now();
+    let prompt = engine.format_chat_with_mode(
+        &[ChatMessage {
+            role: "user".into(),
+            content: line.to_string(),
+        }],
+        thinking_mode,
+    )?;
+    let render_elapsed = render_start.elapsed();
+
+    let encode_start = Instant::now();
+    let prompt_tokens = engine.encode(&prompt)?;
+    let encode_elapsed = encode_start.elapsed();
+
+    let (reasoning_start_id, reasoning_end_id) = if let Some(markers) = engine.reasoning_markers() {
+        let start_id = tokenizer
+            .encode(markers.start)
+            .ok()
+            .filter(|ids| ids.len() == 1)
+            .and_then(|ids| ids.first().copied());
+        let end_id = tokenizer
+            .encode(markers.end)
+            .ok()
+            .filter(|ids| ids.len() == 1)
+            .and_then(|ids| ids.first().copied());
+        (start_id, end_id)
+    } else {
+        (None, None)
+    };
+
+    Ok(PreparedPrompt {
+        prompt,
+        prompt_tokens,
+        render_elapsed,
+        encode_elapsed,
+        reasoning_start_id,
+        reasoning_end_id,
+    })
+}
+
+fn print_prompt_inspection(
+    engine: &InferenceEngine,
+    prepared: &PreparedPrompt,
+    thinking_mode: ThinkingMode,
+) {
+    println!("Chat: family={} thinking={}", engine.model_family(), thinking_mode);
+    println!("Rendered prompt ({} chars): {:?}", prepared.prompt.len(), prepared.prompt);
+    println!(
+        "Prompt tokens ({}): {:?}",
+        prepared.prompt_tokens.len(),
+        prepared.prompt_tokens
+    );
+    println!(
+        "Reasoning markers: start={:?} end={:?}",
+        prepared.reasoning_start_id, prepared.reasoning_end_id
+    );
+}
+
+fn print_stage_profile(
+    render_elapsed: Duration,
+    encode_elapsed: Duration,
+    output: &synapse_inference::generation::GenerationOutput,
+    hidden_tokens: usize,
+    visible_tokens: usize,
+) {
+    let decode_elapsed = output.elapsed.saturating_sub(output.prefill_elapsed);
+    println!(
+        "Profile: render={:.1}ms encode={:.1}ms prefill={:.1}ms decode={:.1}ms hidden_tokens={} visible_tokens={}",
+        render_elapsed.as_secs_f64() * 1000.0,
+        encode_elapsed.as_secs_f64() * 1000.0,
+        output.prefill_elapsed.as_secs_f64() * 1000.0,
+        decode_elapsed.as_secs_f64() * 1000.0,
+        hidden_tokens,
+        visible_tokens,
+    );
 }
 
 fn run_capabilities(model_dir: Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
@@ -298,10 +479,36 @@ fn run_verify(model_dir: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn run_inspect_prompt(
+    model_dir: PathBuf,
+    prompt: String,
+    thinking_mode: Option<ThinkingMode>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    print!("Loading checkpoint from {}...", model_dir.display());
+    io::stdout().flush()?;
+    let engine = InferenceEngine::from_pretrained(&model_dir)?;
+    println!(" done ({} params)", engine.param_count());
+
+    let thinking_mode = thinking_mode.unwrap_or_else(|| engine.default_cli_thinking_mode());
+    let tokenizer = engine
+        .tokenizer()
+        .expect("pretrained engine has tokenizer")
+        .clone();
+    let prepared = prepare_prompt(&engine, &tokenizer, &prompt, thinking_mode)?;
+
+    println!("{}", engine.runtime_plan().log_line());
+    print_prompt_inspection(&engine, &prepared, thinking_mode);
+    Ok(())
+}
+
 fn run_pretrained_chat(
     model_dir: PathBuf,
     quantize: bool,
     speculative: bool,
+    thinking_mode: Option<ThinkingMode>,
+    profile_stages: bool,
+    max_new_tokens: usize,
+    prompt: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     print!("Loading checkpoint from {}...", model_dir.display());
     io::stdout().flush()?;
@@ -314,7 +521,13 @@ fn run_pretrained_chat(
         engine.quantize();
         println!(" done");
     }
-    println!("Type 'quit' to exit.");
+    let thinking_mode = thinking_mode.unwrap_or_else(|| engine.default_cli_thinking_mode());
+    println!("{}", engine.runtime_plan().log_line());
+    println!(
+        "Chat: family={} thinking={}",
+        engine.model_family(),
+        thinking_mode
+    );
 
     let tokenizer = engine
         .tokenizer()
@@ -322,9 +535,106 @@ fn run_pretrained_chat(
         .clone();
     let stop_sequences = tokenizer.encode("<|im_end|>").unwrap_or_default();
     let eos_token_id = tokenizer.eos_token_id();
+
+    let run_prompt = |line: &str| -> Result<(), Box<dyn std::error::Error>> {
+        let prepared = prepare_prompt(&engine, &tokenizer, line, thinking_mode)?;
+        let stream_tokenizer = tokenizer.clone();
+        let pipeline = engine.generation_pipeline();
+
+        let max_seq = prepared.prompt_tokens.len() + max_new_tokens;
+        let mut cache = engine.create_kv_cache(max_seq)?;
+
+        let in_think = Rc::new(Cell::new(false));
+        let think_shown = Rc::new(Cell::new(false));
+        let hidden_tokens = Rc::new(Cell::new(0usize));
+        let visible_tokens = Rc::new(Cell::new(0usize));
+        let reasoning_start_id = prepared.reasoning_start_id;
+        let reasoning_end_id = prepared.reasoning_end_id;
+
+        let in_think_cb = Rc::clone(&in_think);
+        let think_shown_cb = Rc::clone(&think_shown);
+        let hidden_tokens_cb = Rc::clone(&hidden_tokens);
+        let visible_tokens_cb = Rc::clone(&visible_tokens);
+
+        let config = GenerationConfig {
+            max_new_tokens,
+            eos_token_id,
+            stop_sequences: vec![stop_sequences.clone()],
+            speculative_k: if speculative { 4 } else { 0 },
+            speculative_draft_layers: 0,
+            combined: Some(CombinedSampler {
+                temperature: 0.7,
+                top_k: 40,
+                top_p: 0.9,
+                repetition_penalty: 1.1,
+            }),
+            seed: Some(42),
+            on_token: Some(Box::new(move |token| {
+                if Some(token) == reasoning_start_id {
+                    hidden_tokens_cb.set(hidden_tokens_cb.get() + 1);
+                    in_think_cb.set(true);
+                    if !think_shown_cb.get() {
+                        print!("(thinking...) ");
+                        let _ = io::stdout().flush();
+                        think_shown_cb.set(true);
+                    }
+                    return;
+                }
+                if Some(token) == reasoning_end_id {
+                    hidden_tokens_cb.set(hidden_tokens_cb.get() + 1);
+                    in_think_cb.set(false);
+                    print!("\r              \r");
+                    let _ = io::stdout().flush();
+                    return;
+                }
+                if in_think_cb.get() {
+                    hidden_tokens_cb.set(hidden_tokens_cb.get() + 1);
+                    return;
+                }
+                visible_tokens_cb.set(visible_tokens_cb.get() + 1);
+                if let Ok(piece) = stream_tokenizer.decode_token_piece(token) {
+                    print!("{piece}");
+                    let _ = io::stdout().flush();
+                }
+            })),
+            ..Default::default()
+        };
+
+        let output = pipeline.generate(&prepared.prompt_tokens, config, Some(&mut cache));
+        println!();
+        let mode_str = if engine.is_quantized() { "INT8" } else { "f32" };
+        println!(
+            "Prefill: {} tokens in {:.0}ms ({:.0} tok/s) | Decode: {} tokens at {:.1} tok/s | {}",
+            output.num_prompt_tokens,
+            output.prefill_elapsed.as_millis(),
+            output.prefill_tokens_per_sec,
+            output.num_generated_tokens,
+            output.tokens_per_sec,
+            mode_str,
+        );
+        if profile_stages {
+            print_prompt_inspection(&engine, &prepared, thinking_mode);
+            print_stage_profile(
+                prepared.render_elapsed,
+                prepared.encode_elapsed,
+                &output,
+                hidden_tokens.get(),
+                visible_tokens.get(),
+            );
+        }
+
+        Ok(())
+    };
+
+    if let Some(prompt) = prompt {
+        run_prompt(&prompt)?;
+        return Ok(());
+    }
+
+    println!("Type 'quit' to exit.");
+
     let stdin = io::stdin();
     let mut line_reader = stdin.lock().lines();
-
     loop {
         print!("\n> ");
         io::stdout().flush()?;
@@ -342,113 +652,7 @@ fn run_pretrained_chat(
             println!("Goodbye!");
             break;
         }
-
-        let prompt = if let Some(ref tmpl) = engine.chat_template {
-            tmpl.apply(&[ChatMessage {
-                role: "user".into(),
-                content: line.clone(),
-            }])?
-        } else {
-            // No chat template (base model) — pass input as raw text completion
-            line.clone()
-        };
-        let prompt_tokens = engine.encode(&prompt)?;
-        let stream_tokenizer = tokenizer.clone();
-        let pipeline = if let Some(ref qmodel) = engine.quantized_model {
-            GenerationPipeline::new(qmodel)
-        } else {
-            #[cfg(feature = "metal")]
-            {
-                if let Some(ref bufs_cell) = engine.metal_model_bufs_cell {
-                    if let synapse_inference::metal::ComputeBackend::Metal { ref backend, .. } =
-                        engine.backend
-                    {
-                        GenerationPipeline::with_gpu_resident(
-                            &engine.model,
-                            &engine.backend,
-                            bufs_cell,
-                            backend,
-                        )
-                    } else {
-                        GenerationPipeline::with_backend(&engine.model, &engine.backend)
-                    }
-                } else {
-                    GenerationPipeline::with_backend(&engine.model, &engine.backend)
-                }
-            }
-            #[cfg(not(feature = "metal"))]
-            GenerationPipeline::new(&engine.model)
-        };
-
-        let max_new_tokens = 256;
-        let max_seq = prompt_tokens.len() + max_new_tokens;
-        let mut cache = engine.create_kv_cache(max_seq)?;
-
-        // Qwen3 generates <think>...</think> before the answer.
-        // Show "thinking..." while hidden, then stream the actual answer.
-        let think_id = tokenizer
-            .encode("<think>")
-            .ok()
-            .and_then(|v| v.first().copied());
-        let end_think_id = tokenizer
-            .encode("</think>")
-            .ok()
-            .and_then(|v| v.first().copied());
-        let in_think = std::cell::Cell::new(false);
-        let think_shown = std::cell::Cell::new(false);
-
-        let config = GenerationConfig {
-            max_new_tokens,
-            eos_token_id,
-            stop_sequences: vec![stop_sequences.clone()],
-            speculative_k: if speculative { 4 } else { 0 },
-            speculative_draft_layers: 0, // auto: num_layers / 3
-            combined: Some(CombinedSampler {
-                temperature: 0.7,
-                top_k: 40,
-                top_p: 0.9,
-                repetition_penalty: 1.1,
-            }),
-            seed: Some(42),
-            on_token: Some(Box::new(move |token| {
-                if Some(token) == think_id {
-                    in_think.set(true);
-                    if !think_shown.get() {
-                        print!("(thinking...) ");
-                        let _ = io::stdout().flush();
-                        think_shown.set(true);
-                    }
-                    return;
-                }
-                if Some(token) == end_think_id {
-                    in_think.set(false);
-                    print!("\r              \r"); // clear "thinking..."
-                    let _ = io::stdout().flush();
-                    return;
-                }
-                if in_think.get() {
-                    return;
-                }
-                if let Ok(piece) = stream_tokenizer.decode_token_piece(token) {
-                    print!("{piece}");
-                    let _ = io::stdout().flush();
-                }
-            })),
-            ..Default::default()
-        };
-
-        let output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
-        println!();
-        let mode_str = if engine.is_quantized() { "INT8" } else { "f32" };
-        println!(
-            "Prefill: {} tokens in {:.0}ms ({:.0} tok/s) | Decode: {} tokens at {:.1} tok/s | {}",
-            output.num_prompt_tokens,
-            output.prefill_elapsed.as_millis(),
-            output.prefill_tokens_per_sec,
-            output.num_generated_tokens,
-            output.tokens_per_sec,
-            mode_str,
-        );
+        run_prompt(&line)?;
     }
 
     Ok(())

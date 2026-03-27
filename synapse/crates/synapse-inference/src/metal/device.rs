@@ -153,9 +153,7 @@ impl MetalBackend {
         // Register optional kernels (e.g. simdgroup_matrix variants) if available
         for &name in OPTIONAL_KERNEL_NAMES {
             if let Ok(function) = library.get_function(name, None) {
-                if let Ok(pipeline) =
-                    device.new_compute_pipeline_state_with_function(&function)
-                {
+                if let Ok(pipeline) = device.new_compute_pipeline_state_with_function(&function) {
                     pipelines.insert(name.to_string(), pipeline);
                 }
             }

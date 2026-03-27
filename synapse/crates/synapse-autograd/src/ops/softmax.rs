@@ -36,7 +36,9 @@ pub struct LogSoftmaxBackward {
 impl GradFn for LogSoftmaxBackward {
     fn backward(&self, grad_output: &Tensor) -> Vec<Option<Tensor>> {
         // dx = dout - softmax * sum(dout, axis, keepdim)
-        let sum_grad = grad_output.sum_axis(self.axis, true).broadcast_to(&self.softmax_data.shape);
+        let sum_grad = grad_output
+            .sum_axis(self.axis, true)
+            .broadcast_to(&self.softmax_data.shape);
         let grad = grad_output.sub(&self.softmax_data.mul(&sum_grad));
         vec![Some(grad)]
     }
@@ -55,7 +57,11 @@ impl Graph {
         }
         let output_data = output.clone();
         self.record_op(
-            Box::new(SoftmaxBackward { input_ids: vec![a], output_data, axis }),
+            Box::new(SoftmaxBackward {
+                input_ids: vec![a],
+                output_data,
+                axis,
+            }),
             &[a],
             output,
         )
@@ -68,7 +74,11 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(LogSoftmaxBackward { input_ids: vec![a], softmax_data, axis }),
+            Box::new(LogSoftmaxBackward {
+                input_ids: vec![a],
+                softmax_data,
+                axis,
+            }),
             &[a],
             output,
         )

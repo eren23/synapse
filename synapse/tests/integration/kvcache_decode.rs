@@ -74,17 +74,50 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     w.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h], 1));
     for i in 0..nl {
         let s = (i as u32 + 1) * 100;
-        w.insert(format!("model.layers.{i}.input_layernorm.weight"), fake(vec![h], s));
-        w.insert(format!("model.layers.{i}.self_attn.q_proj.weight"), fake(vec![q_dim, h], s + 1));
-        w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h], s + 2));
-        w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h], s + 3));
-        w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim], s + 4));
-        w.insert(format!("model.layers.{i}.self_attn.q_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 5));
-        w.insert(format!("model.layers.{i}.self_attn.k_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 6));
-        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 7));
-        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 8));
-        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 9));
-        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 10));
+        w.insert(
+            format!("model.layers.{i}.input_layernorm.weight"),
+            fake(vec![h], s),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.q_proj.weight"),
+            fake(vec![q_dim, h], s + 1),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.k_proj.weight"),
+            fake(vec![kv_dim, h], s + 2),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.v_proj.weight"),
+            fake(vec![kv_dim, h], s + 3),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.o_proj.weight"),
+            fake(vec![h, q_dim], s + 4),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.q_norm.weight"),
+            fake(vec![cfg.attention.head_dim()], s + 5),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.k_norm.weight"),
+            fake(vec![cfg.attention.head_dim()], s + 6),
+        );
+        w.insert(
+            format!("model.layers.{i}.post_attention_layernorm.weight"),
+            fake(vec![h], s + 7),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.gate_proj.weight"),
+            fake(vec![inter, h], s + 8),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.up_proj.weight"),
+            fake(vec![inter, h], s + 9),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.down_proj.weight"),
+            fake(vec![h, inter], s + 10),
+        );
     }
     w.insert("model.norm.weight".into(), fake(vec![h], 9999));
     w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
@@ -96,7 +129,11 @@ fn build_model(cfg: &ModelConfig) -> synapse_inference::model::CausalLM {
     let weights = generate_fake_hf_weights(cfg);
     let mapper = WeightMapper::qwen3();
     let result = model.load_weights(weights, &mapper).unwrap();
-    assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
+    assert!(
+        result.missing.is_empty(),
+        "Missing keys: {:?}",
+        result.missing
+    );
     model
 }
 
@@ -253,7 +290,10 @@ fn kvcache_decode_deterministic() {
     let mut cache2 = make_cache(&cfg, prompt.len() + num_tokens);
     let run2 = generate_cached(&model, &prompt, num_tokens, &mut cache2);
 
-    assert_eq!(run1, run2, "KV-cache decode must be deterministic across runs");
+    assert_eq!(
+        run1, run2,
+        "KV-cache decode must be deterministic across runs"
+    );
 
     // Also verify KV-cache contents are identical
     for layer in 0..cfg.architecture.num_layers {
@@ -276,9 +316,9 @@ fn kvcache_decode_varying_prompt_lengths() {
     let num_tokens = 20;
 
     let prompts: Vec<Vec<u32>> = vec![
-        vec![42],                                      // 1 token
+        vec![42],                                     // 1 token
         vec![1, 2, 3, 4, 5, 6, 7, 8],                 // 8 tokens
-        (0..128).map(|i| (i % 256) as u32).collect(),  // 128 tokens
+        (0..128).map(|i| (i % 256) as u32).collect(), // 128 tokens
     ];
 
     for prompt in &prompts {
@@ -287,7 +327,8 @@ fn kvcache_decode_varying_prompt_lengths() {
         let recompute = generate_recompute(&model, prompt, num_tokens);
 
         assert_eq!(
-            cached, recompute,
+            cached,
+            recompute,
             "Mismatch for prompt length {}: cached tokens != recompute tokens",
             prompt.len()
         );

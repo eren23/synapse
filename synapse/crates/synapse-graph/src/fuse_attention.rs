@@ -379,8 +379,7 @@ mod tests {
         let d_v = 3;
         let d_out = 4;
 
-        let (g_unfused, _, param_ids) =
-            build_attention_graph(seq_len, d_model, d_k, d_v, d_out);
+        let (g_unfused, _, param_ids) = build_attention_graph(seq_len, d_model, d_k, d_v, d_out);
 
         let input_data: Vec<f32> = (0..seq_len * d_model)
             .map(|i| (i as f32) * 0.1 + 0.05)
@@ -394,9 +393,7 @@ mod tests {
         let w_v_data: Vec<f32> = (0..d_model * d_v)
             .map(|i| (i as f32) * 0.01 - 0.02)
             .collect();
-        let w_o_data: Vec<f32> = (0..d_v * d_out)
-            .map(|i| (i as f32) * 0.04 + 0.01)
-            .collect();
+        let w_o_data: Vec<f32> = (0..d_v * d_out).map(|i| (i as f32) * 0.04 + 0.01).collect();
 
         let mut inputs = HashMap::new();
         inputs.insert(param_ids[0], input_data);
@@ -422,7 +419,10 @@ mod tests {
             assert!(
                 (u - f).abs() < 1e-4,
                 "Attention fusion mismatch at {}: unfused={}, fused={}, diff={}",
-                i, u, f, (u - f).abs()
+                i,
+                u,
+                f,
+                (u - f).abs()
             );
         }
     }

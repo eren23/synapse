@@ -95,7 +95,12 @@ fn batched_matmul_4d(a: &Tensor, b: &Tensor) -> Tensor {
 
 /// Set scores[b,h,i,j] = -inf where j > i (causal mask for forward).
 fn apply_causal_mask(scores: &mut Tensor) {
-    let (b, h, sq, sk) = (scores.shape[0], scores.shape[1], scores.shape[2], scores.shape[3]);
+    let (b, h, sq, sk) = (
+        scores.shape[0],
+        scores.shape[1],
+        scores.shape[2],
+        scores.shape[3],
+    );
     for bi in 0..b {
         for hi in 0..h {
             for i in 0..sq {

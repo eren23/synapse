@@ -74,17 +74,50 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     w.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h], 1));
     for i in 0..nl {
         let s = (i as u32 + 1) * 100;
-        w.insert(format!("model.layers.{i}.input_layernorm.weight"), fake(vec![h], s));
-        w.insert(format!("model.layers.{i}.self_attn.q_proj.weight"), fake(vec![q_dim, h], s + 1));
-        w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h], s + 2));
-        w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h], s + 3));
-        w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim], s + 4));
-        w.insert(format!("model.layers.{i}.self_attn.q_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 5));
-        w.insert(format!("model.layers.{i}.self_attn.k_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 6));
-        w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 7));
-        w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 8));
-        w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 9));
-        w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 10));
+        w.insert(
+            format!("model.layers.{i}.input_layernorm.weight"),
+            fake(vec![h], s),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.q_proj.weight"),
+            fake(vec![q_dim, h], s + 1),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.k_proj.weight"),
+            fake(vec![kv_dim, h], s + 2),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.v_proj.weight"),
+            fake(vec![kv_dim, h], s + 3),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.o_proj.weight"),
+            fake(vec![h, q_dim], s + 4),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.q_norm.weight"),
+            fake(vec![cfg.attention.head_dim()], s + 5),
+        );
+        w.insert(
+            format!("model.layers.{i}.self_attn.k_norm.weight"),
+            fake(vec![cfg.attention.head_dim()], s + 6),
+        );
+        w.insert(
+            format!("model.layers.{i}.post_attention_layernorm.weight"),
+            fake(vec![h], s + 7),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.gate_proj.weight"),
+            fake(vec![inter, h], s + 8),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.up_proj.weight"),
+            fake(vec![inter, h], s + 9),
+        );
+        w.insert(
+            format!("model.layers.{i}.mlp.down_proj.weight"),
+            fake(vec![h, inter], s + 10),
+        );
     }
     w.insert("model.norm.weight".into(), fake(vec![h], 9999));
     w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
@@ -96,7 +129,11 @@ fn build_model(cfg: &ModelConfig) -> synapse_inference::model::CausalLM {
     let weights = generate_fake_hf_weights(cfg);
     let mapper = WeightMapper::qwen3();
     let result = model.load_weights(weights, &mapper).unwrap();
-    assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
+    assert!(
+        result.missing.is_empty(),
+        "Missing keys: {:?}",
+        result.missing
+    );
     model
 }
 
@@ -114,7 +151,9 @@ fn prefill_throughput_500_tok_per_sec() {
     let mut total_elapsed = std::time::Duration::ZERO;
 
     for &seq_len in &seq_lengths {
-        let tokens: Vec<u32> = (0..seq_len).map(|i| (i % cfg.architecture.vocab_size) as u32).collect();
+        let tokens: Vec<u32> = (0..seq_len)
+            .map(|i| (i % cfg.architecture.vocab_size) as u32)
+            .collect();
 
         // Warmup
         for _ in 0..warmup_iters {

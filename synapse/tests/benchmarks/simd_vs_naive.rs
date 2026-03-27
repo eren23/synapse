@@ -43,7 +43,11 @@ fn median(times: &mut [f64]) -> f64 {
 
 /// Threshold multiplier: 1.0 in release, 0.2 (5× lower) in debug.
 fn threshold_scale() -> f64 {
-    if cfg!(debug_assertions) { 0.2 } else { 1.0 }
+    if cfg!(debug_assertions) {
+        0.2
+    } else {
+        1.0
+    }
 }
 
 // ── Naive implementations ───────────────────────────────────────────
@@ -74,10 +78,17 @@ fn matmul_t_simd(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32>
     let mut out = vec![0.0f32; m * n];
     let status = unsafe {
         synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,
-            b.as_ptr(), k, 1,
-            out.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            0,
+            b.as_ptr(),
+            k,
+            1,
+            out.as_mut_ptr(),
+            n,
         )
     };
     assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
@@ -228,8 +239,8 @@ fn decoder_layer_naive_forward(
             for s in 0..=t {
                 let mut dot = 0.0f32;
                 for d in 0..head_dim {
-                    dot += q[t * q_dim + head * head_dim + d]
-                        * k[s * kv_dim + kv_head * head_dim + d];
+                    dot +=
+                        q[t * q_dim + head * head_dim + d] * k[s * kv_dim + kv_head * head_dim + d];
                 }
                 scores[s] = dot * scale;
             }
@@ -522,9 +533,25 @@ fn simd_decoder_layer_vs_naive_e2e() {
 
     let naive_median = bench(|| {
         black_box(decoder_layer_naive_forward(
-            &x, seq_len, h, num_heads, num_kv_heads, head_dim, inter, eps,
-            &attn_norm_w, &w_q, &w_k, &w_v, &w_o, &q_norm_w, &k_norm_w,
-            &ffn_norm_w, &fg, &fu, &fd,
+            &x,
+            seq_len,
+            h,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            inter,
+            eps,
+            &attn_norm_w,
+            &w_q,
+            &w_k,
+            &w_v,
+            &w_o,
+            &q_norm_w,
+            &k_norm_w,
+            &ffn_norm_w,
+            &fg,
+            &fu,
+            &fd,
         ));
     });
 

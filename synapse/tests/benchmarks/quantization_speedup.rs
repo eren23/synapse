@@ -134,8 +134,16 @@ fn quantization_speedup_int8_vs_f32() {
 
     // ── Report ───────────────────────────────────────────────────────
     let speedup = int8_tps / f32_tps;
-    eprintln!("f32  decode: {:.1} tok/s ({:.3}s)", f32_tps, f32_elapsed.as_secs_f64());
-    eprintln!("INT8 decode: {:.1} tok/s ({:.3}s)", int8_tps, int8_elapsed.as_secs_f64());
+    eprintln!(
+        "f32  decode: {:.1} tok/s ({:.3}s)",
+        f32_tps,
+        f32_elapsed.as_secs_f64()
+    );
+    eprintln!(
+        "INT8 decode: {:.1} tok/s ({:.3}s)",
+        int8_tps,
+        int8_elapsed.as_secs_f64()
+    );
     eprintln!("Speedup ratio: {:.2}x", speedup);
 
     // Both must produce valid output
@@ -153,7 +161,11 @@ fn quantization_speedup_int8_vs_f32() {
     // SIMD optimization; with scalar code they are approximately equal)
     eprintln!(
         "INT8 is {:.2}x {} than f32",
-        if speedup >= 1.0 { speedup } else { 1.0 / speedup },
+        if speedup >= 1.0 {
+            speedup
+        } else {
+            1.0 / speedup
+        },
         if speedup >= 1.0 { "faster" } else { "slower" }
     );
 }
@@ -193,10 +205,17 @@ fn isolated_matmul_int8_vs_f32() {
             let mut c = vec![0.0f32; m * n];
             unsafe {
                 synapse_sys::syn_sgemm(
-                    m, n, k,
-                    a.as_ptr(), k, 0,
-                    b.as_ptr(), k, 1, // B transposed (same as matmul_t)
-                    c.as_mut_ptr(), n,
+                    m,
+                    n,
+                    k,
+                    a.as_ptr(),
+                    k,
+                    0,
+                    b.as_ptr(),
+                    k,
+                    1, // B transposed (same as matmul_t)
+                    c.as_mut_ptr(),
+                    n,
                 );
             }
             c
@@ -220,7 +239,8 @@ fn isolated_matmul_int8_vs_f32() {
         // Bench INT8 (SIMD tiled INT8 GEMM)
         let start = Instant::now();
         for _ in 0..iterations {
-            let _ = synapse_core::qgemm_int8(*m, *n, *k, &a_int8, &b_int8, &scales_a, &scales_b).unwrap();
+            let _ = synapse_core::qgemm_int8(*m, *n, *k, &a_int8, &b_int8, &scales_a, &scales_b)
+                .unwrap();
         }
         let int8_us = start.elapsed().as_micros() as f64 / iterations as f64;
 

@@ -118,12 +118,14 @@ mod tests {
         let mut state = StateDict::new();
         state.insert(
             "layer1.weight".to_string(),
-            (vec![3, 4], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0]),
+            (
+                vec![3, 4],
+                vec![
+                    1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+                ],
+            ),
         );
-        state.insert(
-            "layer1.bias".to_string(),
-            (vec![3], vec![0.1, 0.2, 0.3]),
-        );
+        state.insert("layer1.bias".to_string(), (vec![3], vec![0.1, 0.2, 0.3]));
         state.insert(
             "layer2.weight".to_string(),
             (vec![2, 3], vec![-1.0, -2.0, -3.0, -4.0, -5.0, -6.0]),
@@ -136,7 +138,12 @@ mod tests {
         for (name, (shape, data)) in &state {
             let (loaded_shape, loaded_data) = loaded.get(name).unwrap();
             assert_eq!(shape, loaded_shape, "shape mismatch for {}", name);
-            assert_eq!(data.len(), loaded_data.len(), "data len mismatch for {}", name);
+            assert_eq!(
+                data.len(),
+                loaded_data.len(),
+                "data len mismatch for {}",
+                name
+            );
             for (i, (&a, &b)) in data.iter().zip(loaded_data.iter()).enumerate() {
                 assert_eq!(
                     a.to_bits(),

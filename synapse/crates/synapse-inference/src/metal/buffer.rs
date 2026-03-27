@@ -31,12 +31,7 @@ impl BufferPool {
     ///
     /// On first call for a given weight pointer, transposes [n,k] → [k,n],
     /// uploads to GPU, and caches. Subsequent calls return the cached buffer.
-    pub fn get_or_create_transposed_weight(
-        &mut self,
-        b: &[f32],
-        n: usize,
-        k: usize,
-    ) -> &Buffer {
+    pub fn get_or_create_transposed_weight(&mut self, b: &[f32], n: usize, k: usize) -> &Buffer {
         let key = b.as_ptr() as usize;
         self.weight_cache.entry(key).or_insert_with(|| {
             // Transpose [n, k] → [k, n]
@@ -97,10 +92,8 @@ impl BufferPool {
         }
 
         self.allocated_count += 1;
-        self.device.new_buffer(
-            byte_size as u64,
-            MTLResourceOptions::StorageModeShared,
-        )
+        self.device
+            .new_buffer(byte_size as u64, MTLResourceOptions::StorageModeShared)
     }
 
     /// Release a buffer back to the pool for future reuse.

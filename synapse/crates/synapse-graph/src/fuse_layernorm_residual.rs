@@ -205,7 +205,10 @@ mod tests {
             assert!(
                 (u - f).abs() < 1e-5,
                 "LayerNorm+Residual fusion mismatch at {}: unfused={}, fused={}, diff={}",
-                i, u, f, (u - f).abs()
+                i,
+                u,
+                f,
+                (u - f).abs()
             );
         }
     }

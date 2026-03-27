@@ -184,7 +184,13 @@ impl Graph {
     }
 
     /// Add a node to the graph and return its id.
-    pub fn add_node(&mut self, kind: NodeKind, inputs: Vec<NodeId>, meta: NodeMeta, name: impl Into<String>) -> NodeId {
+    pub fn add_node(
+        &mut self,
+        kind: NodeKind,
+        inputs: Vec<NodeId>,
+        meta: NodeMeta,
+        name: impl Into<String>,
+    ) -> NodeId {
         let id = NodeId(self.next_id);
         self.next_id += 1;
         let index = self.nodes.len();
@@ -218,12 +224,17 @@ impl Graph {
 
     /// Get a reference to a node by id.
     pub fn node(&self, id: NodeId) -> Option<&Node> {
-        self.id_to_index.get(&id).and_then(|&idx| self.nodes[idx].as_ref())
+        self.id_to_index
+            .get(&id)
+            .and_then(|&idx| self.nodes[idx].as_ref())
     }
 
     /// Get a mutable reference to a node by id.
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
-        self.id_to_index.get(&id).copied().and_then(|idx| self.nodes[idx].as_mut())
+        self.id_to_index
+            .get(&id)
+            .copied()
+            .and_then(|idx| self.nodes[idx].as_mut())
     }
 
     /// Remove a node from the graph.
@@ -243,7 +254,10 @@ impl Graph {
 
     /// Get all live (non-removed) node ids.
     pub fn node_ids(&self) -> Vec<NodeId> {
-        self.nodes.iter().filter_map(|n| n.as_ref().map(|n| n.id)).collect()
+        self.nodes
+            .iter()
+            .filter_map(|n| n.as_ref().map(|n| n.id))
+            .collect()
     }
 
     /// Count live nodes.
@@ -443,7 +457,11 @@ fn execute_op(
             // Simplified: treat as matmul-like for testing
             let a = &values[&input_ids[0]];
             let w = &values[&input_ids[1]];
-            a.iter().zip(w.iter().cycle()).map(|(x, y)| x * y).take(meta.numel()).collect()
+            a.iter()
+                .zip(w.iter().cycle())
+                .map(|(x, y)| x * y)
+                .take(meta.numel())
+                .collect()
         }
         OpKind::BatchNorm => {
             // input_ids: [input, gamma, beta, mean, var]
@@ -732,10 +750,30 @@ mod tests {
     #[test]
     fn test_topological_order() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![4], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![4], DType::F32), "b");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![a, b], NodeMeta::new(vec![4], DType::F32), "add");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![add], NodeMeta::new(vec![4], DType::F32), "relu");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "b",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![a, b],
+            NodeMeta::new(vec![4], DType::F32),
+            "add",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![add],
+            NodeMeta::new(vec![4], DType::F32),
+            "relu",
+        );
         g.mark_output(relu);
 
         let order = g.topological_order();
@@ -748,9 +786,24 @@ mod tests {
     #[test]
     fn test_execute_add() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![3], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![3], DType::F32), "b");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![a, b], NodeMeta::new(vec![3], DType::F32), "add");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![3], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![3], DType::F32),
+            "b",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![a, b],
+            NodeMeta::new(vec![3], DType::F32),
+            "add",
+        );
         g.mark_output(add);
 
         let mut inputs = HashMap::new();
@@ -763,12 +816,32 @@ mod tests {
     #[test]
     fn test_replace_all_uses() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![4], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![4], DType::F32), "b");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![a, b], NodeMeta::new(vec![4], DType::F32), "add");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "b",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![a, b],
+            NodeMeta::new(vec![4], DType::F32),
+            "add",
+        );
         g.mark_output(add);
 
-        let c = g.add_node(NodeKind::Input("c".into()), vec![], NodeMeta::new(vec![4], DType::F32), "c");
+        let c = g.add_node(
+            NodeKind::Input("c".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "c",
+        );
         g.replace_all_uses(a, c);
 
         assert_eq!(g.node(add).unwrap().inputs[0], c);

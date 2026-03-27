@@ -2,9 +2,9 @@ use crate::config::position::RoPEStyle;
 use crate::kv_cache::KVCacheLayer;
 use crate::ops::activation::{gelu, is_gated_ffn, softmax_slice};
 use crate::ops::matmul::matmul_t;
-use crate::ops::norm::{apply_headwise_rmsnorm, apply_norm};
 #[cfg(feature = "metal")]
 use crate::ops::norm::layernorm;
+use crate::ops::norm::{apply_headwise_rmsnorm, apply_norm};
 use crate::ops::rope::apply_rope_inplace;
 use crate::ops::vector::{add_vecs, add_vecs_inplace};
 use crate::registry::{AttentionVariant, FFNVariant, NormVariant};
@@ -116,7 +116,11 @@ impl DecoderLayer {
         rope_sin: &[f32],
     ) -> Vec<f32> {
         let h = self.hidden_size;
-        debug_assert_eq!(hidden.len(), h, "forward_one: hidden must be [1, hidden_size]");
+        debug_assert_eq!(
+            hidden.len(),
+            h,
+            "forward_one: hidden must be [1, hidden_size]"
+        );
 
         // 1. Attention sub-layer
         let normed = apply_norm(hidden, &self.attn_norm_weight, &*self.attn_norm, h);
@@ -138,7 +142,11 @@ impl DecoderLayer {
         let kv_dim = self.attention.num_kv_heads() * self.attention.head_dim();
         let inter = self.ffn.intermediate_size();
 
-        let head_norms = if self.has_head_norms { 2 * self.attention.head_dim() } else { 0 };
+        let head_norms = if self.has_head_norms {
+            2 * self.attention.head_dim()
+        } else {
+            0
+        };
         let norms = 2 * h + head_norms; // attn_norm + ffn_norm + optional q/k norm
         let attn = q_dim * h + kv_dim * h + kv_dim * h + h * q_dim;
         let ffn = if is_gated_ffn(self.ffn.name()) {
@@ -244,7 +252,11 @@ impl DecoderLayer {
         let mut residual = add_vecs(x, &attn_out);
 
         let normed = apply_norm_dispatch(
-            &residual, &self.ffn_norm_weight, &*self.ffn_norm, h, backend,
+            &residual,
+            &self.ffn_norm_weight,
+            &*self.ffn_norm,
+            h,
+            backend,
         );
         let ffn_out = self.apply_ffn_dispatch(&normed, backend);
         add_vecs_inplace(&mut residual, &ffn_out);
@@ -266,14 +278,24 @@ impl DecoderLayer {
         let h = self.hidden_size;
         debug_assert_eq!(hidden.len(), h);
 
-        let normed = apply_norm_dispatch(
-            hidden, &self.attn_norm_weight, &*self.attn_norm, h, backend,
+        let normed =
+            apply_norm_dispatch(hidden, &self.attn_norm_weight, &*self.attn_norm, h, backend);
+        let attn_out = self.apply_attention_cached_dispatch(
+            &normed,
+            cache_layer,
+            pos,
+            backend,
+            rope_cos,
+            rope_sin,
         );
-        let attn_out = self.apply_attention_cached_dispatch(&normed, cache_layer, pos, backend, rope_cos, rope_sin);
         let mut residual = add_vecs(hidden, &attn_out);
 
         let normed = apply_norm_dispatch(
-            &residual, &self.ffn_norm_weight, &*self.ffn_norm, h, backend,
+            &residual,
+            &self.ffn_norm_weight,
+            &*self.ffn_norm,
+            h,
+            backend,
         );
         let ffn_out = self.apply_ffn_dispatch(&normed, backend);
         add_vecs_inplace(&mut residual, &ffn_out);
@@ -297,8 +319,6 @@ impl DecoderLayer {
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
         let groups = num_heads / num_kv_heads;
-        let scale = 1.0 / (head_dim as f32).sqrt();
-
         let mut q = backend.matmul_t(x, &self.w_q, seq_len, h, q_dim);
         Self::add_bias(&mut q, &self.q_bias, seq_len, q_dim);
         let mut k = backend.matmul_t(x, &self.w_k, seq_len, h, kv_dim);
@@ -306,16 +326,42 @@ impl DecoderLayer {
         let mut v = backend.matmul_t(x, &self.w_v, seq_len, h, kv_dim);
         Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
         let mut q = apply_headwise_rmsnorm(
-            &q, &self.q_norm_weight, seq_len, num_heads, head_dim,
+            &q,
+            &self.q_norm_weight,
+            seq_len,
+            num_heads,
+            head_dim,
             self.attn_norm.eps() as f32,
         );
         let mut k = apply_headwise_rmsnorm(
-            &k, &self.k_norm_weight, seq_len, num_kv_heads, head_dim,
+            &k,
+            &self.k_norm_weight,
+            seq_len,
+            num_kv_heads,
+            head_dim,
             self.attn_norm.eps() as f32,
         );
 
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
+        apply_rope_inplace(
+            &mut q,
+            rope_cos,
+            rope_sin,
+            seq_len,
+            num_heads,
+            head_dim,
+            0,
+            self.rope_style,
+        );
+        apply_rope_inplace(
+            &mut k,
+            rope_cos,
+            rope_sin,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            0,
+            self.rope_style,
+        );
 
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
         for head in 0..num_heads {
@@ -370,10 +416,19 @@ impl DecoderLayer {
         Self::add_bias(&mut v, &self.v_bias, 1, kv_dim);
 
         let attn_out = crate::ops::attention::cached_attention_decode(
-            &q, &k, &v,
-            num_heads, num_kv_heads, head_dim,
-            cache_layer, pos, rope_cos, rope_sin, self.rope_style,
-            &self.q_norm_weight, &self.k_norm_weight,
+            &q,
+            &k,
+            &v,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            cache_layer,
+            pos,
+            rope_cos,
+            rope_sin,
+            self.rope_style,
+            &self.q_norm_weight,
+            &self.k_norm_weight,
             self.attn_norm.eps() as f32,
             self.attention.window_size(),
         );
@@ -470,8 +525,26 @@ impl DecoderLayer {
         );
 
         // Apply RoPE to Q and K
-        apply_rope_inplace(&mut q, rope_cos, rope_sin, seq_len, num_heads, head_dim, 0, self.rope_style);
-        apply_rope_inplace(&mut k, rope_cos, rope_sin, seq_len, num_kv_heads, head_dim, 0, self.rope_style);
+        apply_rope_inplace(
+            &mut q,
+            rope_cos,
+            rope_sin,
+            seq_len,
+            num_heads,
+            head_dim,
+            0,
+            self.rope_style,
+        );
+        apply_rope_inplace(
+            &mut k,
+            rope_cos,
+            rope_sin,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            0,
+            self.rope_style,
+        );
 
         // Multi-head causal attention with GQA support
         let mut attn_output = vec![0.0f32; seq_len * q_dim];
@@ -537,10 +610,19 @@ impl DecoderLayer {
         Self::add_bias(&mut v, &self.v_bias, 1, kv_dim);
 
         let attn_out = crate::ops::attention::cached_attention_decode(
-            &q, &k, &v,
-            num_heads, num_kv_heads, head_dim,
-            cache_layer, pos, rope_cos, rope_sin, self.rope_style,
-            &self.q_norm_weight, &self.k_norm_weight,
+            &q,
+            &k,
+            &v,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            cache_layer,
+            pos,
+            rope_cos,
+            rope_sin,
+            self.rope_style,
+            &self.q_norm_weight,
+            &self.k_norm_weight,
             self.attn_norm.eps() as f32,
             self.attention.window_size(),
         );
@@ -577,10 +659,19 @@ impl DecoderLayer {
         Self::add_bias(&mut v, &self.v_bias, seq_len, kv_dim);
 
         let attn_out = crate::ops::attention::cached_attention_prefill(
-            &q, &k, &v,
-            seq_len, num_heads, num_kv_heads, head_dim,
-            cache_layer, rope_cos, rope_sin, self.rope_style,
-            &self.q_norm_weight, &self.k_norm_weight,
+            &q,
+            &k,
+            &v,
+            seq_len,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            cache_layer,
+            rope_cos,
+            rope_sin,
+            self.rope_style,
+            &self.q_norm_weight,
+            &self.k_norm_weight,
             self.attn_norm.eps() as f32,
         );
 
@@ -601,12 +692,7 @@ impl DecoderLayer {
                 let mut hidden = vec![0.0f32; tokens * inter];
                 let len = hidden.len();
                 let status = unsafe {
-                    synapse_sys::syn_swiglu(
-                        hidden.as_mut_ptr(),
-                        gate.as_ptr(),
-                        up.as_ptr(),
-                        len,
-                    )
+                    synapse_sys::syn_swiglu(hidden.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len)
                 };
                 debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
                 matmul_t(&hidden, &self.ffn_down, tokens, inter, h)
@@ -850,7 +936,10 @@ mod tests {
     fn rmsnorm_simd_vs_naive_1x1024() {
         let hidden = 1024;
         let x = pseudo_rand(1 * hidden, 42);
-        let w = pseudo_rand(hidden, 100).iter().map(|v| v.abs() + 0.1).collect::<Vec<_>>();
+        let w = pseudo_rand(hidden, 100)
+            .iter()
+            .map(|v| v.abs() + 0.1)
+            .collect::<Vec<_>>();
         let simd = rmsnorm(&x, &w, 1e-5, hidden);
         let naive = rmsnorm_naive(&x, &w, 1e-5, hidden);
         assert_close(&simd, &naive, 1e-5, "rmsnorm [1,1024]");
@@ -860,7 +949,10 @@ mod tests {
     fn rmsnorm_simd_vs_naive_4x1024() {
         let hidden = 1024;
         let x = pseudo_rand(4 * hidden, 7);
-        let w = pseudo_rand(hidden, 200).iter().map(|v| v.abs() + 0.1).collect::<Vec<_>>();
+        let w = pseudo_rand(hidden, 200)
+            .iter()
+            .map(|v| v.abs() + 0.1)
+            .collect::<Vec<_>>();
         let simd = rmsnorm(&x, &w, 1e-5, hidden);
         let naive = rmsnorm_naive(&x, &w, 1e-5, hidden);
         assert_close(&simd, &naive, 1e-5, "rmsnorm [4,1024]");
@@ -870,7 +962,10 @@ mod tests {
     fn rmsnorm_simd_vs_naive_128x1024() {
         let hidden = 1024;
         let x = pseudo_rand(128 * hidden, 314);
-        let w = pseudo_rand(hidden, 300).iter().map(|v| v.abs() + 0.1).collect::<Vec<_>>();
+        let w = pseudo_rand(hidden, 300)
+            .iter()
+            .map(|v| v.abs() + 0.1)
+            .collect::<Vec<_>>();
         let simd = rmsnorm(&x, &w, 1e-5, hidden);
         let naive = rmsnorm_naive(&x, &w, 1e-5, hidden);
         assert_close(&simd, &naive, 1e-5, "rmsnorm [128,1024]");
@@ -881,7 +976,10 @@ mod tests {
         let hidden = 64;
         let x = pseudo_rand(2 * hidden, 55);
         let ones = vec![1.0f32; hidden];
-        let gamma = pseudo_rand(hidden, 77).iter().map(|v| v.abs() + 0.5).collect::<Vec<_>>();
+        let gamma = pseudo_rand(hidden, 77)
+            .iter()
+            .map(|v| v.abs() + 0.5)
+            .collect::<Vec<_>>();
 
         let out_unit = rmsnorm(&x, &ones, 1e-5, hidden);
         let out_weighted = rmsnorm(&x, &gamma, 1e-5, hidden);
@@ -897,7 +995,8 @@ mod tests {
             assert!(
                 (out_weighted_naive[i] - expected).abs() < 1e-5,
                 "naive weighted[{i}] mismatch: {} vs {}",
-                out_weighted_naive[i], expected,
+                out_weighted_naive[i],
+                expected,
             );
         }
 
@@ -920,7 +1019,10 @@ mod tests {
         let (rows, heads, head_dim) = (4, 8, 128);
         let total = rows * heads * head_dim;
         let x = pseudo_rand(total, 42);
-        let w = pseudo_rand(head_dim, 99).iter().map(|v| v.abs() + 0.1).collect::<Vec<_>>();
+        let w = pseudo_rand(head_dim, 99)
+            .iter()
+            .map(|v| v.abs() + 0.1)
+            .collect::<Vec<_>>();
         let eps = 1e-5;
 
         let simd = apply_headwise_rmsnorm(&x, &w, rows, heads, head_dim, eps);
@@ -941,7 +1043,10 @@ mod tests {
         let batch = 1;
         let total = batch * hidden;
         let x = pseudo_rand(total, 42);
-        let w = pseudo_rand(hidden, 99).iter().map(|v| v.abs() + 0.1).collect::<Vec<_>>();
+        let w = pseudo_rand(hidden, 99)
+            .iter()
+            .map(|v| v.abs() + 0.1)
+            .collect::<Vec<_>>();
 
         // Warm up
         let _ = rmsnorm(&x, &w, 1e-5, hidden);
@@ -1037,9 +1142,8 @@ mod tests {
     fn swiglu_fused(gate: &[f32], up: &[f32]) -> Vec<f32> {
         let len = gate.len();
         let mut out = vec![0.0f32; len];
-        let status = unsafe {
-            synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len)
-        };
+        let status =
+            unsafe { synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len) };
         assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
         out
     }
@@ -1084,7 +1188,10 @@ mod tests {
         }
         // Sanity: GeGLU output should differ from SwiGLU output
         let swiglu_result = swiglu_manual(&gate, &up);
-        let differs = result.iter().zip(swiglu_result.iter()).any(|(a, b)| (a - b).abs() > 1e-3);
+        let differs = result
+            .iter()
+            .zip(swiglu_result.iter())
+            .any(|(a, b)| (a - b).abs() > 1e-3);
         assert!(differs, "GeGLU and SwiGLU outputs should differ");
 
         // Verify GeGLU values are reasonable (not NaN/Inf)
@@ -1186,12 +1293,7 @@ mod tests {
             let t0 = std::time::Instant::now();
             for _ in 0..iters_per_run {
                 unsafe {
-                    synapse_sys::syn_swiglu(
-                        dst.as_mut_ptr(),
-                        gate.as_ptr(),
-                        up.as_ptr(),
-                        len,
-                    );
+                    synapse_sys::syn_swiglu(dst.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len);
                 }
             }
             let ns = t0.elapsed().as_nanos() as f64 / iters_per_run as f64;
@@ -1226,26 +1328,46 @@ mod tests {
         head_dim: usize,
     }
     impl crate::registry::AttentionVariant for TestAttn {
-        fn num_heads(&self) -> usize { self.num_heads }
-        fn head_dim(&self) -> usize { self.head_dim }
-        fn num_kv_heads(&self) -> usize { self.num_kv_heads }
-        fn name(&self) -> &str { "GQA" }
+        fn num_heads(&self) -> usize {
+            self.num_heads
+        }
+        fn head_dim(&self) -> usize {
+            self.head_dim
+        }
+        fn num_kv_heads(&self) -> usize {
+            self.num_kv_heads
+        }
+        fn name(&self) -> &str {
+            "GQA"
+        }
     }
 
     /// Minimal NormVariant for tests (delegates to RMSNorm path via name).
     #[derive(Debug)]
-    struct TestNorm { eps: f64 }
+    struct TestNorm {
+        eps: f64,
+    }
     impl crate::registry::NormVariant for TestNorm {
-        fn eps(&self) -> f64 { self.eps }
-        fn name(&self) -> &str { "RMSNorm" }
+        fn eps(&self) -> f64 {
+            self.eps
+        }
+        fn name(&self) -> &str {
+            "RMSNorm"
+        }
     }
 
     /// Minimal FFNVariant for tests (dispatches to SwiGLU path).
     #[derive(Debug)]
-    struct TestFFN { inter: usize }
+    struct TestFFN {
+        inter: usize,
+    }
     impl crate::registry::FFNVariant for TestFFN {
-        fn intermediate_size(&self) -> usize { self.inter }
-        fn name(&self) -> &str { "SwiGLU" }
+        fn intermediate_size(&self) -> usize {
+            self.inter
+        }
+        fn name(&self) -> &str {
+            "SwiGLU"
+        }
     }
 
     /// Build test RoPE cos/sin tables.
@@ -1277,7 +1399,11 @@ mod tests {
         let kv_dim = num_kv_heads * head_dim;
         DecoderLayer {
             attn_norm: Box::new(TestNorm { eps: 1e-5 }),
-            attention: Box::new(TestAttn { num_heads, num_kv_heads, head_dim }),
+            attention: Box::new(TestAttn {
+                num_heads,
+                num_kv_heads,
+                head_dim,
+            }),
             ffn_norm: Box::new(TestNorm { eps: 1e-5 }),
             ffn: Box::new(TestFFN { inter }),
             hidden_size: hidden,
@@ -1346,7 +1472,12 @@ mod tests {
         // Compare: forward_one output at last position should match
         // forward() output at the last position.
         let full_last = &full_out[(seq_len - 1) * hidden..seq_len * hidden];
-        assert_close(&last_out, full_last, 1e-4, "forward_one vs forward last pos");
+        assert_close(
+            &last_out,
+            full_last,
+            1e-4,
+            "forward_one vs forward last pos",
+        );
     }
 
     /// KV-cache values after forward_one() must match K/V computed by the
@@ -1370,13 +1501,27 @@ mod tests {
         let v_full = matmul_t(&normed, &layer.w_v, seq_len, h, kv_dim);
         // 3. apply headwise norm to K (V is raw)
         let k_full_normed = apply_headwise_rmsnorm(
-            &k_full, &layer.k_norm_weight, seq_len, num_kv_heads, head_dim, eps,
+            &k_full,
+            &layer.k_norm_weight,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            eps,
         );
 
         // Apply RoPE to the normed K (matching what forward_one does)
         let (rope_cos, rope_sin) = make_test_rope(head_dim, 64);
         let mut k_full_roped = k_full_normed.clone();
-        apply_rope_inplace(&mut k_full_roped, &rope_cos, &rope_sin, seq_len, num_kv_heads, head_dim, 0, RoPEStyle::RotateHalf);
+        apply_rope_inplace(
+            &mut k_full_roped,
+            &rope_cos,
+            &rope_sin,
+            seq_len,
+            num_kv_heads,
+            head_dim,
+            0,
+            RoPEStyle::RotateHalf,
+        );
 
         // Now run forward_one incrementally and collect cache contents
         let mut cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
@@ -1389,7 +1534,12 @@ mod tests {
         assert_eq!(cached_len, seq_len);
 
         // Cached K should match RoPE'd normed K from full forward
-        assert_close(cached_k, &k_full_roped, 1e-5, "cached K vs full RoPE'd normed K");
+        assert_close(
+            cached_k,
+            &k_full_roped,
+            1e-5,
+            "cached K vs full RoPE'd normed K",
+        );
         // Cached V should match raw V from full forward
         assert_close(cached_v, &v_full, 1e-5, "cached V vs full raw V");
     }
@@ -1447,13 +1597,34 @@ mod tests {
         let input: Vec<f32> = (1..=head_dim).map(|x| x as f32).collect();
 
         let mut rh = input.clone();
-        apply_rope_inplace(&mut rh, &cos, &sin, seq_len, num_heads, head_dim, 2, RoPEStyle::RotateHalf);
+        apply_rope_inplace(
+            &mut rh,
+            &cos,
+            &sin,
+            seq_len,
+            num_heads,
+            head_dim,
+            2,
+            RoPEStyle::RotateHalf,
+        );
 
         let mut il = input.clone();
-        apply_rope_inplace(&mut il, &cos, &sin, seq_len, num_heads, head_dim, 2, RoPEStyle::Interleaved);
+        apply_rope_inplace(
+            &mut il,
+            &cos,
+            &sin,
+            seq_len,
+            num_heads,
+            head_dim,
+            2,
+            RoPEStyle::Interleaved,
+        );
 
         // Outputs should differ (different dimension pairing)
-        assert_ne!(rh, il, "RotateHalf and Interleaved should produce different results");
+        assert_ne!(
+            rh, il,
+            "RotateHalf and Interleaved should produce different results"
+        );
     }
 
     #[test]
@@ -1467,7 +1638,16 @@ mod tests {
 
         let input: Vec<f32> = (1..=head_dim).map(|x| x as f32).collect();
         let mut out = input.clone();
-        apply_rope_inplace(&mut out, &cos, &sin, 1, 1, head_dim, 0, RoPEStyle::Interleaved);
+        apply_rope_inplace(
+            &mut out,
+            &cos,
+            &sin,
+            1,
+            1,
+            head_dim,
+            0,
+            RoPEStyle::Interleaved,
+        );
         assert_eq!(out, input, "RoPE at pos=0 should be identity");
     }
 
@@ -1482,11 +1662,21 @@ mod tests {
         window_size: usize,
     }
     impl crate::registry::AttentionVariant for TestSlidingWindowAttn {
-        fn num_heads(&self) -> usize { self.num_heads }
-        fn head_dim(&self) -> usize { self.head_dim }
-        fn num_kv_heads(&self) -> usize { self.num_kv_heads }
-        fn window_size(&self) -> Option<usize> { Some(self.window_size) }
-        fn name(&self) -> &str { "SlidingWindow" }
+        fn num_heads(&self) -> usize {
+            self.num_heads
+        }
+        fn head_dim(&self) -> usize {
+            self.head_dim
+        }
+        fn num_kv_heads(&self) -> usize {
+            self.num_kv_heads
+        }
+        fn window_size(&self) -> Option<usize> {
+            Some(self.window_size)
+        }
+        fn name(&self) -> &str {
+            "SlidingWindow"
+        }
     }
 
     /// Build a test DecoderLayer with sliding window attention.
@@ -1502,7 +1692,12 @@ mod tests {
         let kv_dim = num_kv_heads * head_dim;
         DecoderLayer {
             attn_norm: Box::new(TestNorm { eps: 1e-5 }),
-            attention: Box::new(TestSlidingWindowAttn { num_heads, num_kv_heads, head_dim, window_size }),
+            attention: Box::new(TestSlidingWindowAttn {
+                num_heads,
+                num_kv_heads,
+                head_dim,
+                window_size,
+            }),
             ffn_norm: Box::new(TestNorm { eps: 1e-5 }),
             ffn: Box::new(TestFFN { inter }),
             hidden_size: hidden,
@@ -1556,7 +1751,12 @@ mod tests {
 
         // Build two layers with identical weights: one with sliding window, one without
         let sw_layer = make_test_layer_sliding_window(
-            hidden, num_heads, num_kv_heads, head_dim, inter, window_size,
+            hidden,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            inter,
+            window_size,
         );
         let full_layer = make_test_layer(hidden, num_heads, num_kv_heads, head_dim, inter);
 
@@ -1583,12 +1783,26 @@ mod tests {
 
         // Now decode at position 8 with both layers
         let decode_token = &input[total_positions * hidden..(total_positions + 1) * hidden];
-        let sw_out = sw_layer.forward_one(decode_token, &mut sw_cache, total_positions, &rope_cos, &rope_sin);
-        let full_out = full_layer.forward_one(decode_token, &mut full_cache, total_positions, &rope_cos, &rope_sin);
+        let sw_out = sw_layer.forward_one(
+            decode_token,
+            &mut sw_cache,
+            total_positions,
+            &rope_cos,
+            &rope_sin,
+        );
+        let full_out = full_layer.forward_one(
+            decode_token,
+            &mut full_cache,
+            total_positions,
+            &rope_cos,
+            &rope_sin,
+        );
 
         // The outputs should differ because sliding window attends to only
         // the last 4 positions while full attention attends to all 9.
-        let differs = sw_out.iter().zip(full_out.iter())
+        let differs = sw_out
+            .iter()
+            .zip(full_out.iter())
             .any(|(a, b)| (a - b).abs() > 1e-5);
         assert!(
             differs,
@@ -1598,13 +1812,21 @@ mod tests {
         // Verify the cache still has all 9 entries (sliding window only limits
         // attention, not cache storage)
         let (_, _, sw_len_after) = sw_cache.slice().unwrap();
-        assert_eq!(sw_len_after, total_positions + 1,
-            "Cache should still store all positions, not be truncated by sliding window");
+        assert_eq!(
+            sw_len_after,
+            total_positions + 1,
+            "Cache should still store all positions, not be truncated by sliding window"
+        );
 
         // Additional verification: sliding window with window_size >= seq_len
         // should behave identically to full attention
         let big_window_layer = make_test_layer_sliding_window(
-            hidden, num_heads, num_kv_heads, head_dim, inter, 100, // window >> total positions
+            hidden,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            inter,
+            100, // window >> total positions
         );
         let mut big_cache = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
         let mut full_cache2 = KVCacheLayer::new(64, num_kv_heads, head_dim).unwrap();
@@ -1615,10 +1837,26 @@ mod tests {
             let _ = full_layer.forward_one(token, &mut full_cache2, t, &rope_cos, &rope_sin);
         }
 
-        let big_out = big_window_layer.forward_one(decode_token, &mut big_cache, total_positions, &rope_cos, &rope_sin);
-        let full_out2 = full_layer.forward_one(decode_token, &mut full_cache2, total_positions, &rope_cos, &rope_sin);
+        let big_out = big_window_layer.forward_one(
+            decode_token,
+            &mut big_cache,
+            total_positions,
+            &rope_cos,
+            &rope_sin,
+        );
+        let full_out2 = full_layer.forward_one(
+            decode_token,
+            &mut full_cache2,
+            total_positions,
+            &rope_cos,
+            &rope_sin,
+        );
 
-        assert_close(&big_out, &full_out2, 1e-5,
-            "Sliding window with window >= seq_len should match full attention");
+        assert_close(
+            &big_out,
+            &full_out2,
+            1e-5,
+            "Sliding window with window >= seq_len should match full attention",
+        );
     }
 }

@@ -105,15 +105,15 @@ fn test_mha_grad_check_small() {
     let n_heads = 2;
 
     let inputs = vec![
-        make_tensor(&[batch, seq_len, d_model], 1),   // input
-        make_tensor(&[d_model, d_model], 10),          // W_q
-        make_tensor(&[d_model], 11),                   // b_q
-        make_tensor(&[d_model, d_model], 20),          // W_k
-        make_tensor(&[d_model], 21),                   // b_k
-        make_tensor(&[d_model, d_model], 30),          // W_v
-        make_tensor(&[d_model], 31),                   // b_v
-        make_tensor(&[d_model, d_model], 40),          // W_o
-        make_tensor(&[d_model], 41),                   // b_o
+        make_tensor(&[batch, seq_len, d_model], 1), // input
+        make_tensor(&[d_model, d_model], 10),       // W_q
+        make_tensor(&[d_model], 11),                // b_q
+        make_tensor(&[d_model, d_model], 20),       // W_k
+        make_tensor(&[d_model], 21),                // b_k
+        make_tensor(&[d_model, d_model], 30),       // W_v
+        make_tensor(&[d_model], 31),                // b_v
+        make_tensor(&[d_model, d_model], 40),       // W_o
+        make_tensor(&[d_model], 41),                // b_o
     ];
 
     let pass = grad_check(
@@ -150,7 +150,10 @@ fn test_mha_grad_check_medium() {
         1e-3,
         5e-2,
     );
-    assert!(pass, "grad_check failed for medium MHA (B=2, S=4, D=8, H=2)");
+    assert!(
+        pass,
+        "grad_check failed for medium MHA (B=2, S=4, D=8, H=2)"
+    );
 }
 
 #[test]
@@ -178,7 +181,10 @@ fn test_mha_grad_check_4_heads() {
         1e-3,
         5e-2,
     );
-    assert!(pass, "grad_check failed for MHA with 4 heads (B=1, S=3, D=8, H=4)");
+    assert!(
+        pass,
+        "grad_check failed for MHA with 4 heads (B=1, S=3, D=8, H=4)"
+    );
 }
 
 // ── Verify gradient existence and finiteness for all parameters ──────

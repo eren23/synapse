@@ -83,7 +83,11 @@ mod tests {
         ];
 
         let total_norm = clip_grad_norm_(&mut params, 2.5, 2.0);
-        assert!((total_norm - 5.0).abs() < 1e-6, "total norm = {}", total_norm);
+        assert!(
+            (total_norm - 5.0).abs() < 1e-6,
+            "total norm = {}",
+            total_norm
+        );
 
         // After clipping: scale factor = 2.5/5.0 = 0.5
         assert!(
@@ -99,11 +103,7 @@ mod tests {
 
         // Verify new total norm
         let new_norm = compute_total_norm(&params, 2.0);
-        assert!(
-            (new_norm - 2.5).abs() < 1e-6,
-            "new norm = {}",
-            new_norm
-        );
+        assert!((new_norm - 2.5).abs() < 1e-6, "new norm = {}", new_norm);
     }
 
     #[test]
@@ -149,11 +149,7 @@ mod tests {
 
         // After clipping, total norm should be ≈ 1.0
         let new_norm = compute_total_norm(&params, 2.0);
-        assert!(
-            (new_norm - 1.0).abs() < 1e-5,
-            "new norm = {}",
-            new_norm
-        );
+        assert!((new_norm - 1.0).abs() < 1e-5, "new norm = {}", new_norm);
     }
 
     #[test]

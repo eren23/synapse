@@ -11,10 +11,7 @@ use std::time::Instant;
 use synapse_graph::*;
 
 /// Build an unfused self-attention graph.
-fn build_unfused_attention(
-    seq_len: usize,
-    d_model: usize,
-) -> (Graph, Vec<NodeId>) {
+fn build_unfused_attention(seq_len: usize, d_model: usize) -> (Graph, Vec<NodeId>) {
     let d_k = d_model;
     let d_v = d_model;
     let d_out = d_model;
@@ -125,10 +122,7 @@ fn build_unfused_attention(
 }
 
 /// Build a fused attention graph via the FuseAttention pass.
-fn build_fused_attention(
-    seq_len: usize,
-    d_model: usize,
-) -> (Graph, Vec<NodeId>) {
+fn build_fused_attention(seq_len: usize, d_model: usize) -> (Graph, Vec<NodeId>) {
     let (mut g, feed_ids) = build_unfused_attention(seq_len, d_model);
     FuseAttention::new().run(&mut g);
     DeadCodeElimination::new().run(&mut g);
@@ -192,7 +186,9 @@ fn attention_bench_fused_2x_vs_naive() {
         assert!(
             (u - f).abs() < 1e-3,
             "Mismatch at {}: unfused={}, fused={}",
-            i, u, f
+            i,
+            u,
+            f
         );
     }
 

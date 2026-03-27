@@ -147,12 +147,7 @@ mod tests {
     fn test_grad_check_fan_out() {
         let inputs = vec![Tensor::scalar(4.0)];
 
-        let pass = grad_check(
-            |g, vars| g.add(vars[0], vars[0]),
-            &inputs,
-            1e-2,
-            1e-4,
-        );
+        let pass = grad_check(|g, vars| g.add(vars[0], vars[0]), &inputs, 1e-2, 1e-4);
         assert!(pass, "grad_check failed for fan-out graph");
     }
 
@@ -180,12 +175,7 @@ mod tests {
             Tensor::new(vec![3.0, 4.0], vec![2]),
         ];
 
-        let pass = grad_check(
-            |g, vars| g.mul(vars[0], vars[1]),
-            &inputs,
-            1e-2,
-            1e-4,
-        );
+        let pass = grad_check(|g, vars| g.mul(vars[0], vars[1]), &inputs, 1e-2, 1e-4);
         assert!(pass, "grad_check failed for multi-element tensors");
     }
 }

@@ -253,11 +253,7 @@ mod tests {
         for _ in 0..5 {
             sched.step();
         }
-        assert!(
-            sched.get_lr().abs() < 1e-6,
-            "got {}",
-            sched.get_lr()
-        );
+        assert!(sched.get_lr().abs() < 1e-6, "got {}", sched.get_lr());
     }
 
     #[test]
@@ -292,7 +288,7 @@ mod tests {
         assert!((sched.step() - 0.04).abs() < 1e-7); // step 2: 0.1 * 2/5
         assert!((sched.step() - 0.06).abs() < 1e-7); // step 3: 0.1 * 3/5
         assert!((sched.step() - 0.08).abs() < 1e-7); // step 4: 0.1 * 4/5
-        assert!((sched.step() - 0.1).abs() < 1e-7);  // step 5: 0.1 * 5/5
+        assert!((sched.step() - 0.1).abs() < 1e-7); // step 5: 0.1 * 5/5
 
         // After warmup, stays at base_lr
         assert!((sched.step() - 0.1).abs() < 1e-7);
@@ -303,9 +299,7 @@ mod tests {
 
     #[test]
     fn test_reduce_lr_on_plateau() {
-        let mut sched = ReduceLROnPlateau::new(0.1)
-            .factor(0.5)
-            .patience(2);
+        let mut sched = ReduceLROnPlateau::new(0.1).factor(0.5).patience(2);
 
         // Improving metric
         sched.step(1.0);

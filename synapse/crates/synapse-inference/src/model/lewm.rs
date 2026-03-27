@@ -574,11 +574,7 @@ impl LeWorldModel {
         false
     }
 
-    fn set_projection_weight_on(
-        head: &mut ProjectionHead,
-        rest: &str,
-        tensor: &RawTensor,
-    ) -> bool {
+    fn set_projection_weight_on(head: &mut ProjectionHead, rest: &str, tensor: &RawTensor) -> bool {
         // Parse "N.weight" or "N.bias"
         let parts: Vec<&str> = rest.splitn(2, '.').collect();
         if parts.len() != 2 {
@@ -875,8 +871,7 @@ mod tests {
         // Encoder weights
         model.encoder.patch_proj = AlignedBuffer::from_slice(&gen_weights(h * patch_dim, 1));
         model.encoder.cls_token = AlignedBuffer::from_slice(&gen_weights(h, 2));
-        model.encoder.pos_embed =
-            AlignedBuffer::from_slice(&gen_weights(enc_seq_len * h, 3));
+        model.encoder.pos_embed = AlignedBuffer::from_slice(&gen_weights(enc_seq_len * h, 3));
         model.encoder.final_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
 
         for (i, layer) in model.encoder.layers.iter_mut().enumerate() {
@@ -892,48 +887,37 @@ mod tests {
         }
 
         // Projector: [h] → [enc_inter] → [enc_inter] → [pred_h]
-        model.projector.layers[0].0 =
-            AlignedBuffer::from_slice(&gen_weights(enc_inter * h, 400));
-        model.projector.layers[0].1 =
-            AlignedBuffer::from_slice(&gen_weights(enc_inter, 401));
+        model.projector.layers[0].0 = AlignedBuffer::from_slice(&gen_weights(enc_inter * h, 400));
+        model.projector.layers[0].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 401));
         model.projector.layers[1].0 =
             AlignedBuffer::from_slice(&gen_weights(enc_inter * enc_inter, 402));
-        model.projector.layers[1].1 =
-            AlignedBuffer::from_slice(&gen_weights(enc_inter, 403));
+        model.projector.layers[1].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 403));
         model.projector.layers[2].0 =
             AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 404));
-        model.projector.layers[2].1 =
-            AlignedBuffer::from_slice(&gen_weights(pred_h, 405));
+        model.projector.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 405));
 
         // Pred_proj: same structure
         model.pred_proj.layers[0].0 =
             AlignedBuffer::from_slice(&gen_weights(enc_inter * pred_h, 500));
-        model.pred_proj.layers[0].1 =
-            AlignedBuffer::from_slice(&gen_weights(enc_inter, 501));
+        model.pred_proj.layers[0].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 501));
         model.pred_proj.layers[1].0 =
             AlignedBuffer::from_slice(&gen_weights(enc_inter * enc_inter, 502));
-        model.pred_proj.layers[1].1 =
-            AlignedBuffer::from_slice(&gen_weights(enc_inter, 503));
+        model.pred_proj.layers[1].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 503));
         model.pred_proj.layers[2].0 =
             AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 504));
-        model.pred_proj.layers[2].1 =
-            AlignedBuffer::from_slice(&gen_weights(pred_h, 505));
+        model.pred_proj.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 505));
 
         // Action encoder
-        model.action_conv_weight =
-            AlignedBuffer::from_slice(&gen_weights(act_dim * act_dim, 600));
+        model.action_conv_weight = AlignedBuffer::from_slice(&gen_weights(act_dim * act_dim, 600));
         model.action_conv_bias = AlignedBuffer::from_slice(&gen_weights(act_dim, 601));
         model.action_mlp1_weight =
             AlignedBuffer::from_slice(&gen_weights(enc_inter * act_dim, 602));
-        model.action_mlp1_bias =
-            AlignedBuffer::from_slice(&gen_weights(enc_inter, 603));
-        model.action_mlp2_weight =
-            AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 604));
+        model.action_mlp1_bias = AlignedBuffer::from_slice(&gen_weights(enc_inter, 603));
+        model.action_mlp2_weight = AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 604));
         model.action_mlp2_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, 605));
 
         // Predictor pos embed: [3, pred_h]
-        model.predictor_pos_embed =
-            AlignedBuffer::from_slice(&gen_weights(3 * pred_h, 700));
+        model.predictor_pos_embed = AlignedBuffer::from_slice(&gen_weights(3 * pred_h, 700));
 
         // Predictor norm
         model.predictor_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
@@ -945,16 +929,13 @@ mod tests {
             // adaLN: [6*pred_h, pred_h]
             layer.adaln_weight =
                 AlignedBuffer::from_slice(&gen_weights(6 * pred_h * pred_h, s + 1));
-            layer.adaln_bias =
-                AlignedBuffer::from_slice(&gen_weights(6 * pred_h, s + 2));
+            layer.adaln_bias = AlignedBuffer::from_slice(&gen_weights(6 * pred_h, s + 2));
             // Fused QKV: [3*inner_dim, pred_h]
-            layer.to_qkv =
-                AlignedBuffer::from_slice(&gen_weights(3 * pred_inner * pred_h, s + 3));
+            layer.to_qkv = AlignedBuffer::from_slice(&gen_weights(3 * pred_inner * pred_h, s + 3));
             // Attn out: [pred_h, inner_dim]
             layer.attn_out_weight =
                 AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inner, s + 4));
-            layer.attn_out_bias =
-                AlignedBuffer::from_slice(&gen_weights(pred_h, s + 5));
+            layer.attn_out_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 5));
             // Attn norm (used for pre-attention LN in adaLN)
             layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
             layer.attn_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
@@ -964,13 +945,11 @@ mod tests {
             // MLP up: [pred_inter, pred_h]
             layer.mlp_up_weight =
                 AlignedBuffer::from_slice(&gen_weights(pred_inter * pred_h, s + 10));
-            layer.mlp_up_bias =
-                AlignedBuffer::from_slice(&gen_weights(pred_inter, s + 11));
+            layer.mlp_up_bias = AlignedBuffer::from_slice(&gen_weights(pred_inter, s + 11));
             // MLP down: [pred_h, pred_inter]
             layer.mlp_down_weight =
                 AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 12));
-            layer.mlp_down_bias =
-                AlignedBuffer::from_slice(&gen_weights(pred_h, s + 13));
+            layer.mlp_down_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 13));
         }
 
         model
@@ -1140,10 +1119,7 @@ mod tests {
             "encoder.embeddings.patch_embeddings.projection.weight".into(),
             rt(h * patch_dim, 1),
         );
-        weights.insert(
-            "encoder.embeddings.cls_token".into(),
-            rt(h, 2),
-        );
+        weights.insert("encoder.embeddings.cls_token".into(), rt(h, 2));
         weights.insert(
             "encoder.embeddings.position_embeddings".into(),
             rt(enc_seq_len * h, 3),
@@ -1156,14 +1132,8 @@ mod tests {
         );
 
         // Predictor
-        weights.insert(
-            "predictor.pos_embedding".into(),
-            rt(3 * pred_h, 20),
-        );
-        weights.insert(
-            "predictor.transformer.norm.weight".into(),
-            rt(pred_h, 21),
-        );
+        weights.insert("predictor.pos_embedding".into(), rt(3 * pred_h, 20));
+        weights.insert("predictor.transformer.norm.weight".into(), rt(pred_h, 21));
         weights.insert(
             "predictor.transformer.layers.0.adaLN_modulation.1.weight".into(),
             rt(6 * pred_h * pred_h, 30),
@@ -1232,11 +1202,7 @@ mod tests {
         let z2 = model.predict_next(&z, &action2);
 
         // Different actions should produce different predictions
-        let diff: f32 = z1
-            .iter()
-            .zip(z2.iter())
-            .map(|(a, b)| (a - b).abs())
-            .sum();
+        let diff: f32 = z1.iter().zip(z2.iter()).map(|(a, b)| (a - b).abs()).sum();
         assert!(
             diff > 1e-10,
             "Different actions should produce different predictions, got diff={diff}"

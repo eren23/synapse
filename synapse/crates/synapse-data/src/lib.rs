@@ -81,10 +81,7 @@ impl Tensor {
     /// with one fewer dimension. For a tensor of shape [N, D1, D2, ...], returns shape [D1, D2, ...].
     /// For a 1-D tensor of shape [N], returns a scalar tensor of shape [1].
     pub fn select(&self, index: usize) -> Self {
-        assert!(
-            !self.shape.is_empty(),
-            "cannot select from a scalar tensor"
-        );
+        assert!(!self.shape.is_empty(), "cannot select from a scalar tensor");
         assert!(
             index < self.shape[0],
             "index {} out of bounds for dimension 0 with size {}",

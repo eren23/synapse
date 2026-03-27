@@ -14,10 +14,7 @@ impl Dropout {
     /// Create a Dropout layer with drop probability `p`.
     pub fn new(p: f32) -> Self {
         assert!((0.0..1.0).contains(&p), "dropout p must be in [0, 1)");
-        Dropout {
-            p,
-            training: true,
-        }
+        Dropout { p, training: true }
     }
 }
 

@@ -126,7 +126,10 @@ impl Tokenizer {
         self.eos_token_id
     }
 
-    fn from_vocab_and_merges(vocab_path: &Path, merges_path: &Path) -> Result<Self, TokenizerError> {
+    fn from_vocab_and_merges(
+        vocab_path: &Path,
+        merges_path: &Path,
+    ) -> Result<Self, TokenizerError> {
         let vocab_json = fs::read_to_string(vocab_path)?;
         let vocab: HashMap<String, u32> = serde_json::from_str(&vocab_json)?;
         let merges_txt = fs::read_to_string(merges_path)?;
@@ -357,9 +360,7 @@ impl Tokenizer {
             let mut merged = Vec::with_capacity(pieces.len());
             let mut i = 0;
             while i < pieces.len() {
-                if i + 1 < pieces.len()
-                    && pieces[i] == best_pair.0
-                    && pieces[i + 1] == best_pair.1
+                if i + 1 < pieces.len() && pieces[i] == best_pair.0 && pieces[i + 1] == best_pair.1
                 {
                     merged.push(format!("{}{}", pieces[i], pieces[i + 1]));
                     i += 2;
@@ -410,7 +411,9 @@ fn parse_merges_value(value: &Value) -> Result<Vec<(String, String)>, TokenizerE
 
         if let Some(pair) = item.as_array() {
             if pair.len() != 2 {
-                return Err(TokenizerError::Invalid("merge array must have 2 entries".into()));
+                return Err(TokenizerError::Invalid(
+                    "merge array must have 2 entries".into(),
+                ));
             }
             let left = pair[0]
                 .as_str()
@@ -539,5 +542,35 @@ mod tests {
         assert_eq!(ids, vec![14, 4, 6, 15]);
         let text = tokenizer.decode(&ids).unwrap();
         assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn added_tokens_with_special_false_are_preserved_on_encode() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let tokenizer_path = dir.path().join("tokenizer.json");
+
+        let json = serde_json::json!({
+            "model": {
+                "vocab": {
+                    "h": 0,
+                    "e": 1,
+                    "l": 2,
+                    "o": 3,
+                    "Ġ": 4
+                },
+                "merges": []
+            },
+            "added_tokens": [
+                {"id": 10, "content": "<think>", "special": false},
+                {"id": 11, "content": "</think>", "special": false}
+            ]
+        });
+        std::fs::write(&tokenizer_path, json.to_string()).expect("write tokenizer");
+
+        let tokenizer = Tokenizer::from_tokenizer_json(&tokenizer_path).expect("load tokenizer");
+        let ids = tokenizer.encode("<think>hello</think>").unwrap();
+
+        assert_eq!(ids.first().copied(), Some(10));
+        assert_eq!(ids.last().copied(), Some(11));
     }
 }

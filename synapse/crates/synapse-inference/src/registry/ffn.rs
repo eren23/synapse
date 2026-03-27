@@ -143,23 +143,44 @@ impl SwiGLUFFN {
         let mut output = vec![0.0f32; m * k];
 
         syn_sgemm(
-            m, n, k,
-            input.as_ptr(), k, 0,
-            self.gate_proj.as_ptr(), k, 1,
-            gate.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            input.as_ptr(),
+            k,
+            0,
+            self.gate_proj.as_ptr(),
+            k,
+            1,
+            gate.as_mut_ptr(),
+            n,
         );
         syn_sgemm(
-            m, n, k,
-            input.as_ptr(), k, 0,
-            self.up_proj.as_ptr(), k, 1,
-            up.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            input.as_ptr(),
+            k,
+            0,
+            self.up_proj.as_ptr(),
+            k,
+            1,
+            up.as_mut_ptr(),
+            n,
         );
         syn_swiglu(hidden.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), m * n);
         syn_sgemm(
-            m, k, n,
-            hidden.as_ptr(), n, 0,
-            self.down_proj.as_ptr(), n, 1,
-            output.as_mut_ptr(), k,
+            m,
+            k,
+            n,
+            hidden.as_ptr(),
+            n,
+            0,
+            self.down_proj.as_ptr(),
+            n,
+            1,
+            output.as_mut_ptr(),
+            k,
         );
 
         output
@@ -267,10 +288,17 @@ impl StandardFFN {
         let mut output = vec![0.0f32; m * k];
 
         syn_sgemm(
-            m, n, k,
-            input.as_ptr(), k, 0,
-            self.w1.as_ptr(), k, 1,
-            hidden.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            input.as_ptr(),
+            k,
+            0,
+            self.w1.as_ptr(),
+            k,
+            1,
+            hidden.as_mut_ptr(),
+            n,
         );
 
         // Apply activation via the matching FFI function.
@@ -288,10 +316,17 @@ impl StandardFFN {
         }
 
         syn_sgemm(
-            m, k, n,
-            hidden.as_ptr(), n, 0,
-            self.w2.as_ptr(), n, 1,
-            output.as_mut_ptr(), k,
+            m,
+            k,
+            n,
+            hidden.as_ptr(),
+            n,
+            0,
+            self.w2.as_ptr(),
+            n,
+            1,
+            output.as_mut_ptr(),
+            k,
         );
 
         output
@@ -404,16 +439,30 @@ impl GeGLUFFN {
         let mut output = vec![0.0f32; m * k];
 
         syn_sgemm(
-            m, n, k,
-            input.as_ptr(), k, 0,
-            self.gate_proj.as_ptr(), k, 1,
-            gate.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            input.as_ptr(),
+            k,
+            0,
+            self.gate_proj.as_ptr(),
+            k,
+            1,
+            gate.as_mut_ptr(),
+            n,
         );
         syn_sgemm(
-            m, n, k,
-            input.as_ptr(), k, 0,
-            self.up_proj.as_ptr(), k, 1,
-            up.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            input.as_ptr(),
+            k,
+            0,
+            self.up_proj.as_ptr(),
+            k,
+            1,
+            up.as_mut_ptr(),
+            n,
         );
 
         // gelu(gate)
@@ -424,10 +473,17 @@ impl GeGLUFFN {
         syn_mul(gate.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), mn);
 
         syn_sgemm(
-            m, k, n,
-            gate.as_ptr(), n, 0,
-            self.down_proj.as_ptr(), n, 1,
-            output.as_mut_ptr(), k,
+            m,
+            k,
+            n,
+            gate.as_ptr(),
+            n,
+            0,
+            self.down_proj.as_ptr(),
+            n,
+            1,
+            output.as_mut_ptr(),
+            k,
         );
 
         output
@@ -520,8 +576,7 @@ mod tests {
 
         let swiglu =
             SwiGLUFFN::with_weights(hidden, intermediate, gate.clone(), up.clone(), down.clone());
-        let geglu =
-            GeGLUFFN::with_weights(hidden, intermediate, gate, up, down);
+        let geglu = GeGLUFFN::with_weights(hidden, intermediate, gate, up, down);
 
         let tokens = 2;
         let input = vec![1.0f32; tokens * hidden];
@@ -563,8 +618,7 @@ mod tests {
         let w1 = vec![0.1f32; intermediate * hidden];
         let w2 = vec![0.1f32; hidden * intermediate];
 
-        let ffn =
-            StandardFFN::with_weights(hidden, intermediate, Activation::ReLU, w1, w2);
+        let ffn = StandardFFN::with_weights(hidden, intermediate, Activation::ReLU, w1, w2);
         let tokens = 3;
         let input = vec![1.0f32; tokens * hidden];
         let out = ffn.forward(&input, tokens);

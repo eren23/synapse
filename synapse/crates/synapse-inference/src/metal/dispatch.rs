@@ -6,6 +6,9 @@ use std::cell::RefCell;
 /// Empirically tuned for Apple M-series: GPU kernel launch overhead
 /// dominates for smaller operations.
 const GPU_DISPATCH_THRESHOLD: usize = 1_000_000;
+/// Large single-row projections, especially LM-head vocab projections,
+/// are worth offloading even during decode.
+const SINGLE_ROW_GPU_THRESHOLD: usize = 32_000_000;
 
 /// Backend dispatcher that routes operations to CPU (Zig SIMD) or GPU (Metal)
 /// based on matrix size heuristics.
@@ -42,13 +45,12 @@ impl ComputeBackend {
 
     /// Whether a matmul of given dimensions should go to GPU.
     ///
-    /// M=1 (single-token decode) always stays on CPU — GPU kernel launch
-    /// overhead dominates for single-row operations. Metal is only used
-    /// for batched operations (prefill, training) where M > 1.
+    /// Most single-row decode projections stay on CPU. Exception: very large
+    /// vocab projections are still worth offloading.
     fn should_use_gpu(&self, m: usize, n: usize, k: usize) -> bool {
         matches!(self, ComputeBackend::Metal { .. })
-            && m > 1
-            && m * n * k > GPU_DISPATCH_THRESHOLD
+            && ((m > 1 && m * n * k > GPU_DISPATCH_THRESHOLD)
+                || (m == 1 && n * k > SINGLE_ROW_GPU_THRESHOLD))
     }
 
     /// y = A * B^T  where A is [m, k], B is [n, k] → y is [m, n].
@@ -111,7 +113,13 @@ impl ComputeBackend {
         if self.should_use_gpu(seq_len, kv_len, head_dim) {
             if let ComputeBackend::Metal { backend, pool } = self {
                 return gpu_attention(
-                    q, k, v, seq_len, kv_len, head_dim, backend,
+                    q,
+                    k,
+                    v,
+                    seq_len,
+                    kv_len,
+                    head_dim,
+                    backend,
                     &mut pool.borrow_mut(),
                 );
             }
@@ -126,10 +134,17 @@ fn cpu_matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Vec<f32> 
     let mut out = vec![0.0f32; m * n];
     let status = unsafe {
         synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,
-            b.as_ptr(), k, 1,
-            out.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            0,
+            b.as_ptr(),
+            k,
+            1,
+            out.as_mut_ptr(),
+            n,
         )
     };
     debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
@@ -161,9 +176,8 @@ fn cpu_rmsnorm(x: &[f32], weight: &[f32], eps: f32, hidden_size: usize) -> Vec<f
 fn cpu_swiglu(gate: &[f32], up: &[f32]) -> Vec<f32> {
     let len = gate.len();
     let mut out = vec![0.0f32; len];
-    let status = unsafe {
-        synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len)
-    };
+    let status =
+        unsafe { synapse_sys::syn_swiglu(out.as_mut_ptr(), gate.as_ptr(), up.as_ptr(), len) };
     debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_swiglu failed: {status}");
     out
 }
@@ -280,7 +294,9 @@ fn gpu_matmul_t(
     let encoder = cmd_buf.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(pipeline);
     encoder.set_buffer(0, Some(&buf_a), 0);
-    let buf_b = pool.get_cached_weight(buf_b_ptr).expect("weight should be cached");
+    let buf_b = pool
+        .get_cached_weight(buf_b_ptr)
+        .expect("weight should be cached");
     encoder.set_buffer(1, Some(buf_b), 0);
     encoder.set_buffer(2, Some(&buf_c), 0);
     encoder.set_buffer(3, Some(&buf_m), 0);
@@ -324,7 +340,9 @@ fn gpu_rmsnorm(
     let buf_n = make_const_u32(dev, hidden_size as u32);
     let buf_eps = make_const_f32(dev, eps);
 
-    let pipeline = backend.pipeline("rmsnorm").expect("rmsnorm pipeline missing");
+    let pipeline = backend
+        .pipeline("rmsnorm")
+        .expect("rmsnorm pipeline missing");
     let cmd_buf = backend.command_queue.new_command_buffer();
     let encoder = cmd_buf.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(pipeline);
@@ -351,12 +369,7 @@ fn gpu_rmsnorm(
     result
 }
 
-fn gpu_swiglu(
-    gate: &[f32],
-    up: &[f32],
-    backend: &MetalBackend,
-    pool: &mut BufferPool,
-) -> Vec<f32> {
+fn gpu_swiglu(gate: &[f32], up: &[f32], backend: &MetalBackend, pool: &mut BufferPool) -> Vec<f32> {
     let dev = &backend.device;
     let n = gate.len();
 
@@ -410,7 +423,9 @@ fn gpu_attention(
     let buf_kv = make_const_u32(dev, kv_len as u32);
     let buf_hd = make_const_u32(dev, head_dim as u32);
 
-    let pipeline = backend.pipeline("attention").expect("attention pipeline missing");
+    let pipeline = backend
+        .pipeline("attention")
+        .expect("attention pipeline missing");
     let cmd_buf = backend.command_queue.new_command_buffer();
     let encoder = cmd_buf.new_compute_command_encoder();
     encoder.set_compute_pipeline_state(pipeline);

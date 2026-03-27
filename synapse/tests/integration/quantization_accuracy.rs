@@ -196,8 +196,5 @@ fn quantization_accuracy_nrmse_below_1_percent() {
     };
 
     eprintln!("Quantized model NRMSE: {nrmse:.6}");
-    assert!(
-        nrmse < 0.01,
-        "Quantized model NRMSE {nrmse:.6} exceeds 1%"
-    );
+    assert!(nrmse < 0.01, "Quantized model NRMSE {nrmse:.6} exceeds 1%");
 }

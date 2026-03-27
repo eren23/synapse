@@ -63,15 +63,40 @@ mod tests {
     #[test]
     fn test_dce_removes_dead_branch() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![4], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![4], DType::F32), "b");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "b",
+        );
 
         // Live path: a -> relu -> output
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![a], NodeMeta::new(vec![4], DType::F32), "relu");
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![a],
+            NodeMeta::new(vec![4], DType::F32),
+            "relu",
+        );
 
         // Dead path: b -> neg -> sigmoid (not connected to output)
-        let neg = g.add_node(NodeKind::Op(OpKind::Neg), vec![b], NodeMeta::new(vec![4], DType::F32), "neg");
-        let _sig = g.add_node(NodeKind::Op(OpKind::Sigmoid), vec![neg], NodeMeta::new(vec![4], DType::F32), "sig");
+        let neg = g.add_node(
+            NodeKind::Op(OpKind::Neg),
+            vec![b],
+            NodeMeta::new(vec![4], DType::F32),
+            "neg",
+        );
+        let _sig = g.add_node(
+            NodeKind::Op(OpKind::Sigmoid),
+            vec![neg],
+            NodeMeta::new(vec![4], DType::F32),
+            "sig",
+        );
 
         g.mark_output(relu);
         assert_eq!(g.node_count(), 5);
@@ -88,8 +113,18 @@ mod tests {
     #[test]
     fn test_dce_no_change_when_all_reachable() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![4], DType::F32), "a");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![a], NodeMeta::new(vec![4], DType::F32), "relu");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "a",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![a],
+            NodeMeta::new(vec![4], DType::F32),
+            "relu",
+        );
         g.mark_output(relu);
 
         let dce = DeadCodeElimination::new();
@@ -103,12 +138,32 @@ mod tests {
         use std::collections::HashMap;
 
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![3], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![3], DType::F32), "b");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![a, b], NodeMeta::new(vec![3], DType::F32), "add");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![3], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![3], DType::F32),
+            "b",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![a, b],
+            NodeMeta::new(vec![3], DType::F32),
+            "add",
+        );
 
         // Dead branch
-        let _neg = g.add_node(NodeKind::Op(OpKind::Neg), vec![a], NodeMeta::new(vec![3], DType::F32), "neg");
+        let _neg = g.add_node(
+            NodeKind::Op(OpKind::Neg),
+            vec![a],
+            NodeMeta::new(vec![3], DType::F32),
+            "neg",
+        );
         g.mark_output(add);
 
         let mut inputs = HashMap::new();

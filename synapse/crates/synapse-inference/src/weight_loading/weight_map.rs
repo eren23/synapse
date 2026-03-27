@@ -298,7 +298,10 @@ impl WeightMapper {
                 "vision_model.encoder.layers.{i}.layer_norm2.bias",
                 "vision.layers[{i}].ffn_norm.bias",
             ),
-            rule("vision_model.pre_layernorm.weight", "vision.pre_norm.weight"),
+            rule(
+                "vision_model.pre_layernorm.weight",
+                "vision.pre_norm.weight",
+            ),
             rule("vision_model.pre_layernorm.bias", "vision.pre_norm.bias"),
             rule("vision_model.post_layernorm.weight", "vision.norm.weight"),
             rule("vision_model.post_layernorm.bias", "vision.norm.bias"),
@@ -454,18 +457,12 @@ impl WeightMapper {
                 "encoder.layer.{i}.norm1.weight",
                 "layers[{i}].attn_norm.weight",
             ),
-            rule(
-                "encoder.layer.{i}.norm1.bias",
-                "layers[{i}].attn_norm.bias",
-            ),
+            rule("encoder.layer.{i}.norm1.bias", "layers[{i}].attn_norm.bias"),
             rule(
                 "encoder.layer.{i}.norm2.weight",
                 "layers[{i}].ffn_norm.weight",
             ),
-            rule(
-                "encoder.layer.{i}.norm2.bias",
-                "layers[{i}].ffn_norm.bias",
-            ),
+            rule("encoder.layer.{i}.norm2.bias", "layers[{i}].ffn_norm.bias"),
             // Final norm
             rule("layernorm.weight", "norm.weight"),
             rule("layernorm.bias", "norm.bias"),
@@ -625,7 +622,11 @@ impl WeightMapper {
 
 /// Match `source` against `source_pattern` (with optional `{i}` placeholder),
 /// extracting the captured layer index and substituting it into `target_pattern`.
-fn try_match_and_replace(source: &str, source_pattern: &str, target_pattern: &str) -> Option<String> {
+fn try_match_and_replace(
+    source: &str,
+    source_pattern: &str,
+    target_pattern: &str,
+) -> Option<String> {
     if !source_pattern.contains("{i}") {
         // Exact match, no placeholder
         if source == source_pattern {

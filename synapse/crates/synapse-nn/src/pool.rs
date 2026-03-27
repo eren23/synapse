@@ -14,7 +14,11 @@ pub struct MaxPool2d {
 }
 
 impl MaxPool2d {
-    pub fn new(kernel_size: (usize, usize), stride: (usize, usize), padding: (usize, usize)) -> Self {
+    pub fn new(
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> Self {
         MaxPool2d {
             kernel_size,
             stride,
@@ -34,7 +38,12 @@ impl Module for MaxPool2d {
     /// Input: [N, C, H, W] -> Output: [N, C, H_out, W_out]
     fn forward(&self, input: &Tensor) -> Tensor {
         assert_eq!(input.shape.len(), 4, "MaxPool2d expects 4D input");
-        let (batch, c, h, w) = (input.shape[0], input.shape[1], input.shape[2], input.shape[3]);
+        let (batch, c, h, w) = (
+            input.shape[0],
+            input.shape[1],
+            input.shape[2],
+            input.shape[3],
+        );
         let (kh, kw) = self.kernel_size;
         let (sh, sw) = self.stride;
         let (ph, pw) = self.padding;
@@ -61,7 +70,8 @@ impl Module for MaxPool2d {
                                 }
                             }
                         }
-                        let out_idx = n * (c * h_out * w_out) + ci * (h_out * w_out) + oh * w_out + ow;
+                        let out_idx =
+                            n * (c * h_out * w_out) + ci * (h_out * w_out) + oh * w_out + ow;
                         output[out_idx] = max_val;
                     }
                 }
@@ -102,7 +112,11 @@ pub struct AvgPool2d {
 }
 
 impl AvgPool2d {
-    pub fn new(kernel_size: (usize, usize), stride: (usize, usize), padding: (usize, usize)) -> Self {
+    pub fn new(
+        kernel_size: (usize, usize),
+        stride: (usize, usize),
+        padding: (usize, usize),
+    ) -> Self {
         AvgPool2d {
             kernel_size,
             stride,
@@ -122,7 +136,12 @@ impl Module for AvgPool2d {
     /// Input: [N, C, H, W] -> Output: [N, C, H_out, W_out]
     fn forward(&self, input: &Tensor) -> Tensor {
         assert_eq!(input.shape.len(), 4, "AvgPool2d expects 4D input");
-        let (batch, c, h, w) = (input.shape[0], input.shape[1], input.shape[2], input.shape[3]);
+        let (batch, c, h, w) = (
+            input.shape[0],
+            input.shape[1],
+            input.shape[2],
+            input.shape[3],
+        );
         let (kh, kw) = self.kernel_size;
         let (sh, sw) = self.stride;
         let (ph, pw) = self.padding;
@@ -151,7 +170,8 @@ impl Module for AvgPool2d {
                                 }
                             }
                         }
-                        let out_idx = n * (c * h_out * w_out) + ci * (h_out * w_out) + oh * w_out + ow;
+                        let out_idx =
+                            n * (c * h_out * w_out) + ci * (h_out * w_out) + oh * w_out + ow;
                         output[out_idx] = if count > 0 { sum / count as f32 } else { 0.0 };
                     }
                 }
@@ -202,7 +222,12 @@ impl Module for AdaptiveAvgPool2d {
     /// Input: [N, C, H, W] -> Output: [N, C, out_H, out_W]
     fn forward(&self, input: &Tensor) -> Tensor {
         assert_eq!(input.shape.len(), 4, "AdaptiveAvgPool2d expects 4D input");
-        let (batch, c, h_in, w_in) = (input.shape[0], input.shape[1], input.shape[2], input.shape[3]);
+        let (batch, c, h_in, w_in) = (
+            input.shape[0],
+            input.shape[1],
+            input.shape[2],
+            input.shape[3],
+        );
         let (h_out, w_out) = self.output_size;
 
         let mut output = vec![0.0f32; batch * c * h_out * w_out];
@@ -221,12 +246,14 @@ impl Module for AdaptiveAvgPool2d {
                         let count = (end_h - start_h) * (end_w - start_w);
                         for ih in start_h..end_h {
                             for iw in start_w..end_w {
-                                let idx = n * (c * h_in * w_in) + ci * (h_in * w_in) + ih * w_in + iw;
+                                let idx =
+                                    n * (c * h_in * w_in) + ci * (h_in * w_in) + ih * w_in + iw;
                                 sum += input.data[idx];
                             }
                         }
 
-                        let out_idx = n * (c * h_out * w_out) + ci * (h_out * w_out) + oh * w_out + ow;
+                        let out_idx =
+                            n * (c * h_out * w_out) + ci * (h_out * w_out) + oh * w_out + ow;
                         output[out_idx] = sum / count as f32;
                     }
                 }

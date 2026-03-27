@@ -26,7 +26,9 @@ fn main() {
     // Random embeddings
     let q: Vec<f32> = (0..n * d).map(|i| (i as f32 * 0.037).sin() * 0.5).collect();
     let k: Vec<f32> = (0..n * d).map(|i| (i as f32 * 0.041).cos() * 0.5).collect();
-    let v: Vec<f32> = (0..n * d).map(|i| (i as f32 * 0.029 + 1.0).sin() * 0.5).collect();
+    let v: Vec<f32> = (0..n * d)
+        .map(|i| (i as f32 * 0.029 + 1.0).sin() * 0.5)
+        .collect();
 
     let sigma = 1.0;
 
@@ -45,7 +47,10 @@ fn main() {
     let elapsed = start.elapsed();
     let per_call = elapsed.as_secs_f64() * 1000.0 / iterations as f64;
 
-    println!("Point cloud: {} points, {}-dim embeddings, 3D positions", n, d);
+    println!(
+        "Point cloud: {} points, {}-dim embeddings, 3D positions",
+        n, d
+    );
     println!("Sigma (distance bandwidth): {}", sigma);
     println!();
     println!("Performance:");
@@ -60,7 +65,10 @@ fn main() {
     for sigma in &sigmas {
         let result = geometric_attention(n, d, pos_dim, &q, &k, &v, &positions, *sigma);
         let out_norm: f32 = result[..d].iter().map(|x| x * x).sum::<f32>().sqrt();
-        println!("  sigma={:.1}: output L2 norm = {:.4} (smaller sigma = more local attention)", sigma, out_norm);
+        println!(
+            "  sigma={:.1}: output L2 norm = {:.4} (smaller sigma = more local attention)",
+            sigma, out_norm
+        );
     }
 
     println!();

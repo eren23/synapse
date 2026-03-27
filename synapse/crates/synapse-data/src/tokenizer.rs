@@ -99,11 +99,7 @@ impl WhitespaceTokenizer {
     /// Unknown IDs are rendered as `<UNK>`.
     pub fn decode(&self, ids: &[usize]) -> String {
         ids.iter()
-            .map(|&id| {
-                self.vocab
-                    .get_token(id)
-                    .unwrap_or(UNK_TOKEN)
-            })
+            .map(|&id| self.vocab.get_token(id).unwrap_or(UNK_TOKEN))
             .collect::<Vec<_>>()
             .join(" ")
     }
@@ -203,12 +199,7 @@ impl BPETokenizer {
     /// word boundaries are not explicitly stored, so the result is space-joined tokens.
     pub fn decode(&self, ids: &[usize]) -> String {
         ids.iter()
-            .map(|&id| {
-                self.vocab
-                    .get_token(id)
-                    .unwrap_or(UNK_TOKEN)
-                    .to_string()
-            })
+            .map(|&id| self.vocab.get_token(id).unwrap_or(UNK_TOKEN).to_string())
             .collect::<Vec<_>>()
             .join("")
     }

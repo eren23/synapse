@@ -31,7 +31,10 @@ impl GradFn for BatchNormBackward {
         // dx = inv_std/N * (N*dx_hat - sum(dx_hat) - x_hat*sum(dx_hat*x_hat))
         let inv_std_broad = self.inv_std.reshape(&[1, c]).broadcast_to(&[n, c]);
         let sum_dx_hat = dx_hat.sum_axis(0, true).broadcast_to(&[n, c]);
-        let sum_dx_hat_xhat = dx_hat.mul(&self.x_hat).sum_axis(0, true).broadcast_to(&[n, c]);
+        let sum_dx_hat_xhat = dx_hat
+            .mul(&self.x_hat)
+            .sum_axis(0, true)
+            .broadcast_to(&[n, c]);
 
         // N*dx_hat
         let term1 = dx_hat.scale(nf);
@@ -52,7 +55,11 @@ impl GradFn for BatchNormBackward {
 impl Graph {
     /// Batch normalization: input [N,C], gamma [C], beta [C]
     pub fn batch_norm(
-        &mut self, input: VariableId, gamma: VariableId, beta: VariableId, eps: f32,
+        &mut self,
+        input: VariableId,
+        gamma: VariableId,
+        beta: VariableId,
+        eps: f32,
     ) -> VariableId {
         let input_data = self.variables[&input].data.clone();
         let gamma_data = self.variables[&gamma].data.clone();

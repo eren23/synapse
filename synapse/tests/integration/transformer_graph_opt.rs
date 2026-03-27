@@ -179,8 +179,7 @@ fn test_attention_fusion_numerically_correct() {
     let d_v = 6;
     let d_out = 8;
 
-    let (g_unfused, _, param_ids) =
-        build_attention_graph(seq_len, d_model, d_k, d_v, d_out);
+    let (g_unfused, _, param_ids) = build_attention_graph(seq_len, d_model, d_k, d_v, d_out);
 
     let input_data: Vec<f32> = (0..seq_len * d_model)
         .map(|i| (i as f32) * 0.1 + 0.05)
@@ -194,9 +193,7 @@ fn test_attention_fusion_numerically_correct() {
     let w_v_data: Vec<f32> = (0..d_model * d_v)
         .map(|i| (i as f32) * 0.01 - 0.02)
         .collect();
-    let w_o_data: Vec<f32> = (0..d_v * d_out)
-        .map(|i| (i as f32) * 0.04 + 0.01)
-        .collect();
+    let w_o_data: Vec<f32> = (0..d_v * d_out).map(|i| (i as f32) * 0.04 + 0.01).collect();
 
     let mut inputs = HashMap::new();
     inputs.insert(param_ids[0], input_data);
@@ -223,7 +220,10 @@ fn test_attention_fusion_numerically_correct() {
         assert!(
             (u - f).abs() < 1e-4,
             "Attention fusion mismatch at {}: unfused={}, fused={}, diff={}",
-            i, u, f, (u - f).abs()
+            i,
+            u,
+            f,
+            (u - f).abs()
         );
     }
 }
@@ -246,7 +246,10 @@ fn test_layernorm_residual_fusion_numerically_correct() {
 
     let mut g_fused = g_unfused.clone();
     let changed = FuseLayerNormResidual::new().run(&mut g_fused);
-    assert!(changed, "FuseLayerNormResidual should have matched the pattern");
+    assert!(
+        changed,
+        "FuseLayerNormResidual should have matched the pattern"
+    );
 
     let fused_output_id = g_fused.outputs()[0];
     let fused_result = g_fused.execute(&inputs);
@@ -257,7 +260,10 @@ fn test_layernorm_residual_fusion_numerically_correct() {
         assert!(
             (u - f).abs() < 1e-4,
             "LayerNorm+Residual fusion mismatch at {}: unfused={}, fused={}, diff={}",
-            i, u, f, (u - f).abs()
+            i,
+            u,
+            f,
+            (u - f).abs()
         );
     }
 }
@@ -272,8 +278,7 @@ fn bench_attention_fusion_speedup() {
     let d_v = 8;
     let d_out = 8;
 
-    let (g_unfused, _, param_ids) =
-        build_attention_graph(seq_len, d_model, d_k, d_v, d_out);
+    let (g_unfused, _, param_ids) = build_attention_graph(seq_len, d_model, d_k, d_v, d_out);
 
     let input_data: Vec<f32> = (0..seq_len * d_model)
         .map(|i| ((i % 17) as f32) * 0.01)
@@ -287,9 +292,7 @@ fn bench_attention_fusion_speedup() {
     let w_v_data: Vec<f32> = (0..d_model * d_v)
         .map(|i| ((i % 7) as f32) * 0.01)
         .collect();
-    let w_o_data: Vec<f32> = (0..d_v * d_out)
-        .map(|i| ((i % 19) as f32) * 0.01)
-        .collect();
+    let w_o_data: Vec<f32> = (0..d_v * d_out).map(|i| ((i % 19) as f32) * 0.01).collect();
 
     let mut inputs = HashMap::new();
     inputs.insert(param_ids[0], input_data);
@@ -457,16 +460,12 @@ fn test_combined_transformer_fusion_pipeline() {
     let before_count = g.node_count();
 
     // Prepare input data
-    let input_data: Vec<f32> = (0..seq_len * d)
-        .map(|i| (i as f32) * 0.1 + 0.05)
-        .collect();
+    let input_data: Vec<f32> = (0..seq_len * d).map(|i| (i as f32) * 0.1 + 0.05).collect();
     let w_q_data: Vec<f32> = (0..d * d).map(|i| (i as f32) * 0.02 - 0.1).collect();
     let w_k_data: Vec<f32> = (0..d * d).map(|i| (i as f32) * 0.03 + 0.05).collect();
     let w_v_data: Vec<f32> = (0..d * d).map(|i| (i as f32) * 0.01 - 0.02).collect();
     let w_o_data: Vec<f32> = (0..d * d).map(|i| (i as f32) * 0.04 + 0.01).collect();
-    let residual_data: Vec<f32> = (0..seq_len * d)
-        .map(|i| (i as f32) * 0.05 - 0.2)
-        .collect();
+    let residual_data: Vec<f32> = (0..seq_len * d).map(|i| (i as f32) * 0.05 - 0.2).collect();
 
     let mut inputs = HashMap::new();
     inputs.insert(param_ids[0], input_data);
@@ -495,7 +494,8 @@ fn test_combined_transformer_fusion_pipeline() {
     assert!(
         after_count < before_count,
         "Fusion should reduce node count: before={}, after={}",
-        before_count, after_count
+        before_count,
+        after_count
     );
 
     // Execute fused
@@ -509,7 +509,10 @@ fn test_combined_transformer_fusion_pipeline() {
         assert!(
             (u - f).abs() < 1e-4,
             "Combined fusion mismatch at {}: unfused={}, fused={}, diff={}",
-            i, u, f, (u - f).abs()
+            i,
+            u,
+            f,
+            (u - f).abs()
         );
     }
 }

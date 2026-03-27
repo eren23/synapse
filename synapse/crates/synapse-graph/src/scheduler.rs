@@ -245,9 +245,24 @@ mod tests {
     #[test]
     fn test_scheduler_basic_chain() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![100], DType::F32), "a");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![a], NodeMeta::new(vec![100], DType::F32), "relu");
-        let neg = g.add_node(NodeKind::Op(OpKind::Neg), vec![relu], NodeMeta::new(vec![100], DType::F32), "neg");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![100], DType::F32),
+            "a",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![a],
+            NodeMeta::new(vec![100], DType::F32),
+            "relu",
+        );
+        let neg = g.add_node(
+            NodeKind::Op(OpKind::Neg),
+            vec![relu],
+            NodeMeta::new(vec![100], DType::F32),
+            "neg",
+        );
         g.mark_output(neg);
 
         let scheduler = MemoryOptimalScheduler::new();
@@ -260,10 +275,30 @@ mod tests {
     #[test]
     fn test_scheduler_diamond() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![100], DType::F32), "a");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![a], NodeMeta::new(vec![100], DType::F32), "relu");
-        let neg = g.add_node(NodeKind::Op(OpKind::Neg), vec![a], NodeMeta::new(vec![100], DType::F32), "neg");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![relu, neg], NodeMeta::new(vec![100], DType::F32), "add");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![100], DType::F32),
+            "a",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![a],
+            NodeMeta::new(vec![100], DType::F32),
+            "relu",
+        );
+        let neg = g.add_node(
+            NodeKind::Op(OpKind::Neg),
+            vec![a],
+            NodeMeta::new(vec![100], DType::F32),
+            "neg",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![relu, neg],
+            NodeMeta::new(vec![100], DType::F32),
+            "add",
+        );
         g.mark_output(add);
 
         let scheduler = MemoryOptimalScheduler::new();
@@ -283,13 +318,43 @@ mod tests {
     #[test]
     fn test_scheduler_respects_dependencies() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![10], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![10], DType::F32), "b");
-        let c = g.add_node(NodeKind::Input("c".into()), vec![], NodeMeta::new(vec![10], DType::F32), "c");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![10], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![10], DType::F32),
+            "b",
+        );
+        let c = g.add_node(
+            NodeKind::Input("c".into()),
+            vec![],
+            NodeMeta::new(vec![10], DType::F32),
+            "c",
+        );
 
-        let ab = g.add_node(NodeKind::Op(OpKind::Add), vec![a, b], NodeMeta::new(vec![10], DType::F32), "ab");
-        let abc = g.add_node(NodeKind::Op(OpKind::Add), vec![ab, c], NodeMeta::new(vec![10], DType::F32), "abc");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![abc], NodeMeta::new(vec![10], DType::F32), "relu");
+        let ab = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![a, b],
+            NodeMeta::new(vec![10], DType::F32),
+            "ab",
+        );
+        let abc = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![ab, c],
+            NodeMeta::new(vec![10], DType::F32),
+            "abc",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![abc],
+            NodeMeta::new(vec![10], DType::F32),
+            "relu",
+        );
         g.mark_output(relu);
 
         let scheduler = MemoryOptimalScheduler::new();
@@ -310,19 +375,54 @@ mod tests {
     fn test_scheduler_parallel_branches() {
         // Two independent branches merged at the end
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![1000], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![1000], DType::F32), "b");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![1000], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![1000], DType::F32),
+            "b",
+        );
 
         // Branch 1: a -> relu -> sigmoid (large tensors)
-        let relu_a = g.add_node(NodeKind::Op(OpKind::Relu), vec![a], NodeMeta::new(vec![1000], DType::F32), "relu_a");
-        let sig_a = g.add_node(NodeKind::Op(OpKind::Sigmoid), vec![relu_a], NodeMeta::new(vec![1000], DType::F32), "sig_a");
+        let relu_a = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![a],
+            NodeMeta::new(vec![1000], DType::F32),
+            "relu_a",
+        );
+        let sig_a = g.add_node(
+            NodeKind::Op(OpKind::Sigmoid),
+            vec![relu_a],
+            NodeMeta::new(vec![1000], DType::F32),
+            "sig_a",
+        );
 
         // Branch 2: b -> neg -> tanh
-        let neg_b = g.add_node(NodeKind::Op(OpKind::Neg), vec![b], NodeMeta::new(vec![1000], DType::F32), "neg_b");
-        let tanh_b = g.add_node(NodeKind::Op(OpKind::Tanh), vec![neg_b], NodeMeta::new(vec![1000], DType::F32), "tanh_b");
+        let neg_b = g.add_node(
+            NodeKind::Op(OpKind::Neg),
+            vec![b],
+            NodeMeta::new(vec![1000], DType::F32),
+            "neg_b",
+        );
+        let tanh_b = g.add_node(
+            NodeKind::Op(OpKind::Tanh),
+            vec![neg_b],
+            NodeMeta::new(vec![1000], DType::F32),
+            "tanh_b",
+        );
 
         // Merge
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![sig_a, tanh_b], NodeMeta::new(vec![1000], DType::F32), "add");
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![sig_a, tanh_b],
+            NodeMeta::new(vec![1000], DType::F32),
+            "add",
+        );
         g.mark_output(add);
 
         let scheduler = MemoryOptimalScheduler::new();
@@ -335,8 +435,18 @@ mod tests {
     #[test]
     fn test_peak_memory_calculation() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![100], DType::F32), "a");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![a], NodeMeta::new(vec![100], DType::F32), "relu");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![100], DType::F32),
+            "a",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![a],
+            NodeMeta::new(vec![100], DType::F32),
+            "relu",
+        );
         g.mark_output(relu);
 
         let scheduler = MemoryOptimalScheduler::new();

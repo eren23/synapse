@@ -86,7 +86,9 @@ impl GradFn for MeanAxisBackward {
         } else {
             let mut expanded_shape = self.input_shape.clone();
             expanded_shape[self.axis] = 1;
-            scaled.reshape(&expanded_shape).broadcast_to(&self.input_shape)
+            scaled
+                .reshape(&expanded_shape)
+                .broadcast_to(&self.input_shape)
         };
         vec![Some(grad)]
     }
@@ -105,7 +107,10 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(SumAllBackward { input_ids: vec![a], input_shape }),
+            Box::new(SumAllBackward {
+                input_ids: vec![a],
+                input_shape,
+            }),
             &[a],
             output,
         )
@@ -118,7 +123,12 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(SumAxisBackward { input_ids: vec![a], input_shape, axis, keepdim }),
+            Box::new(SumAxisBackward {
+                input_ids: vec![a],
+                input_shape,
+                axis,
+                keepdim,
+            }),
             &[a],
             output,
         )
@@ -131,7 +141,10 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(MeanAllBackward { input_ids: vec![a], input_shape }),
+            Box::new(MeanAllBackward {
+                input_ids: vec![a],
+                input_shape,
+            }),
             &[a],
             output,
         )
@@ -144,7 +157,12 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(MeanAxisBackward { input_ids: vec![a], input_shape, axis, keepdim }),
+            Box::new(MeanAxisBackward {
+                input_ids: vec![a],
+                input_shape,
+                axis,
+                keepdim,
+            }),
             &[a],
             output,
         )

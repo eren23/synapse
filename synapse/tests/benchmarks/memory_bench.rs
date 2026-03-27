@@ -18,7 +18,9 @@ fn memory_bench_mlp_training() {
     let mut b2 = Tensor::zeros(&[1, output]);
     let mut optimizer = Adam::new(0.001);
 
-    let input_data: Vec<f32> = (0..batch_size * input_dim).map(|i| (i as f32 * 0.01).sin()).collect();
+    let input_data: Vec<f32> = (0..batch_size * input_dim)
+        .map(|i| (i as f32 * 0.01).sin())
+        .collect();
     let input = Tensor::new(input_data, vec![batch_size, input_dim]);
     let mut target_data = vec![0.0f32; batch_size * output];
     for i in 0..batch_size {
@@ -51,12 +53,16 @@ fn memory_bench_mlp_training() {
         let vars = [w1v, b1v, w2v, b2v];
         let tensors: [&Tensor; 4] = [&w1, &b1, &w2, &b2];
         let shapes: Vec<Vec<usize>> = tensors.iter().map(|t| t.shape.clone()).collect();
-        let mut params: Vec<Param> = tensors.iter().zip(&vars).map(|(tensor, &var)| {
-            let grad = graph.grad(var).map(|g| g.data.clone());
-            let mut p = Param::new(tensor.data.clone());
-            p.grad = grad;
-            p
-        }).collect();
+        let mut params: Vec<Param> = tensors
+            .iter()
+            .zip(&vars)
+            .map(|(tensor, &var)| {
+                let grad = graph.grad(var).map(|g| g.data.clone());
+                let mut p = Param::new(tensor.data.clone());
+                p.grad = grad;
+                p
+            })
+            .collect();
         optimizer.step(&mut params);
 
         w1 = Tensor::new(params[0].data.clone(), shapes[0].clone());
@@ -68,11 +74,19 @@ fn memory_bench_mlp_training() {
     }
 
     // Verify loss is decreasing
-    assert!(losses.last().unwrap() < losses.first().unwrap(),
-        "Loss should decrease: first={}, last={}", losses.first().unwrap(), losses.last().unwrap());
+    assert!(
+        losses.last().unwrap() < losses.first().unwrap(),
+        "Loss should decrease: first={}, last={}",
+        losses.first().unwrap(),
+        losses.last().unwrap()
+    );
 
-    eprintln!("Memory bench completed {} steps, loss: {:.4} -> {:.4}",
-        num_steps, losses.first().unwrap(), losses.last().unwrap());
+    eprintln!(
+        "Memory bench completed {} steps, loss: {:.4} -> {:.4}",
+        num_steps,
+        losses.first().unwrap(),
+        losses.last().unwrap()
+    );
 }
 
 #[test]

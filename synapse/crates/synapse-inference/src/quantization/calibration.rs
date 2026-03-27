@@ -8,11 +8,7 @@ impl MinMaxCalibration {
     ///
     /// `weights` is `[channels, channel_size]` row-major.
     /// Returns one scale per channel.
-    pub fn compute_scales(
-        weights: &[f32],
-        channels: usize,
-        channel_size: usize,
-    ) -> Vec<f32> {
+    pub fn compute_scales(weights: &[f32], channels: usize, channel_size: usize) -> Vec<f32> {
         assert_eq!(
             weights.len(),
             channels * channel_size,
@@ -22,11 +18,7 @@ impl MinMaxCalibration {
         for ch in 0..channels {
             let row = &weights[ch * channel_size..(ch + 1) * channel_size];
             let max_abs = row.iter().fold(0.0f32, |acc, &v| acc.max(v.abs()));
-            scales.push(if max_abs == 0.0 {
-                1.0
-            } else {
-                max_abs / 127.0
-            });
+            scales.push(if max_abs == 0.0 { 1.0 } else { max_abs / 127.0 });
         }
         scales
     }
@@ -69,8 +61,7 @@ impl PercentileCalibration {
             let mut abs_vals: Vec<f32> = row.iter().map(|v| v.abs()).collect();
             abs_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-            let idx = ((self.percentile / 100.0)
-                * (abs_vals.len().saturating_sub(1)) as f32)
+            let idx = ((self.percentile / 100.0) * (abs_vals.len().saturating_sub(1)) as f32)
                 .round() as usize;
             let idx = idx.min(abs_vals.len().saturating_sub(1));
             let clip_val = abs_vals[idx];

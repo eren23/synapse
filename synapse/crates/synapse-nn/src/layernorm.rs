@@ -76,8 +76,8 @@ impl Module for LayerNorm {
             let mean: f32 = slice.iter().sum::<f32>() / norm_size as f32;
 
             // Compute variance
-            let var: f32 = slice.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>()
-                / norm_size as f32;
+            let var: f32 =
+                slice.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>() / norm_size as f32;
 
             let inv_std = 1.0 / (var + self.eps).sqrt();
 
@@ -170,8 +170,7 @@ mod tests {
             let base = i * d;
             let slice = &output.data[base..base + d];
             let mean: f32 = slice.iter().sum::<f32>() / d as f32;
-            let var: f32 =
-                slice.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>() / d as f32;
+            let var: f32 = slice.iter().map(|&x| (x - mean) * (x - mean)).sum::<f32>() / d as f32;
             assert!(
                 (var - 1.0).abs() < 5e-4,
                 "variance {} at slice {} exceeds tolerance",

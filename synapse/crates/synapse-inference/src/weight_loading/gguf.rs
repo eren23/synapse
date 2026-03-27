@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
-use memmap2::Mmap;
 use super::converter::f16_to_f32;
 use super::{AlignedBuffer, RawTensor, WeightError};
+use memmap2::Mmap;
 
 const GGUF_MAGIC: u32 = 0x46554747; // "GGUF" little-endian
 const GGUF_DEFAULT_ALIGNMENT: usize = 32;
@@ -19,10 +19,10 @@ const GGML_TYPE_Q4_K: u32 = 12;
 const GGML_TYPE_Q6_K: u32 = 14;
 
 // Block sizes
-const QK8_0: usize = 32;   // Q8_0: 32 elements per block
-const QK4_0: usize = 32;   // Q4_0: 32 elements per block
-const QK4_1: usize = 32;   // Q4_1: 32 elements per block
-const QK_K: usize = 256;   // K-quant super-block: 256 elements
+const QK8_0: usize = 32; // Q8_0: 32 elements per block
+const QK4_0: usize = 32; // Q4_0: 32 elements per block
+const QK4_1: usize = 32; // Q4_1: 32 elements per block
+const QK_K: usize = 256; // K-quant super-block: 256 elements
 
 // GGUF metadata value types
 const GGUF_META_UINT8: u32 = 0;
@@ -93,7 +93,12 @@ pub fn parse_gguf(data: &[u8]) -> Result<HashMap<String, RawTensor>, WeightError
         }
         let dtype = cur.read_u32()?;
         let offset = cur.read_u64()? as usize;
-        tensor_infos.push(TensorInfo { name, shape, dtype, offset });
+        tensor_infos.push(TensorInfo {
+            name,
+            shape,
+            dtype,
+            offset,
+        });
     }
 
     // Data section starts at next alignment boundary
@@ -117,25 +122,13 @@ pub fn parse_gguf(data: &[u8]) -> Result<HashMap<String, RawTensor>, WeightError
                 let u16_data = bytes_to_u16(bytes);
                 f16_to_f32(&u16_data)
             }
-            GGML_TYPE_Q4_0 => {
-                dequantize_q4_0(&data[tensor_data_offset..], numel)?
-            }
-            GGML_TYPE_Q4_1 => {
-                dequantize_q4_1(&data[tensor_data_offset..], numel)?
-            }
-            GGML_TYPE_Q8_0 => {
-                dequantize_q8_0(&data[tensor_data_offset..], numel)?
-            }
-            GGML_TYPE_Q4_K => {
-                dequantize_q4_k(&data[tensor_data_offset..], numel)?
-            }
-            GGML_TYPE_Q6_K => {
-                dequantize_q6_k(&data[tensor_data_offset..], numel)?
-            }
+            GGML_TYPE_Q4_0 => dequantize_q4_0(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q4_1 => dequantize_q4_1(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q8_0 => dequantize_q8_0(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q4_K => dequantize_q4_k(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q6_K => dequantize_q6_k(&data[tensor_data_offset..], numel)?,
             other => {
-                return Err(WeightError::UnsupportedDtype(format!(
-                    "GGML type {other}"
-                )));
+                return Err(WeightError::UnsupportedDtype(format!("GGML type {other}")));
             }
         };
 
@@ -167,9 +160,7 @@ fn dequantize_q8_0(data: &[u8], numel: usize) -> Result<Vec<f32>, WeightError> {
     let required = n_blocks * block_size;
 
     if data.len() < required {
-        return Err(WeightError::InvalidFormat(
-            "Q8_0 data too short".into(),
-        ));
+        return Err(WeightError::InvalidFormat("Q8_0 data too short".into()));
     }
 
     let mut output = Vec::with_capacity(numel);
@@ -178,8 +169,7 @@ fn dequantize_q8_0(data: &[u8], numel: usize) -> Result<Vec<f32>, WeightError> {
         let block_start = block_idx * block_size;
 
         // Read f16 scale
-        let scale_bits =
-            u16::from_le_bytes(data[block_start..block_start + 2].try_into().unwrap());
+        let scale_bits = u16::from_le_bytes(data[block_start..block_start + 2].try_into().unwrap());
         let scale = super::converter::f16_to_f32(&[scale_bits])[0];
 
         // Read and dequantize i8 quants
@@ -362,9 +352,9 @@ fn dequantize_q6_k(data: &[u8], numel: usize) -> Result<Vec<f32>, WeightError> {
     for block_idx in 0..n_blocks {
         let bs = block_idx * block_size;
 
-        let ql = &data[bs..bs + 128];           // low 4 bits
-        let qh = &data[bs + 128..bs + 192];     // high 2 bits
-        let sc = &data[bs + 192..bs + 208];      // int8 scales
+        let ql = &data[bs..bs + 128]; // low 4 bits
+        let qh = &data[bs + 128..bs + 192]; // high 2 bits
+        let sc = &data[bs + 192..bs + 208]; // int8 scales
         let d_bits = u16::from_le_bytes(data[bs + 208..bs + 210].try_into().unwrap());
         let d = super::converter::f16_to_f32(&[d_bits])[0];
 
@@ -374,7 +364,11 @@ fn dequantize_q6_k(data: &[u8], numel: usize) -> Result<Vec<f32>, WeightError> {
                 let idx = sub * 16 + i;
                 // Low 4 bits: packed 2 per byte in ql
                 let ql_byte = ql[idx / 2];
-                let q_lo = if idx % 2 == 0 { ql_byte & 0x0F } else { ql_byte >> 4 };
+                let q_lo = if idx % 2 == 0 {
+                    ql_byte & 0x0F
+                } else {
+                    ql_byte >> 4
+                };
                 // High 2 bits: packed 4 per byte in qh
                 let qh_byte = qh[idx / 4];
                 let q_hi = (qh_byte >> ((idx % 4) * 2)) & 0x03;
@@ -584,10 +578,8 @@ mod tests {
         let a_data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b_data: Vec<f32> = vec![7.0, 8.0, 9.0, 10.0];
 
-        let gguf_bytes = make_gguf_f32(&[
-            ("tensor_a", &[2, 3], &a_data),
-            ("tensor_b", &[4], &b_data),
-        ]);
+        let gguf_bytes =
+            make_gguf_f32(&[("tensor_a", &[2, 3], &a_data), ("tensor_b", &[4], &b_data)]);
 
         let tensors = parse_gguf(&gguf_bytes).unwrap();
         assert_eq!(tensors.len(), 2);
@@ -712,11 +704,13 @@ mod tests {
         for i in 0..16 {
             assert!(
                 (t.data[i * 2] - (-8.0)).abs() < 1e-3,
-                "Q4_0 lo [{i}]: got {}, want -8.0", t.data[i * 2]
+                "Q4_0 lo [{i}]: got {}, want -8.0",
+                t.data[i * 2]
             );
             assert!(
                 (t.data[i * 2 + 1] - (-7.0)).abs() < 1e-3,
-                "Q4_0 hi [{i}]: got {}, want -7.0", t.data[i * 2 + 1]
+                "Q4_0 hi [{i}]: got {}, want -7.0",
+                t.data[i * 2 + 1]
             );
         }
     }

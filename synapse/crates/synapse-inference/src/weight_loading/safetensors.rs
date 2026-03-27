@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 
+use super::converter::{bf16_bits_to_f32, f16_bits_to_f32};
+use super::{AlignedBuffer, RawTensor, WeightError};
 use memmap2::Mmap;
 use serde::Deserialize;
-use super::{AlignedBuffer, RawTensor, WeightError};
-use super::converter::{bf16_bits_to_f32, f16_bits_to_f32};
 
 /// Represents the `model.safetensors.index.json` file used by sharded checkpoints.
 #[derive(Deserialize)]
@@ -18,7 +18,9 @@ struct SafetensorsIndex {
 /// Reads `model.safetensors.index.json` from `model_dir`, then loads each
 /// unique shard file sequentially, extracting only the tensors listed in the
 /// index's `weight_map`. Shards are dropped after extraction to limit memory.
-pub fn load_safetensors_sharded(model_dir: &Path) -> Result<HashMap<String, RawTensor>, WeightError> {
+pub fn load_safetensors_sharded(
+    model_dir: &Path,
+) -> Result<HashMap<String, RawTensor>, WeightError> {
     let index_path = model_dir.join("model.safetensors.index.json");
     let index_data = std::fs::read_to_string(&index_path).map_err(WeightError::Io)?;
     let index: SafetensorsIndex = serde_json::from_str(&index_data)
@@ -39,9 +41,7 @@ pub fn load_safetensors_sharded(model_dir: &Path) -> Result<HashMap<String, RawT
     for (shard_filename, tensor_names) in &shard_to_tensors {
         let shard_path = model_dir.join(shard_filename);
         let shard_tensors = load_safetensors(&shard_path).map_err(|e| {
-            WeightError::InvalidFormat(format!(
-                "Failed to load shard '{}': {}", shard_filename, e
-            ))
+            WeightError::InvalidFormat(format!("Failed to load shard '{}': {}", shard_filename, e))
         })?;
 
         for tensor_name in tensor_names {
@@ -163,7 +163,13 @@ pub fn parse_safetensors(data: &[u8]) -> Result<HashMap<String, RawTensor>, Weig
             other => return Err(WeightError::UnsupportedDtype(other.to_string())),
         };
 
-        result.insert(name.clone(), RawTensor { data: aligned_data, shape });
+        result.insert(
+            name.clone(),
+            RawTensor {
+                data: aligned_data,
+                shape,
+            },
+        );
     }
 
     Ok(result)

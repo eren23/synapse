@@ -91,7 +91,7 @@ mod tests {
         let sample = ds.get(1);
         assert_eq!(sample.len(), 2);
         assert_eq!(sample[0].data(), &[3.0, 4.0]); // features row 1
-        assert_eq!(sample[1].data(), &[1.0]);       // label row 1 (scalar wrapped)
+        assert_eq!(sample[1].data(), &[1.0]); // label row 1 (scalar wrapped)
     }
 
     #[test]

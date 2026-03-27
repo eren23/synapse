@@ -1,98 +1,75 @@
 # Performance
 
 <!-- status:docs-performance-note:start -->
-Measured against Qwen3-0.6B (596M params) on Apple M5. Last verified: 2026-03-26.
+Measured on Apple Silicon (Tiered local matrix on this machine). Last verified: 2026-03-27.
 <!-- status:docs-performance-note:end -->
 
 ## End-to-End Throughput
 
 <!-- status:docs-performance-benchmark:start -->
-| Configuration | Prefill (tok/s) | Decode (tok/s) | Support | Notes |
-|---------------|-----------------|----------------|---------|-------|
-| f32 CPU | 18 | 6.6 | Stable | CPU SIMD path |
-| INT8 CPU | 31 | 14.6 | Stable | Quantized CPU decode |
-| Metal f32 | 19 | 8 | Beta | Metal-enabled native build |
-| Metal INT8 GPU | 30 | 14.5 | Beta | GPU-resident decode on Apple Silicon |
-| llama.cpp Q4_K_M | 5518 | 173 | Reference | Reference only, not a parity claim |
+| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |
+|--------|---------------|--------|-----------------|----------------|-------|
+| Qwen3 | f32 CPU | hello | 11 | 7.3 | Runtime backend=cpu_simd; prompt=hello |
+| Qwen3 | INT8 CPU | hello | 23 | 27.3 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | f32 CPU | hello | 1 | 2.1 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | INT8 CPU | hello | 8 | 9.7 | Runtime backend=cpu_simd; prompt=hello |
+| Reference | llama.cpp Q4_K_M | reference_only | 5518 | 173 | Reference only, not a parity claim |
 <!-- status:docs-performance-benchmark:end -->
 
-**Baseline**: 2.3 tok/s (initial unoptimized implementation).
+The public table is generated from measured local rows only. Synthetic config benchmarks, exploratory checkpoints, and fallback runs are preserved in `status/benchmark_matrix.md` instead of being mixed into the headline numbers.
 
-The gap with llama.cpp is expected -- llama.cpp uses highly optimized Q4_K kernels with years of tuning, while Synapse prioritizes a clean modular architecture.
+## Evidence Tiers
 
-## Roofline Analysis
+Synapse now separates performance evidence into three lanes:
 
-For Qwen3-0.6B decode (M=1, single-token GEMV):
+1. **Measured local end-to-end**: a real checkpoint loaded on this machine, with throughput captured from the runtime path that actually executed.
+2. **Synthetic / config-validated**: the architecture exercised through fake-weight tests or scaled synthetic benchmarks. This is useful for regression detection and shared-kernel comparison, but it is not a published real-model claim.
+3. **Exploratory local**: extra checkpoints present locally and useful for investigation, but not part of the official support surface yet.
 
-- **Model size**: 596M params x 4 bytes = 2.3 GB (f32), 0.6 GB (INT8)
-- **Memory bandwidth**: ~100 GB/s (Apple M5)
-- **Theoretical max**: 100 GB/s / 2.3 GB = **43 tok/s** (f32)
-- **Achieved**: 6.6 tok/s f32 = **15%** of roofline
-- **INT8 theoretical**: 100 GB/s / 0.6 GB = **167 tok/s**
-- **INT8 achieved**: 14.6 tok/s = **8.7%** of roofline
+This keeps the public table short and defensible while still preserving the broader matrix in artifacts.
 
-The gap to roofline comes from: attention computation, KV cache reads, non-matmul operations (norms, activations), and memory access patterns.
+## Why Qwen3 Improved First
 
-## GPU-Resident Decode (Metal INT8)
+The recent decode recovery came from shared decode infrastructure, not a Qwen-only shortcut:
 
-The Metal INT8 path keeps all state on GPU. Weight bandwidth per token:
+- the `M=1` INT8 GEMV kernel is shared by cached decode projections,
+- the quantized LM-head path is shared by quantized causal-LM decode,
+- the cached decode flow now avoids redundant input quantization across Q/K/V.
 
-| Precision | Weight bytes per token | Theoretical latency (100 GB/s) |
-|-----------|----------------------|-------------------------------|
-| f32 | 280 MB | 2.8 ms |
-| INT8 | 70 MB | 0.7 ms |
+Qwen3 shows the win first because it is the real checkpoint path that has been exercised most deeply on this machine. Other decoder-only families that use the same causal-LM stack should benefit from the same kernel work once their end-to-end loading path is benchmarked locally. The docs should treat that as an architecture-based expectation, not as a numeric promise.
 
-**Actual decode latency**: ~71 ms per token (14.5 tok/s).
+## Metal Reporting Rules
 
-This is **10% of the bandwidth peak**. The remaining 90% is overhead from:
-- Attention score computation and softmax over the KV cache (scales with sequence length)
-- RMSNorm reductions (threadgroup barriers, not purely streaming)
-- RoPE rotations (read-modify-write pattern)
-- Metal command buffer encoding and commit overhead
-- KV cache scatter writes (small but serialized)
+Metal support is runtime-reported, not feature-flag-assumed.
 
-The single command buffer design (all 28 layers in one `commit + waitUntilCompleted`) minimizes dispatch overhead but cannot hide the latency of non-matmul kernels.
+- A `--features metal` build only counts as a Metal benchmark if the `Runtime:` line reports `backend=metal`.
+- If the metal-feature build falls back to `cpu_simd`, the run stays in the raw matrix artifact as a fallback row and is not promoted into the public performance table.
+- This prevents stale GPU claims from surviving after backend routing changes.
 
-## Isolated Kernel Benchmarks
+## Running the Matrix
 
-Matrix multiply benchmarks (M=1, N=2048, K=2048):
-
-| Kernel | Latency | Throughput | vs f32 |
-|--------|---------|------------|--------|
-| f32 GEMV | 48 us | 175 GFLOP/s | 1.0x |
-| INT8 GEMV | 22 us | 381 GFLOP/s | 2.2x |
-| Q4_0 GEMV | 27 us | 311 GFLOP/s | 1.8x |
-
-## Optimization History
-
-Key milestones in the optimization journey:
-
-| Phase | Decode (tok/s) | Change |
-|-------|---------------|--------|
-| Initial | 2.3 | Naive Rust matmul |
-| Zig GEMV | 4.1 | SIMD vectorization |
-| Tiled attention | 5.8 | Fused Q*K*V |
-| INT8 quantization | 14.6 | Quantized kernels |
-| Metal INT8 GPU | 14.5 | GPU-resident decode |
-
-## Running Benchmarks
-
-Full benchmark suite:
+Canonical matrix runner:
 
 ```bash
-bash scripts/bench_suite.sh --model-dir /path/to/qwen3-0.6b
+python3 scripts/benchmark_matrix.py --include-exploratory
 ```
 
-Isolated matmul benchmarks:
+Human-facing wrapper:
 
 ```bash
-cargo bench -p synapse-core
+bash scripts/bench_suite.sh --include-exploratory
 ```
 
-Compare against llama.cpp:
+The matrix writes:
+
+- `status/benchmark_matrix.json`
+- `status/benchmark_matrix.md`
+- `status/public_status.json`
+
+Then the docs sync step consumes `status/public_status.json`:
 
 ```bash
-bash bench_vs_llamacpp.sh /path/to/model.gguf
+python3 scripts/sync_public_status.py --check
 ```
 
 ## Artifact Budgets

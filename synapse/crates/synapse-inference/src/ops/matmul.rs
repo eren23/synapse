@@ -11,10 +11,17 @@ pub(crate) fn matmul_t(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Ve
     //   C [m, n], ldc = n
     let status = unsafe {
         synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,   // A: no transpose
-            b.as_ptr(), k, 1,   // B: transpose
-            out.as_mut_ptr(), n, // C
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            0, // A: no transpose
+            b.as_ptr(),
+            k,
+            1, // B: transpose
+            out.as_mut_ptr(),
+            n, // C
         )
     };
     debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm failed: {status}");
@@ -35,12 +42,23 @@ pub(crate) fn matmul_nn(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> V
     //   C [m, n], ldc = n
     let status = unsafe {
         synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,   // A: no transpose
-            b.as_ptr(), n, 0,   // B: no transpose
-            out.as_mut_ptr(), n, // C
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            0, // A: no transpose
+            b.as_ptr(),
+            n,
+            0, // B: no transpose
+            out.as_mut_ptr(),
+            n, // C
         )
     };
-    debug_assert_eq!(status, synapse_sys::SYN_OK, "syn_sgemm (nn) failed: {status}");
+    debug_assert_eq!(
+        status,
+        synapse_sys::SYN_OK,
+        "syn_sgemm (nn) failed: {status}"
+    );
     out
 }

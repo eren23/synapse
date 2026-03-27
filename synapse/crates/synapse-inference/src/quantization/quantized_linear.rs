@@ -102,20 +102,23 @@ impl QuantizedLinear {
             .expect("quantize_per_channel_int8 failed");
 
         // GEMM: C[m,n] = diag(scales_x) * (x_i8[m,k] @ W_i8^T[k,n]) * diag(scales_w)
-        synapse_core::qgemm_int8(m, n, k, &x_int8, &self.weights_int8, &scales_x, &self.scales)
-            .expect("qgemm_int8 failed")
+        synapse_core::qgemm_int8(
+            m,
+            n,
+            k,
+            &x_int8,
+            &self.weights_int8,
+            &scales_x,
+            &self.scales,
+        )
+        .expect("qgemm_int8 failed")
     }
 
     /// Forward pass with pre-quantized input activations.
     ///
     /// Use this when the same input is projected through multiple linear layers
     /// (e.g. Q/K/V projections) to avoid redundant quantization of x.
-    pub fn forward_pre_quantized(
-        &self,
-        x_int8: &[i8],
-        scales_x: &[f32],
-        m: usize,
-    ) -> Vec<f32> {
+    pub fn forward_pre_quantized(&self, x_int8: &[i8], scales_x: &[f32], m: usize) -> Vec<f32> {
         let k = self.in_features;
         let n = self.out_features;
 
@@ -129,8 +132,7 @@ impl QuantizedLinear {
 
     /// Memory in bytes for INT8 weights + f32 scales.
     pub fn memory_bytes(&self) -> usize {
-        self.weights_int8.len() * mem::size_of::<i8>()
-            + self.scales.len() * mem::size_of::<f32>()
+        self.weights_int8.len() * mem::size_of::<i8>() + self.scales.len() * mem::size_of::<f32>()
     }
 }
 

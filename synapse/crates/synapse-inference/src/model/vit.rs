@@ -379,10 +379,7 @@ impl ViTModel {
             out
         });
 
-        ViTOutput {
-            embeddings,
-            logits,
-        }
+        ViTOutput { embeddings, logits }
     }
 
     /// All target weight keys this model expects (Synapse naming).
@@ -429,7 +426,10 @@ impl ViTModel {
         let missing: Vec<String> = expected.difference(&loaded).cloned().collect();
         let unexpected = mapping.unmapped;
 
-        Ok(super::LoadResult { missing, unexpected })
+        Ok(super::LoadResult {
+            missing,
+            unexpected,
+        })
     }
 
     fn set_weight(&mut self, key: &str, tensor: &RawTensor) -> Result<(), WeightError> {
@@ -595,8 +595,10 @@ mod tests {
         }
 
         if cfg.num_classes > 0 {
-            model.classifier_head =
-                Some(AlignedBuffer::from_slice(&gen_weights(cfg.num_classes * h, 999)));
+            model.classifier_head = Some(AlignedBuffer::from_slice(&gen_weights(
+                cfg.num_classes * h,
+                999,
+            )));
         }
 
         model
@@ -621,7 +623,10 @@ mod tests {
         );
 
         // Logits should exist (num_classes > 0) and be finite
-        let logits = output.logits.as_ref().expect("expected logits for classification model");
+        let logits = output
+            .logits
+            .as_ref()
+            .expect("expected logits for classification model");
         assert_eq!(logits.len(), cfg.num_classes);
         assert!(
             logits.iter().all(|v| v.is_finite()),

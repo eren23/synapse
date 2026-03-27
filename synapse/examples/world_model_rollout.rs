@@ -6,8 +6,8 @@
 //! Usage: cargo run --example world_model_rollout --release
 
 use std::time::Instant;
-use synapse_inference::model::{RealtimeRollout, WorldModel, WorldModelConfig};
 use synapse_inference::model::vit::ViTConfig;
+use synapse_inference::model::{RealtimeRollout, WorldModel, WorldModelConfig};
 
 fn main() {
     // Small dynamics model for real-time inference
@@ -32,7 +32,10 @@ fn main() {
 
     println!("=== Synapse World Model Rollout Benchmark ===");
     println!("  Latent dim: {}", config.latent_dim);
-    println!("  Dynamics: {} layers, {} hidden", config.dynamics_num_layers, config.dynamics_hidden_size);
+    println!(
+        "  Dynamics: {} layers, {} hidden",
+        config.dynamics_num_layers, config.dynamics_hidden_size
+    );
     println!("  Action dim: {}", config.action_dim);
     println!();
 
@@ -43,16 +46,20 @@ fn main() {
     let mut rollout = RealtimeRollout::new(model);
 
     // Create a fake observation image
-    let image: Vec<f32> = (0..64 * 64 * 3)
-        .map(|i| (i as f32 * 0.001).sin())
-        .collect();
+    let image: Vec<f32> = (0..64 * 64 * 3).map(|i| (i as f32 * 0.001).sin()).collect();
 
     // Benchmark: encode observation
     let start = Instant::now();
     rollout.reset(&image, 64, 64);
     let encode_time = start.elapsed();
-    println!("Encode observation (64x64): {:.1}ms", encode_time.as_secs_f64() * 1000.0);
-    println!("  Initial state L2 norm: {:.4}", l2_norm(&rollout.state().embedding));
+    println!(
+        "Encode observation (64x64): {:.1}ms",
+        encode_time.as_secs_f64() * 1000.0
+    );
+    println!(
+        "  Initial state L2 norm: {:.4}",
+        l2_norm(&rollout.state().embedding)
+    );
     println!();
 
     // Benchmark: single dynamics step (THE HOT PATH)
@@ -103,15 +110,23 @@ fn main() {
     let trajectory = rollout.plan(&actions);
     let plan_time = start.elapsed();
     println!("Planning rollout ({} steps):", plan_steps);
-    println!("  {:.1}ms total ({:.2}ms per step)",
+    println!(
+        "  {:.1}ms total ({:.2}ms per step)",
         plan_time.as_secs_f64() * 1000.0,
-        plan_time.as_secs_f64() * 1000.0 / plan_steps as f64);
+        plan_time.as_secs_f64() * 1000.0 / plan_steps as f64
+    );
     println!("  Trajectory length: {}", trajectory.len());
-    println!("  Final state L2 norm: {:.4}", l2_norm(&trajectory.last().unwrap().embedding));
+    println!(
+        "  Final state L2 norm: {:.4}",
+        l2_norm(&trajectory.last().unwrap().embedding)
+    );
     println!();
 
     // Show state doesn't advance after plan()
-    println!("After plan(): rollout.steps() = {} (unchanged)", rollout.steps());
+    println!(
+        "After plan(): rollout.steps() = {} (unchanged)",
+        rollout.steps()
+    );
 }
 
 fn l2_norm(v: &[f32]) -> f32 {

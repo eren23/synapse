@@ -113,8 +113,7 @@ impl Adam {
 
         // Update biased second moment estimate: v = beta2*v + (1-beta2)*grad^2
         for i in 0..n {
-            state.exp_avg_sq[i] =
-                beta2 * state.exp_avg_sq[i] + (1.0 - beta2) * grad[i] * grad[i];
+            state.exp_avg_sq[i] = beta2 * state.exp_avg_sq[i] + (1.0 - beta2) * grad[i] * grad[i];
         }
 
         // Bias correction
@@ -154,7 +153,16 @@ impl Optimizer for Adam {
 
         for i in 0..params.len() {
             if !grouped.contains(&i) {
-                self.step_param(i, &mut params[i], lr, beta1, beta2, eps, weight_decay, adamw);
+                self.step_param(
+                    i,
+                    &mut params[i],
+                    lr,
+                    beta1,
+                    beta2,
+                    eps,
+                    weight_decay,
+                    adamw,
+                );
             }
         }
 
@@ -255,10 +263,7 @@ mod tests {
     /// step 9: [0.9900001287460327, 2.0099992752075195, 2.9900007247924805]
     #[test]
     fn test_adam_10step_pytorch_reference() {
-        let mut params = vec![Param::with_grad(
-            vec![1.0, 2.0, 3.0],
-            vec![0.5, -0.3, 0.8],
-        )];
+        let mut params = vec![Param::with_grad(vec![1.0, 2.0, 3.0], vec![0.5, -0.3, 0.8])];
 
         let mut opt = Adam::new(0.001);
 

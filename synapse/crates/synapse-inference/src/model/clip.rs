@@ -182,7 +182,8 @@ impl CLIPModel {
                     let src_start = idx * th;
                     let src_end = src_start + th;
                     if src_end <= self.text_embeddings.len() {
-                        x[t * th..(t + 1) * th].copy_from_slice(&self.text_embeddings[src_start..src_end]);
+                        x[t * th..(t + 1) * th]
+                            .copy_from_slice(&self.text_embeddings[src_start..src_end]);
                     }
                 }
             }
@@ -314,7 +315,10 @@ impl CLIPModel {
         let missing: Vec<String> = expected.difference(&loaded).cloned().collect();
         let unexpected = mapping.unmapped;
 
-        Ok(super::LoadResult { missing, unexpected })
+        Ok(super::LoadResult {
+            missing,
+            unexpected,
+        })
     }
 
     /// Assign a weight by its Synapse target key.
@@ -520,7 +524,8 @@ mod tests {
 
         // Text encoder weights
         model.text_embeddings = AlignedBuffer::from_slice(&gen_weights(cfg.vocab_size * th, 400));
-        model.text_pos_embed = AlignedBuffer::from_slice(&gen_weights(cfg.text_max_position * th, 401));
+        model.text_pos_embed =
+            AlignedBuffer::from_slice(&gen_weights(cfg.text_max_position * th, 401));
         model.text_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; th]);
 
         for (i, layer) in model.text_encoder_layers.iter_mut().enumerate() {
@@ -547,9 +552,10 @@ mod tests {
         let cfg = test_clip_config();
         let model = build_test_clip(&cfg);
 
-        let image: Vec<f32> = (0..cfg.vision.image_size * cfg.vision.image_size * cfg.vision.channels)
-            .map(|i| (i as f32) / 255.0)
-            .collect();
+        let image: Vec<f32> =
+            (0..cfg.vision.image_size * cfg.vision.image_size * cfg.vision.channels)
+                .map(|i| (i as f32) / 255.0)
+                .collect();
 
         let embedding = model.encode_image(&image, cfg.vision.image_size, cfg.vision.image_size);
 
@@ -603,17 +609,20 @@ mod tests {
         let cfg = test_clip_config();
         let model = build_test_clip(&cfg);
 
-        let image: Vec<f32> = (0..cfg.vision.image_size * cfg.vision.image_size * cfg.vision.channels)
-            .map(|i| (i as f32) / 255.0)
-            .collect();
+        let image: Vec<f32> =
+            (0..cfg.vision.image_size * cfg.vision.image_size * cfg.vision.channels)
+                .map(|i| (i as f32) / 255.0)
+                .collect();
         let token_ids: Vec<u32> = vec![1, 5, 10, 20, 3];
 
-        let output = model.similarity(&image, cfg.vision.image_size, cfg.vision.image_size, &token_ids);
-
-        assert!(
-            output.similarity.is_finite(),
-            "Similarity should be finite"
+        let output = model.similarity(
+            &image,
+            cfg.vision.image_size,
+            cfg.vision.image_size,
+            &token_ids,
         );
+
+        assert!(output.similarity.is_finite(), "Similarity should be finite");
         assert!(
             output.similarity >= -1.0 && output.similarity <= 1.0,
             "Cosine similarity should be in [-1, 1], got {}",
@@ -646,9 +655,15 @@ mod tests {
         };
 
         // Vision global weights
-        weights.insert("vision_model.embeddings.patch_embedding.weight".into(), rt(vh * patch_dim, 1));
+        weights.insert(
+            "vision_model.embeddings.patch_embedding.weight".into(),
+            rt(vh * patch_dim, 1),
+        );
         weights.insert("vision_model.embeddings.class_embedding".into(), rt(vh, 2));
-        weights.insert("vision_model.embeddings.position_embedding.weight".into(), rt(v_seq_len * vh, 3));
+        weights.insert(
+            "vision_model.embeddings.position_embedding.weight".into(),
+            rt(v_seq_len * vh, 3),
+        );
         weights.insert("vision_model.pre_layernorm.weight".into(), rt(vh, 4));
         weights.insert("vision_model.pre_layernorm.bias".into(), rt(vh, 5));
         weights.insert("vision_model.post_layernorm.weight".into(), rt(vh, 6));
@@ -657,49 +672,151 @@ mod tests {
         // Vision layer weights
         for i in 0..cfg.vision.num_layers {
             let s = (i as u32 + 1) * 100;
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.q_proj.weight"), rt(vh * vh, s + 1));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.q_proj.bias"), rt(vh, s + 2));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.k_proj.weight"), rt(vh * vh, s + 3));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.k_proj.bias"), rt(vh, s + 4));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.v_proj.weight"), rt(vh * vh, s + 5));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.v_proj.bias"), rt(vh, s + 6));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.out_proj.weight"), rt(vh * vh, s + 7));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.out_proj.bias"), rt(vh, s + 8));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc1.weight"), rt(v_inter * vh, s + 9));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc1.bias"), rt(v_inter, s + 10));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc2.weight"), rt(vh * v_inter, s + 11));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc2.bias"), rt(vh, s + 12));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm1.weight"), rt(vh, s + 13));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm1.bias"), rt(vh, s + 14));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm2.weight"), rt(vh, s + 15));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm2.bias"), rt(vh, s + 16));
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.q_proj.weight"),
+                rt(vh * vh, s + 1),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.q_proj.bias"),
+                rt(vh, s + 2),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.k_proj.weight"),
+                rt(vh * vh, s + 3),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.k_proj.bias"),
+                rt(vh, s + 4),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.v_proj.weight"),
+                rt(vh * vh, s + 5),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.v_proj.bias"),
+                rt(vh, s + 6),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.out_proj.weight"),
+                rt(vh * vh, s + 7),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.out_proj.bias"),
+                rt(vh, s + 8),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc1.weight"),
+                rt(v_inter * vh, s + 9),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc1.bias"),
+                rt(v_inter, s + 10),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc2.weight"),
+                rt(vh * v_inter, s + 11),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc2.bias"),
+                rt(vh, s + 12),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm1.weight"),
+                rt(vh, s + 13),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm1.bias"),
+                rt(vh, s + 14),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm2.weight"),
+                rt(vh, s + 15),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm2.bias"),
+                rt(vh, s + 16),
+            );
         }
 
         // Text global weights
-        weights.insert("text_model.embeddings.token_embedding.weight".into(), rt(cfg.vocab_size * th, 400));
-        weights.insert("text_model.embeddings.position_embedding.weight".into(), rt(cfg.text_max_position * th, 401));
+        weights.insert(
+            "text_model.embeddings.token_embedding.weight".into(),
+            rt(cfg.vocab_size * th, 400),
+        );
+        weights.insert(
+            "text_model.embeddings.position_embedding.weight".into(),
+            rt(cfg.text_max_position * th, 401),
+        );
         weights.insert("text_model.final_layer_norm.weight".into(), rt(th, 402));
         weights.insert("text_model.final_layer_norm.bias".into(), rt(th, 403));
 
         // Text layer weights
         for i in 0..cfg.text_num_layers {
             let s = (i as u32 + 10) * 200;
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.q_proj.weight"), rt(th * th, s + 1));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.q_proj.bias"), rt(th, s + 2));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.k_proj.weight"), rt(th * th, s + 3));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.k_proj.bias"), rt(th, s + 4));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.v_proj.weight"), rt(th * th, s + 5));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.v_proj.bias"), rt(th, s + 6));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.out_proj.weight"), rt(th * th, s + 7));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.out_proj.bias"), rt(th, s + 8));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc1.weight"), rt(t_inter * th, s + 9));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc1.bias"), rt(t_inter, s + 10));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc2.weight"), rt(th * t_inter, s + 11));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc2.bias"), rt(th, s + 12));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm1.weight"), rt(th, s + 13));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm1.bias"), rt(th, s + 14));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm2.weight"), rt(th, s + 15));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm2.bias"), rt(th, s + 16));
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.q_proj.weight"),
+                rt(th * th, s + 1),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.q_proj.bias"),
+                rt(th, s + 2),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.k_proj.weight"),
+                rt(th * th, s + 3),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.k_proj.bias"),
+                rt(th, s + 4),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.v_proj.weight"),
+                rt(th * th, s + 5),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.v_proj.bias"),
+                rt(th, s + 6),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.out_proj.weight"),
+                rt(th * th, s + 7),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.out_proj.bias"),
+                rt(th, s + 8),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc1.weight"),
+                rt(t_inter * th, s + 9),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc1.bias"),
+                rt(t_inter, s + 10),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc2.weight"),
+                rt(th * t_inter, s + 11),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc2.bias"),
+                rt(th, s + 12),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm1.weight"),
+                rt(th, s + 13),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm1.bias"),
+                rt(th, s + 14),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm2.weight"),
+                rt(th, s + 15),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm2.bias"),
+                rt(th, s + 16),
+            );
         }
 
         // Projections
@@ -707,22 +824,60 @@ mod tests {
         weights.insert("text_projection.weight".into(), rt(th * ed, 601));
 
         let mapper = WeightMapper::clip();
-        let result = model.load_weights(weights, &mapper).expect("load_weights failed");
+        let result = model
+            .load_weights(weights, &mapper)
+            .expect("load_weights failed");
 
         // Verify key weights were loaded (non-empty)
-        assert!(!model.vision_model.patch_proj.is_empty(), "vision patch_proj should be loaded");
-        assert!(!model.vision_model.cls_token.is_empty(), "vision cls_token should be loaded");
-        assert!(!model.vision_model.pos_embed.is_empty(), "vision pos_embed should be loaded");
-        assert!(!model.vision_pre_norm_weight.is_empty(), "vision pre_norm_weight should be loaded");
-        assert!(!model.vision_model.final_norm_weight.is_empty(), "vision norm weight should be loaded");
-        assert!(!model.text_embeddings.is_empty(), "text embeddings should be loaded");
-        assert!(!model.text_pos_embed.is_empty(), "text pos_embed should be loaded");
-        assert!(!model.text_norm_weight.is_empty(), "text norm weight should be loaded");
-        assert!(!model.text_norm_bias.is_empty(), "text norm bias should be loaded");
-        assert!(!model.vision_proj.is_empty(), "vision_proj should be loaded");
+        assert!(
+            !model.vision_model.patch_proj.is_empty(),
+            "vision patch_proj should be loaded"
+        );
+        assert!(
+            !model.vision_model.cls_token.is_empty(),
+            "vision cls_token should be loaded"
+        );
+        assert!(
+            !model.vision_model.pos_embed.is_empty(),
+            "vision pos_embed should be loaded"
+        );
+        assert!(
+            !model.vision_pre_norm_weight.is_empty(),
+            "vision pre_norm_weight should be loaded"
+        );
+        assert!(
+            !model.vision_model.final_norm_weight.is_empty(),
+            "vision norm weight should be loaded"
+        );
+        assert!(
+            !model.text_embeddings.is_empty(),
+            "text embeddings should be loaded"
+        );
+        assert!(
+            !model.text_pos_embed.is_empty(),
+            "text pos_embed should be loaded"
+        );
+        assert!(
+            !model.text_norm_weight.is_empty(),
+            "text norm weight should be loaded"
+        );
+        assert!(
+            !model.text_norm_bias.is_empty(),
+            "text norm bias should be loaded"
+        );
+        assert!(
+            !model.vision_proj.is_empty(),
+            "vision_proj should be loaded"
+        );
         assert!(!model.text_proj.is_empty(), "text_proj should be loaded");
-        assert!(!model.vision_model.layers[0].w_q.is_empty(), "vision layer 0 w_q should be loaded");
-        assert!(!model.text_encoder_layers[0].w_q.is_empty(), "text layer 0 w_q should be loaded");
+        assert!(
+            !model.vision_model.layers[0].w_q.is_empty(),
+            "vision layer 0 w_q should be loaded"
+        );
+        assert!(
+            !model.text_encoder_layers[0].w_q.is_empty(),
+            "text layer 0 w_q should be loaded"
+        );
 
         // Should have no unmapped keys (everything is CLIP naming)
         assert!(
@@ -763,9 +918,15 @@ mod tests {
             }
         };
 
-        weights.insert("vision_model.embeddings.patch_embedding.weight".into(), rt(vh * patch_dim, 1));
+        weights.insert(
+            "vision_model.embeddings.patch_embedding.weight".into(),
+            rt(vh * patch_dim, 1),
+        );
         weights.insert("vision_model.embeddings.class_embedding".into(), rt(vh, 2));
-        weights.insert("vision_model.embeddings.position_embedding.weight".into(), rt(v_seq_len * vh, 3));
+        weights.insert(
+            "vision_model.embeddings.position_embedding.weight".into(),
+            rt(v_seq_len * vh, 3),
+        );
         weights.insert("vision_model.pre_layernorm.weight".into(), ones(vh));
         weights.insert("vision_model.pre_layernorm.bias".into(), rt(vh, 5));
         weights.insert("vision_model.post_layernorm.weight".into(), ones(vh));
@@ -773,62 +934,172 @@ mod tests {
 
         for i in 0..cfg.vision.num_layers {
             let s = (i as u32 + 1) * 100;
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.q_proj.weight"), rt(vh * vh, s + 1));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.q_proj.bias"), rt(vh, s + 2));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.k_proj.weight"), rt(vh * vh, s + 3));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.k_proj.bias"), rt(vh, s + 4));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.v_proj.weight"), rt(vh * vh, s + 5));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.v_proj.bias"), rt(vh, s + 6));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.out_proj.weight"), rt(vh * vh, s + 7));
-            weights.insert(format!("vision_model.encoder.layers.{i}.self_attn.out_proj.bias"), rt(vh, s + 8));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc1.weight"), rt(v_inter * vh, s + 9));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc1.bias"), rt(v_inter, s + 10));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc2.weight"), rt(vh * v_inter, s + 11));
-            weights.insert(format!("vision_model.encoder.layers.{i}.mlp.fc2.bias"), rt(vh, s + 12));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm1.weight"), ones(vh));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm1.bias"), rt(vh, s + 14));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm2.weight"), ones(vh));
-            weights.insert(format!("vision_model.encoder.layers.{i}.layer_norm2.bias"), rt(vh, s + 16));
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.q_proj.weight"),
+                rt(vh * vh, s + 1),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.q_proj.bias"),
+                rt(vh, s + 2),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.k_proj.weight"),
+                rt(vh * vh, s + 3),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.k_proj.bias"),
+                rt(vh, s + 4),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.v_proj.weight"),
+                rt(vh * vh, s + 5),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.v_proj.bias"),
+                rt(vh, s + 6),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.out_proj.weight"),
+                rt(vh * vh, s + 7),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.self_attn.out_proj.bias"),
+                rt(vh, s + 8),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc1.weight"),
+                rt(v_inter * vh, s + 9),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc1.bias"),
+                rt(v_inter, s + 10),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc2.weight"),
+                rt(vh * v_inter, s + 11),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.mlp.fc2.bias"),
+                rt(vh, s + 12),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm1.weight"),
+                ones(vh),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm1.bias"),
+                rt(vh, s + 14),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm2.weight"),
+                ones(vh),
+            );
+            weights.insert(
+                format!("vision_model.encoder.layers.{i}.layer_norm2.bias"),
+                rt(vh, s + 16),
+            );
         }
 
-        weights.insert("text_model.embeddings.token_embedding.weight".into(), rt(cfg.vocab_size * th, 400));
-        weights.insert("text_model.embeddings.position_embedding.weight".into(), rt(cfg.text_max_position * th, 401));
+        weights.insert(
+            "text_model.embeddings.token_embedding.weight".into(),
+            rt(cfg.vocab_size * th, 400),
+        );
+        weights.insert(
+            "text_model.embeddings.position_embedding.weight".into(),
+            rt(cfg.text_max_position * th, 401),
+        );
         weights.insert("text_model.final_layer_norm.weight".into(), ones(th));
         weights.insert("text_model.final_layer_norm.bias".into(), rt(th, 403));
 
         for i in 0..cfg.text_num_layers {
             let s = (i as u32 + 10) * 200;
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.q_proj.weight"), rt(th * th, s + 1));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.q_proj.bias"), rt(th, s + 2));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.k_proj.weight"), rt(th * th, s + 3));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.k_proj.bias"), rt(th, s + 4));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.v_proj.weight"), rt(th * th, s + 5));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.v_proj.bias"), rt(th, s + 6));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.out_proj.weight"), rt(th * th, s + 7));
-            weights.insert(format!("text_model.encoder.layers.{i}.self_attn.out_proj.bias"), rt(th, s + 8));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc1.weight"), rt(t_inter * th, s + 9));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc1.bias"), rt(t_inter, s + 10));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc2.weight"), rt(th * t_inter, s + 11));
-            weights.insert(format!("text_model.encoder.layers.{i}.mlp.fc2.bias"), rt(th, s + 12));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm1.weight"), ones(th));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm1.bias"), rt(th, s + 14));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm2.weight"), ones(th));
-            weights.insert(format!("text_model.encoder.layers.{i}.layer_norm2.bias"), rt(th, s + 16));
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.q_proj.weight"),
+                rt(th * th, s + 1),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.q_proj.bias"),
+                rt(th, s + 2),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.k_proj.weight"),
+                rt(th * th, s + 3),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.k_proj.bias"),
+                rt(th, s + 4),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.v_proj.weight"),
+                rt(th * th, s + 5),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.v_proj.bias"),
+                rt(th, s + 6),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.out_proj.weight"),
+                rt(th * th, s + 7),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.self_attn.out_proj.bias"),
+                rt(th, s + 8),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc1.weight"),
+                rt(t_inter * th, s + 9),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc1.bias"),
+                rt(t_inter, s + 10),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc2.weight"),
+                rt(th * t_inter, s + 11),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.mlp.fc2.bias"),
+                rt(th, s + 12),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm1.weight"),
+                ones(th),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm1.bias"),
+                rt(th, s + 14),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm2.weight"),
+                ones(th),
+            );
+            weights.insert(
+                format!("text_model.encoder.layers.{i}.layer_norm2.bias"),
+                rt(th, s + 16),
+            );
         }
 
         weights.insert("visual_projection.weight".into(), rt(vh * ed, 600));
         weights.insert("text_projection.weight".into(), rt(th * ed, 601));
 
         let mapper = WeightMapper::clip();
-        model.load_weights(weights, &mapper).expect("load_weights failed");
+        model
+            .load_weights(weights, &mapper)
+            .expect("load_weights failed");
 
         // Run forward pass to verify loaded weights produce finite output
-        let image: Vec<f32> = (0..cfg.vision.image_size * cfg.vision.image_size * cfg.vision.channels)
-            .map(|i| (i as f32) / 255.0)
-            .collect();
+        let image: Vec<f32> =
+            (0..cfg.vision.image_size * cfg.vision.image_size * cfg.vision.channels)
+                .map(|i| (i as f32) / 255.0)
+                .collect();
         let token_ids: Vec<u32> = vec![1, 5, 10, 20, 3];
 
-        let output = model.similarity(&image, cfg.vision.image_size, cfg.vision.image_size, &token_ids);
+        let output = model.similarity(
+            &image,
+            cfg.vision.image_size,
+            cfg.vision.image_size,
+            &token_ids,
+        );
 
         assert!(
             output.image_embedding.iter().all(|v| v.is_finite()),

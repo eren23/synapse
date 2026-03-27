@@ -15,7 +15,7 @@ pub mod rnn;
 pub mod sequential;
 pub mod transformer;
 
-pub use activation::{GELU, ReLU, Sigmoid, Softmax, Tanh};
+pub use activation::{ReLU, Sigmoid, Softmax, Tanh, GELU};
 pub use attention::MultiHeadAttention;
 pub use batchnorm::{BatchNorm1d, BatchNorm2d};
 pub use conv::Conv2d;

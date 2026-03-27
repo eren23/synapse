@@ -4,23 +4,36 @@
 //! - **MHA** (Multi-Head Attention): `num_kv_heads == num_heads` — no KV sharing
 //! - **MQA** (Multi-Query Attention): `num_kv_heads == 1` — all heads share one KV
 
-use synapse_core::{KvCache, SynapseError, Tensor};
 use super::AttentionVariant;
+use synapse_core::{KvCache, SynapseError, Tensor};
 
 // ── Helper functions ─────────────────────────────────────────────────
 
 /// C\[m,n\] = A\[m,k\] @ B\[k,n\]  (no transpose).
 fn sgemm_nn(
-    m: usize, n: usize, k: usize,
-    a: &[f32], b: &[f32], c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
 ) -> Result<(), SynapseError> {
-    if m == 0 || n == 0 { return Ok(()); }
+    if m == 0 || n == 0 {
+        return Ok(());
+    }
     unsafe {
         let status = synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,
-            b.as_ptr(), n, 0,
-            c.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            0,
+            b.as_ptr(),
+            n,
+            0,
+            c.as_mut_ptr(),
+            n,
         );
         if status != synapse_sys::SYN_OK {
             return Err(SynapseError::Internal);
@@ -31,16 +44,29 @@ fn sgemm_nn(
 
 /// C\[m,n\] = A\[m,k\] @ B^T, where B is stored row-major as \[n,k\].
 fn sgemm_nt(
-    m: usize, n: usize, k: usize,
-    a: &[f32], b: &[f32], c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+    a: &[f32],
+    b: &[f32],
+    c: &mut [f32],
 ) -> Result<(), SynapseError> {
-    if m == 0 || n == 0 { return Ok(()); }
+    if m == 0 || n == 0 {
+        return Ok(());
+    }
     unsafe {
         let status = synapse_sys::syn_sgemm(
-            m, n, k,
-            a.as_ptr(), k, 0,
-            b.as_ptr(), k, 1,
-            c.as_mut_ptr(), n,
+            m,
+            n,
+            k,
+            a.as_ptr(),
+            k,
+            0,
+            b.as_ptr(),
+            k,
+            1,
+            c.as_mut_ptr(),
+            n,
         );
         if status != synapse_sys::SYN_OK {
             return Err(SynapseError::Internal);
@@ -68,7 +94,12 @@ fn transpose_0213(data: &[f32], d0: usize, d1: usize, d2: usize, d3: usize) -> V
 
 /// Repeat KV heads via interleave: \[batch, kv\_heads, seq, d\] → \[batch, kv\_heads\*repeat, seq, d\].
 fn repeat_kv(
-    data: &[f32], batch: usize, kv_heads: usize, seq: usize, d: usize, repeat: usize,
+    data: &[f32],
+    batch: usize,
+    kv_heads: usize,
+    seq: usize,
+    d: usize,
+    repeat: usize,
 ) -> Vec<f32> {
     if repeat == 1 {
         return data.to_vec();
@@ -129,9 +160,7 @@ pub struct GQAAttention {
 
 impl GQAAttention {
     /// Create a new GQA attention layer with zero-initialized weights.
-    pub fn new(
-        num_heads: usize, num_kv_heads: usize, head_dim: usize, hidden_size: usize,
-    ) -> Self {
+    pub fn new(num_heads: usize, num_kv_heads: usize, head_dim: usize, hidden_size: usize) -> Self {
         assert!(
             num_heads % num_kv_heads == 0,
             "num_heads ({num_heads}) must be divisible by num_kv_heads ({num_kv_heads})"
@@ -139,7 +168,10 @@ impl GQAAttention {
         let q_dim = num_heads * head_dim;
         let kv_dim = num_kv_heads * head_dim;
         Self {
-            num_heads, num_kv_heads, head_dim, hidden_size,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            hidden_size,
             w_q: vec![0.0; hidden_size * q_dim],
             w_k: vec![0.0; hidden_size * kv_dim],
             w_v: vec![0.0; hidden_size * kv_dim],
@@ -172,7 +204,9 @@ impl GQAAttention {
         self.w_q.len() + self.w_k.len() + self.w_v.len() + self.w_o.len()
     }
 
-    pub fn hidden_size(&self) -> usize { self.hidden_size }
+    pub fn hidden_size(&self) -> usize {
+        self.hidden_size
+    }
 
     /// Project input through Q/K/V, reshape to 4-D, and apply RoPE.
     ///
@@ -210,8 +244,10 @@ impl GQAAttention {
         let (q_out, k_out) = if let (Some(cos), Some(sin)) = (rope_cos, rope_sin) {
             let qt = Tensor::from_data(&q_4d, &[batch, self.num_heads, seq_len, self.head_dim])?;
             let kt = Tensor::from_data(&k_4d, &[batch, self.num_kv_heads, seq_len, self.head_dim])?;
-            (qt.rope(cos, sin, rope_offset)?.to_vec()?,
-             kt.rope(cos, sin, rope_offset)?.to_vec()?)
+            (
+                qt.rope(cos, sin, rope_offset)?.to_vec()?,
+                kt.rope(cos, sin, rope_offset)?.to_vec()?,
+            )
         } else {
             (q_4d, k_4d)
         };
@@ -223,7 +259,9 @@ impl GQAAttention {
     ///
     /// `attn_out`: `[m, num_heads * head_dim]` → returns `[m, hidden_size]`.
     pub(crate) fn project_output(
-        &self, attn_out: &[f32], m: usize,
+        &self,
+        attn_out: &[f32],
+        m: usize,
     ) -> Result<Vec<f32>, SynapseError> {
         let q_dim = self.num_heads * self.head_dim;
         let mut result = vec![0.0f32; m * self.hidden_size];
@@ -319,8 +357,22 @@ impl GQAAttention {
 
         // GQA expand
         let repeat = self.num_heads / self.num_kv_heads;
-        let k_exp = repeat_kv(&k_full, 1, self.num_kv_heads, full_len, self.head_dim, repeat);
-        let v_exp = repeat_kv(&v_full, 1, self.num_kv_heads, full_len, self.head_dim, repeat);
+        let k_exp = repeat_kv(
+            &k_full,
+            1,
+            self.num_kv_heads,
+            full_len,
+            self.head_dim,
+            repeat,
+        );
+        let v_exp = repeat_kv(
+            &v_full,
+            1,
+            self.num_kv_heads,
+            full_len,
+            self.head_dim,
+            repeat,
+        );
 
         // SDPA: causal for prefill (seq_q == seq_k), non-causal for decode (seq_q == 1)
         let qt = Tensor::from_data(&q, &[1, self.num_heads, seq_len, self.head_dim])?;
@@ -337,10 +389,18 @@ impl GQAAttention {
 }
 
 impl AttentionVariant for GQAAttention {
-    fn num_heads(&self) -> usize { self.num_heads }
-    fn head_dim(&self) -> usize { self.head_dim }
-    fn num_kv_heads(&self) -> usize { self.num_kv_heads }
-    fn name(&self) -> &str { "GQA" }
+    fn num_heads(&self) -> usize {
+        self.num_heads
+    }
+    fn head_dim(&self) -> usize {
+        self.head_dim
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.num_kv_heads
+    }
+    fn name(&self) -> &str {
+        "GQA"
+    }
 }
 
 // ── Sliding Window Attention ─────────────────────────────────────────
@@ -356,8 +416,11 @@ pub struct SlidingWindowAttention {
 
 impl SlidingWindowAttention {
     pub fn new(
-        num_heads: usize, num_kv_heads: usize, head_dim: usize,
-        hidden_size: usize, window_size: usize,
+        num_heads: usize,
+        num_kv_heads: usize,
+        head_dim: usize,
+        hidden_size: usize,
+        window_size: usize,
     ) -> Self {
         Self {
             inner: GQAAttention::new(num_heads, num_kv_heads, head_dim, hidden_size),
@@ -369,7 +432,9 @@ impl SlidingWindowAttention {
         self.inner.set_weights(w_q, w_k, w_v, w_o);
     }
 
-    pub fn param_count(&self) -> usize { self.inner.param_count() }
+    pub fn param_count(&self) -> usize {
+        self.inner.param_count()
+    }
 
     /// Forward with sliding-window + causal masking.
     ///
@@ -385,13 +450,27 @@ impl SlidingWindowAttention {
         rope_sin: Option<&Tensor>,
         rope_offset: usize,
     ) -> Result<(Vec<f32>, Vec<f32>), SynapseError> {
-        let (q, k, v) = self.inner.prepare_qkv(
-            input, batch, seq_len, rope_cos, rope_sin, rope_offset,
-        )?;
+        let (q, k, v) =
+            self.inner
+                .prepare_qkv(input, batch, seq_len, rope_cos, rope_sin, rope_offset)?;
 
         let repeat = self.inner.num_heads / self.inner.num_kv_heads;
-        let k_exp = repeat_kv(&k, batch, self.inner.num_kv_heads, seq_len, self.inner.head_dim, repeat);
-        let v_exp = repeat_kv(&v, batch, self.inner.num_kv_heads, seq_len, self.inner.head_dim, repeat);
+        let k_exp = repeat_kv(
+            &k,
+            batch,
+            self.inner.num_kv_heads,
+            seq_len,
+            self.inner.head_dim,
+            repeat,
+        );
+        let v_exp = repeat_kv(
+            &v,
+            batch,
+            self.inner.num_kv_heads,
+            seq_len,
+            self.inner.head_dim,
+            repeat,
+        );
 
         // Manual attention with causal + sliding-window mask
         let hd = self.inner.head_dim;
@@ -413,14 +492,18 @@ impl SlidingWindowAttention {
                 // scores = Q_head @ K_head^T  →  [seq, seq]
                 let mut scores = vec![0.0f32; seq_len * seq_len];
                 sgemm_nt(
-                    seq_len, seq_len, hd,
+                    seq_len,
+                    seq_len,
+                    hd,
                     &q[q_off..q_off + head_seq],
                     &k_exp[k_off..k_off + head_seq],
                     &mut scores,
                 )?;
 
                 // Scale
-                for s in scores.iter_mut() { *s *= scale; }
+                for s in scores.iter_mut() {
+                    *s *= scale;
+                }
 
                 // Causal + sliding-window mask
                 for i in 0..seq_len {
@@ -439,7 +522,9 @@ impl SlidingWindowAttention {
 
                 // out = weights @ V_head  →  [seq, hd]
                 sgemm_nn(
-                    seq_len, hd, seq_len,
+                    seq_len,
+                    hd,
+                    seq_len,
                     &scores,
                     &v_exp[v_off..v_off + head_seq],
                     &mut out_4d[o_off..o_off + head_seq],
@@ -456,11 +541,21 @@ impl SlidingWindowAttention {
 }
 
 impl AttentionVariant for SlidingWindowAttention {
-    fn num_heads(&self) -> usize { self.inner.num_heads }
-    fn head_dim(&self) -> usize { self.inner.head_dim }
-    fn num_kv_heads(&self) -> usize { self.inner.num_kv_heads }
-    fn window_size(&self) -> Option<usize> { Some(self.window_size) }
-    fn name(&self) -> &str { "SlidingWindow" }
+    fn num_heads(&self) -> usize {
+        self.inner.num_heads
+    }
+    fn head_dim(&self) -> usize {
+        self.inner.head_dim
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.inner.num_kv_heads
+    }
+    fn window_size(&self) -> Option<usize> {
+        Some(self.window_size)
+    }
+    fn name(&self) -> &str {
+        "SlidingWindow"
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -474,7 +569,7 @@ mod tests {
     const HEADS: usize = 4;
     const KV_HEADS: usize = 2;
     const HEAD_DIM: usize = 8;
-    const Q_DIM: usize = HEADS * HEAD_DIM;     // 32
+    const Q_DIM: usize = HEADS * HEAD_DIM; // 32
     const KV_DIM: usize = KV_HEADS * HEAD_DIM; // 16
 
     /// Deterministic weight initialiser: small, non-zero, varying values.
@@ -543,7 +638,10 @@ mod tests {
         let input = det_input(1, 4);
         let output = mha.forward(&input, 1, 4, None, None, 0).unwrap();
         assert_eq!(output.len(), 4 * HIDDEN);
-        assert!(output.iter().any(|&x| x.abs() > 1e-10), "output should be non-zero");
+        assert!(
+            output.iter().any(|&x| x.abs() > 1e-10),
+            "output should be non-zero"
+        );
         // MHA → K/V projection size equals Q projection size
         assert_eq!(mha.w_k.len(), mha.w_q.len());
     }
@@ -562,7 +660,10 @@ mod tests {
         let input = det_input(1, 4);
         let output = mqa.forward(&input, 1, 4, None, None, 0).unwrap();
         assert_eq!(output.len(), 4 * HIDDEN);
-        assert!(output.iter().any(|&x| x.abs() > 1e-10), "output should be non-zero");
+        assert!(
+            output.iter().any(|&x| x.abs() > 1e-10),
+            "output should be non-zero"
+        );
         // MQA → repeat factor is num_heads
         assert_eq!(HEADS / 1, HEADS);
         // MQA → K/V projection much smaller than Q
@@ -651,7 +752,7 @@ mod tests {
         let expected = HIDDEN * Q_DIM   // W_q: hidden → q_dim
                      + HIDDEN * KV_DIM  // W_k: hidden → kv_dim
                      + HIDDEN * KV_DIM  // W_v: hidden → kv_dim
-                     + Q_DIM * HIDDEN;  // W_o: q_dim  → hidden
+                     + Q_DIM * HIDDEN; // W_o: q_dim  → hidden
         assert_eq!(attn.param_count(), expected);
     }
 
@@ -662,18 +763,25 @@ mod tests {
         // Use larger weights so Q@K^T scores are meaningful (not near-uniform softmax)
         let mut attn = GQAAttention::new(HEADS, KV_HEADS, HEAD_DIM, HIDDEN);
         let w = |len, seed: u32| -> Vec<f32> {
-            (0..len).map(|i| ((i as f32 + seed as f32) * 0.1).sin() * 0.5).collect()
+            (0..len)
+                .map(|i| ((i as f32 + seed as f32) * 0.1).sin() * 0.5)
+                .collect()
         };
         attn.set_weights(
-            w(HIDDEN * Q_DIM, 1), w(HIDDEN * KV_DIM, 2),
-            w(HIDDEN * KV_DIM, 3), w(Q_DIM * HIDDEN, 4),
+            w(HIDDEN * Q_DIM, 1),
+            w(HIDDEN * KV_DIM, 2),
+            w(HIDDEN * KV_DIM, 3),
+            w(Q_DIM * HIDDEN, 4),
         );
-        let input: Vec<f32> =
-            (0..4 * HIDDEN).map(|i| ((i as f32 + 42.0) * 0.1).sin() * 0.5).collect();
+        let input: Vec<f32> = (0..4 * HIDDEN)
+            .map(|i| ((i as f32 + 42.0) * 0.1).sin() * 0.5)
+            .collect();
         let (cos, sin) = build_rope_tables(HEAD_DIM, 16);
 
         let out_no_rope = attn.forward(&input, 1, 4, None, None, 0).unwrap();
-        let out_with_rope = attn.forward(&input, 1, 4, Some(&cos), Some(&sin), 0).unwrap();
+        let out_with_rope = attn
+            .forward(&input, 1, 4, Some(&cos), Some(&sin), 0)
+            .unwrap();
 
         let differs = out_no_rope
             .iter()

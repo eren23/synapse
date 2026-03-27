@@ -2,10 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::config::ModelConfig;
 use crate::kv_cache::KVCache;
-use crate::ops::matmul::matmul_t;
-use crate::ops::norm::apply_norm;
 #[cfg(feature = "metal")]
 use crate::model::decoder_layer::apply_norm_dispatch;
+use crate::ops::matmul::matmul_t;
+use crate::ops::norm::apply_norm;
 use crate::registry::NormVariant;
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError, WeightMapper};
 
@@ -53,7 +53,11 @@ impl CausalLM {
         let embed = arch.vocab_size * h;
         let layers: usize = self.layers.iter().map(|l| l.param_count()).sum();
         let norm = h;
-        let lm_head = if arch.tie_word_embeddings { 0 } else { arch.vocab_size * h };
+        let lm_head = if arch.tie_word_embeddings {
+            0
+        } else {
+            arch.vocab_size * h
+        };
 
         embed + layers + norm + lm_head
     }
@@ -98,7 +102,10 @@ impl CausalLM {
         let missing: Vec<String> = expected.difference(&loaded).cloned().collect();
         let unexpected = mapping.unmapped;
 
-        Ok(LoadResult { missing, unexpected })
+        Ok(LoadResult {
+            missing,
+            unexpected,
+        })
     }
 
     /// Forward pass: token_ids → logits.
@@ -198,7 +205,11 @@ impl CausalLM {
         // 2. Decoder layers — batched forward with cache populate
         for (i, layer) in self.layers.iter().enumerate() {
             x = layer.forward_prefill_batched(
-                &x, seq_len, cache.layer_mut(i), &self.rope_cos, &self.rope_sin,
+                &x,
+                seq_len,
+                cache.layer_mut(i),
+                &self.rope_cos,
+                &self.rope_sin,
             );
         }
 
@@ -279,7 +290,8 @@ impl CausalLM {
         let kv_dim = self.config.attention.num_kv_heads() * self.config.attention.head_dim();
         let zeros = vec![0.0f32; kv_dim];
         for i in n..self.layers.len() {
-            cache.layer_mut(i)
+            cache
+                .layer_mut(i)
                 .append(&zeros, &zeros)
                 .expect("KV cache append failed for draft padding");
         }
@@ -318,13 +330,21 @@ impl CausalLM {
         // Use batched prefill (same as CPU path - batched attention + cache populate)
         for (i, layer) in self.layers.iter().enumerate() {
             x = layer.forward_prefill_batched(
-                &x, seq_len, cache.layer_mut(i), &self.rope_cos, &self.rope_sin,
+                &x,
+                seq_len,
+                cache.layer_mut(i),
+                &self.rope_cos,
+                &self.rope_sin,
             );
         }
 
         let last_hidden = &x[(seq_len - 1) * h..seq_len * h];
         let normed = apply_norm_dispatch(
-            last_hidden, &self.final_norm_weight, &*self.final_norm, h, backend,
+            last_hidden,
+            &self.final_norm_weight,
+            &*self.final_norm,
+            h,
+            backend,
         );
 
         let lm_weight = self.lm_head_weight.as_ref().unwrap_or(&self.embed_tokens);
@@ -355,13 +375,22 @@ impl CausalLM {
         }
 
         // Use GPU-native forward with batched command buffers when Metal is available
-        if let crate::metal::ComputeBackend::Metal { ref backend, ref pool } = backend {
+        if let crate::metal::ComputeBackend::Metal {
+            ref backend,
+            ref pool,
+        } = backend
+        {
             let mut pool = pool.borrow_mut();
             for (i, layer) in self.layers.iter().enumerate() {
                 x = crate::metal::gpu_forward::gpu_forward_one(
-                    layer, &x, cache.layer_mut(i), pos,
-                    &self.rope_cos, &self.rope_sin,
-                    backend, &mut pool,
+                    layer,
+                    &x,
+                    cache.layer_mut(i),
+                    pos,
+                    &self.rope_cos,
+                    &self.rope_sin,
+                    backend,
+                    &mut pool,
                 );
             }
         } else {
@@ -399,7 +428,10 @@ impl CausalLM {
         let head_dim = self.config.attention.head_dim();
         let inter = self.config.ffn.intermediate_size();
         let has_head_norms = self.layers.first().map_or(false, |l| l.has_head_norms);
-        let eps = self.layers.first().map_or(1e-6, |l| l.attn_norm.eps() as f32);
+        let eps = self
+            .layers
+            .first()
+            .map_or(1e-6, |l| l.attn_norm.eps() as f32);
 
         // 1. Embedding lookup on CPU -> [h]
         let mut x = vec![0.0f32; h];
@@ -410,9 +442,16 @@ impl CausalLM {
 
         // 2. All decoder layers on GPU in one command buffer
         x = crate::metal::gpu_forward::gpu_forward_all_layers(
-            model_bufs, &x,
-            num_heads, num_kv_heads, head_dim, h, inter,
-            has_head_norms, eps, backend,
+            model_bufs,
+            &x,
+            num_heads,
+            num_kv_heads,
+            head_dim,
+            h,
+            inter,
+            has_head_norms,
+            eps,
+            backend,
         );
 
         // 3. Final norm on CPU
@@ -489,6 +528,16 @@ impl super::traits::Model for CausalLM {
 
     fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
         CausalLM::forward_prefill(self, token_ids, cache)
+    }
+
+    #[cfg(feature = "metal")]
+    fn forward_prefill_gpu(
+        &self,
+        token_ids: &[u32],
+        cache: &mut KVCache,
+        backend: &crate::metal::ComputeBackend,
+    ) -> ModelOutput {
+        CausalLM::forward_prefill_with_backend(self, token_ids, cache, backend)
     }
 
     fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
@@ -594,17 +643,50 @@ mod tests {
         w.insert("model.embed_tokens.weight".into(), fake(vec![vocab, h], 1));
         for i in 0..nl {
             let s = (i as u32 + 1) * 100;
-            w.insert(format!("model.layers.{i}.input_layernorm.weight"), fake(vec![h], s));
-            w.insert(format!("model.layers.{i}.self_attn.q_proj.weight"), fake(vec![q_dim, h], s + 1));
-            w.insert(format!("model.layers.{i}.self_attn.k_proj.weight"), fake(vec![kv_dim, h], s + 2));
-            w.insert(format!("model.layers.{i}.self_attn.v_proj.weight"), fake(vec![kv_dim, h], s + 3));
-            w.insert(format!("model.layers.{i}.self_attn.o_proj.weight"), fake(vec![h, q_dim], s + 4));
-            w.insert(format!("model.layers.{i}.self_attn.q_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 5));
-            w.insert(format!("model.layers.{i}.self_attn.k_norm.weight"), fake(vec![cfg.attention.head_dim()], s + 6));
-            w.insert(format!("model.layers.{i}.post_attention_layernorm.weight"), fake(vec![h], s + 7));
-            w.insert(format!("model.layers.{i}.mlp.gate_proj.weight"), fake(vec![inter, h], s + 8));
-            w.insert(format!("model.layers.{i}.mlp.up_proj.weight"), fake(vec![inter, h], s + 9));
-            w.insert(format!("model.layers.{i}.mlp.down_proj.weight"), fake(vec![h, inter], s + 10));
+            w.insert(
+                format!("model.layers.{i}.input_layernorm.weight"),
+                fake(vec![h], s),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.q_proj.weight"),
+                fake(vec![q_dim, h], s + 1),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_proj.weight"),
+                fake(vec![kv_dim, h], s + 2),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.v_proj.weight"),
+                fake(vec![kv_dim, h], s + 3),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.o_proj.weight"),
+                fake(vec![h, q_dim], s + 4),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.q_norm.weight"),
+                fake(vec![cfg.attention.head_dim()], s + 5),
+            );
+            w.insert(
+                format!("model.layers.{i}.self_attn.k_norm.weight"),
+                fake(vec![cfg.attention.head_dim()], s + 6),
+            );
+            w.insert(
+                format!("model.layers.{i}.post_attention_layernorm.weight"),
+                fake(vec![h], s + 7),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.gate_proj.weight"),
+                fake(vec![inter, h], s + 8),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.up_proj.weight"),
+                fake(vec![inter, h], s + 9),
+            );
+            w.insert(
+                format!("model.layers.{i}.mlp.down_proj.weight"),
+                fake(vec![h, inter], s + 10),
+            );
         }
         w.insert("model.norm.weight".into(), fake(vec![h], 9999));
         w.insert("lm_head.weight".into(), fake(vec![vocab, h], 9998));
@@ -616,7 +698,11 @@ mod tests {
         let weights = generate_fake_hf_weights(cfg);
         let mapper = WeightMapper::qwen3();
         let result = model.load_weights(weights, &mapper).unwrap();
-        assert!(result.missing.is_empty(), "Missing keys: {:?}", result.missing);
+        assert!(
+            result.missing.is_empty(),
+            "Missing keys: {:?}",
+            result.missing
+        );
         model
     }
 
@@ -637,11 +723,8 @@ mod tests {
         let model = build_test_model(&cfg);
         let vocab = cfg.architecture.vocab_size;
 
-        let prompts: Vec<Vec<u32>> = vec![
-            vec![1, 2, 3, 4],
-            vec![10, 20, 30],
-            vec![5, 5, 5, 5, 5, 5],
-        ];
+        let prompts: Vec<Vec<u32>> =
+            vec![vec![1, 2, 3, 4], vec![10, 20, 30], vec![5, 5, 5, 5, 5, 5]];
 
         for prompt in &prompts {
             let mut cache = make_cache(&cfg);
@@ -652,7 +735,12 @@ mod tests {
             let full_last_logits = &full_out.logits[(seq_len - 1) * vocab..seq_len * vocab];
 
             assert_eq!(prefill_out.logits.len(), full_last_logits.len());
-            for (i, (&a, &b)) in prefill_out.logits.iter().zip(full_last_logits.iter()).enumerate() {
+            for (i, (&a, &b)) in prefill_out
+                .logits
+                .iter()
+                .zip(full_last_logits.iter())
+                .enumerate()
+            {
                 assert!(
                     (a - b).abs() < 1e-5,
                     "Logit {i} mismatch: prefill={a}, full={b} (prompt={:?})",
@@ -686,7 +774,12 @@ mod tests {
         let full_last_logits = &full_out.logits[(seq_len - 1) * vocab..seq_len * vocab];
 
         assert_eq!(one_out.logits.len(), full_last_logits.len());
-        for (i, (&a, &b)) in one_out.logits.iter().zip(full_last_logits.iter()).enumerate() {
+        for (i, (&a, &b)) in one_out
+            .logits
+            .iter()
+            .zip(full_last_logits.iter())
+            .enumerate()
+        {
             assert!(
                 (a - b).abs() < 1e-5,
                 "Logit {i} mismatch: cached={a}, full={b}",
@@ -732,7 +825,11 @@ mod tests {
         let full_last_logits = &full_out.logits[(seq_len - 1) * vocab..seq_len * vocab];
 
         assert_eq!(cached_logits.len(), full_last_logits.len());
-        for (i, (&a, &b)) in cached_logits.iter().zip(full_last_logits.iter()).enumerate() {
+        for (i, (&a, &b)) in cached_logits
+            .iter()
+            .zip(full_last_logits.iter())
+            .enumerate()
+        {
             assert!(
                 (a - b).abs() < 1e-5,
                 "Logit {i} mismatch after multi-step decode: cached={a}, full={b}",

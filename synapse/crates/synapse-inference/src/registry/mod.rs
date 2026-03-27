@@ -11,7 +11,9 @@ pub trait AttentionVariant: Send + Sync + Debug {
     fn num_heads(&self) -> usize;
     fn head_dim(&self) -> usize;
     fn num_kv_heads(&self) -> usize;
-    fn window_size(&self) -> Option<usize> { None }
+    fn window_size(&self) -> Option<usize> {
+        None
+    }
     fn name(&self) -> &str;
 }
 
@@ -30,10 +32,10 @@ pub trait FFNVariant: Send + Sync + Debug {
 /// Trait for positional encoding variants instantiated from config.
 pub trait PositionVariant: Send + Sync + Debug {
     fn max_position_embeddings(&self) -> usize;
-    fn base(&self) -> Option<f64> { None }
+    fn base(&self) -> Option<f64> {
+        None
+    }
     fn name(&self) -> &str;
 }
 
-pub use factory::{
-    create_attention, create_ffn, create_norm, create_position,
-};
+pub use factory::{create_attention, create_ffn, create_norm, create_position};

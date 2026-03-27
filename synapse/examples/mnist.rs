@@ -6,9 +6,7 @@
 use synapse_autograd::{backward, Graph, NoGradGuard, Tensor};
 use synapse_nn::init::kaiming_uniform;
 use synapse_optim::{Adam, Optimizer, Param};
-use synapse_train::{
-    EarlyStopping, Trainer, TrainerConfig, TrainLoop,
-};
+use synapse_train::{EarlyStopping, TrainLoop, Trainer, TrainerConfig};
 
 use rand::Rng;
 
@@ -20,9 +18,12 @@ const BATCH_SIZE: usize = 64;
 
 struct MnistModel {
     // Weights: [in, out] layout for direct matmul
-    w1: Tensor, b1: Tensor,
-    w2: Tensor, b2: Tensor,
-    w3: Tensor, b3: Tensor,
+    w1: Tensor,
+    b1: Tensor,
+    w2: Tensor,
+    b2: Tensor,
+    w3: Tensor,
+    b3: Tensor,
     optimizer: Adam,
     train_data: Vec<(Tensor, Tensor)>,
     val_data: Vec<(Tensor, Tensor)>,
@@ -169,7 +170,11 @@ impl TrainLoop for MnistModel {
 fn generate_prototypes() -> Vec<Vec<f32>> {
     let mut rng = rand::thread_rng();
     (0..NUM_CLASSES)
-        .map(|_| (0..INPUT_DIM).map(|_| rng.gen_range(-1.0..1.0f32)).collect())
+        .map(|_| {
+            (0..INPUT_DIM)
+                .map(|_| rng.gen_range(-1.0..1.0f32))
+                .collect()
+        })
         .collect()
 }
 

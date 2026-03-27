@@ -116,7 +116,11 @@ fn config_assembly_param_count_matches_config() {
         let embed = vocab * h;
         let per_layer = 2 * h + q_dim * h + kv_dim * h + kv_dim * h + h * q_dim + 3 * inter * h;
         let norm = h;
-        let lm_head = if cfg.architecture.tie_word_embeddings { 0 } else { vocab * h };
+        let lm_head = if cfg.architecture.tie_word_embeddings {
+            0
+        } else {
+            vocab * h
+        };
         let expected = embed + nl * per_layer + norm + lm_head;
 
         assert_eq!(

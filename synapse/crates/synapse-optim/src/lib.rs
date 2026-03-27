@@ -103,11 +103,7 @@ mod tests {
         let elapsed = start.elapsed();
 
         // Just verify it completes in reasonable time (< 5s for 10 steps on 1M params)
-        assert!(
-            elapsed.as_secs() < 5,
-            "SGD 1M params took {:?}",
-            elapsed
-        );
+        assert!(elapsed.as_secs() < 5, "SGD 1M params took {:?}", elapsed);
         eprintln!(
             "bench_sgd_step_1m: 10 steps on {} params in {:?} ({:.2} us/step)",
             n,
@@ -131,11 +127,7 @@ mod tests {
         }
         let elapsed = start.elapsed();
 
-        assert!(
-            elapsed.as_secs() < 5,
-            "Adam 1M params took {:?}",
-            elapsed
-        );
+        assert!(elapsed.as_secs() < 5, "Adam 1M params took {:?}", elapsed);
         eprintln!(
             "bench_adam_step_1m: 10 steps on {} params in {:?} ({:.2} us/step)",
             n,

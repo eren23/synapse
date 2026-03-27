@@ -372,8 +372,15 @@ mod tests {
         let out1 = mha.forward(&input);
         let out2 = mha.forward(&input);
         // Very high probability they differ (dropout is random)
-        let differs = out1.data.iter().zip(&out2.data).any(|(a, b)| (a - b).abs() > 1e-6);
-        assert!(differs, "dropout should cause different outputs in training mode");
+        let differs = out1
+            .data
+            .iter()
+            .zip(&out2.data)
+            .any(|(a, b)| (a - b).abs() > 1e-6);
+        assert!(
+            differs,
+            "dropout should cause different outputs in training mode"
+        );
     }
 
     #[test]
@@ -383,7 +390,10 @@ mod tests {
         let input = make_tensor(&[1, 4, 32], 1);
         let out1 = mha.forward(&input);
         let out2 = mha.forward(&input);
-        assert_eq!(out1.data, out2.data, "inference mode should be deterministic");
+        assert_eq!(
+            out1.data, out2.data,
+            "inference mode should be deterministic"
+        );
     }
 
     // ── Causal masking ────────────────────────────────────────────
@@ -421,8 +431,12 @@ mod tests {
         }
 
         // Position 3 should differ
-        let pos3_differs = (0..16).any(|d| (out1.data[3 * 16 + d] - out2.data[3 * 16 + d]).abs() > 1e-5);
-        assert!(pos3_differs, "position 3 output should change when its input changes");
+        let pos3_differs =
+            (0..16).any(|d| (out1.data[3 * 16 + d] - out2.data[3 * 16 + d]).abs() > 1e-5);
+        assert!(
+            pos3_differs,
+            "position 3 output should change when its input changes"
+        );
     }
 
     #[test]

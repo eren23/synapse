@@ -107,9 +107,10 @@ impl Sampler for WeightedRandomSampler {
         for _ in 0..self.num_samples {
             let u: f64 = self.rng.gen();
             // Binary search for the bucket
-            let idx = match self.cumulative.binary_search_by(|c| {
-                c.partial_cmp(&u).unwrap_or(std::cmp::Ordering::Equal)
-            }) {
+            let idx = match self
+                .cumulative
+                .binary_search_by(|c| c.partial_cmp(&u).unwrap_or(std::cmp::Ordering::Equal))
+            {
                 Ok(i) => i,
                 Err(i) => i,
             };

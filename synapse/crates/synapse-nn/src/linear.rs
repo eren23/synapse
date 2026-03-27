@@ -6,7 +6,7 @@ use crate::init::xavier_uniform;
 use crate::module::Module;
 
 pub struct Linear {
-    pub weight: Tensor, // [out_features, in_features]
+    pub weight: Tensor,       // [out_features, in_features]
     pub bias: Option<Tensor>, // [out_features]
     training: bool,
 }
@@ -42,7 +42,11 @@ impl Module for Linear {
     /// Forward: input [batch, in_features] -> output [batch, out_features]
     /// Computes: output = input @ weight^T + bias
     fn forward(&self, input: &Tensor) -> Tensor {
-        assert_eq!(input.shape.len(), 2, "Linear expects 2D input [batch, in_features]");
+        assert_eq!(
+            input.shape.len(),
+            2,
+            "Linear expects 2D input [batch, in_features]"
+        );
         assert_eq!(
             input.shape[1],
             self.in_features(),

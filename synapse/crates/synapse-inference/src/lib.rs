@@ -9,6 +9,7 @@ pub mod kv_cache;
 #[cfg(feature = "metal")]
 pub mod metal;
 pub mod model;
+pub mod model_adapter;
 pub mod ops;
 pub mod quantization;
 pub mod registry;
@@ -20,17 +21,21 @@ pub mod prelude {
         ArtifactBudget, CapabilityReport, FeatureStatus, ModelProfile, ModelSupportLevel,
         NativeKernelInfo, RuntimeProfile, SupportLevel,
     };
+    pub use crate::chat_template::{ChatMessage, ChatTemplate, ChatTemplateOptions};
     pub use crate::config::{
         ArchitectureConfig, AttentionConfig, FFNConfig, ModelConfig, NormConfig, PositionConfig,
         QuantConfig,
     };
-    pub use crate::engine::InferenceEngine;
+    pub use crate::engine::{InferenceEngine, RuntimePlan, RuntimeSummary};
     pub use crate::generation::{
         CombinedSampler, GenerationConfig, GenerationOutput, GenerationPipeline, GreedySampler,
         RepetitionPenalty, Sampler, StopChecker, StopCondition, TemperatureSampler, TopKSampler,
         TopPSampler,
     };
     pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput};
+    pub use crate::model_adapter::{
+        ModelAdapter, ModelAdapterKind, ReasoningMarkers, ThinkingMode,
+    };
     pub use crate::quantization::{
         f32_model_memory_bytes, quantize_model, MinMaxCalibration, PercentileCalibration,
         QuantizedCausalLM, QuantizedDecoderLayer, QuantizedLinear,

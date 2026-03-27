@@ -111,7 +111,10 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(ReluBackward { input_ids: vec![a], input_data }),
+            Box::new(ReluBackward {
+                input_ids: vec![a],
+                input_data,
+            }),
             &[a],
             output,
         )
@@ -124,7 +127,10 @@ impl Graph {
         }
         let output_data = output.clone();
         self.record_op(
-            Box::new(SigmoidBackward { input_ids: vec![a], output_data }),
+            Box::new(SigmoidBackward {
+                input_ids: vec![a],
+                output_data,
+            }),
             &[a],
             output,
         )
@@ -137,7 +143,10 @@ impl Graph {
         }
         let output_data = output.clone();
         self.record_op(
-            Box::new(TanhBackward { input_ids: vec![a], output_data }),
+            Box::new(TanhBackward {
+                input_ids: vec![a],
+                output_data,
+            }),
             &[a],
             output,
         )
@@ -150,7 +159,10 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(GeluBackward { input_ids: vec![a], input_data }),
+            Box::new(GeluBackward {
+                input_ids: vec![a],
+                input_data,
+            }),
             &[a],
             output,
         )

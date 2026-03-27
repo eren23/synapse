@@ -21,7 +21,11 @@ impl Normalize {
 
 impl Transform for Normalize {
     fn apply(&self, tensor: &Tensor) -> Tensor {
-        let data: Vec<f32> = tensor.data().iter().map(|&x| (x - self.mean) / self.std).collect();
+        let data: Vec<f32> = tensor
+            .data()
+            .iter()
+            .map(|&x| (x - self.mean) / self.std)
+            .collect();
         Tensor::new(data, tensor.shape().to_vec())
     }
 }

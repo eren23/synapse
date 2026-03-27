@@ -130,7 +130,9 @@ mod tests {
                 })
             })
             .collect();
-        assert!(actions.iter().all(|a| matches!(a, CallbackAction::Continue)));
+        assert!(actions
+            .iter()
+            .all(|a| matches!(a, CallbackAction::Continue)));
         assert_eq!(es.counter(), 0);
 
         // Non-improving losses: patience=3, so need 3 non-improving epochs

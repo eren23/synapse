@@ -19,6 +19,24 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// Additional template variables used when rendering a chat prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChatTemplateOptions {
+    /// Whether to append the assistant turn to the rendered prompt.
+    pub add_generation_prompt: bool,
+    /// Model-specific reasoning toggle used by Qwen3 templates.
+    pub enable_thinking: Option<bool>,
+}
+
+impl Default for ChatTemplateOptions {
+    fn default() -> Self {
+        Self {
+            add_generation_prompt: true,
+            enable_thinking: None,
+        }
+    }
+}
+
 /// A parsed chat template that can format messages into a prompt string.
 #[derive(Debug, Clone)]
 pub struct ChatTemplate {
@@ -79,17 +97,26 @@ impl ChatTemplate {
     ///
     /// The template receives the following variables:
     /// - `messages` -- the list of `{role, content}` dicts
-    /// - `add_generation_prompt` -- always `true` (we want the assistant turn)
+    /// - `add_generation_prompt` -- whether to append the assistant turn
     /// - `bos_token` / `eos_token` -- the special tokens (empty string if absent)
+    /// - `enable_thinking` -- model-specific reasoning toggle when present
     pub fn apply(&self, messages: &[ChatMessage]) -> Result<String, Box<dyn std::error::Error>> {
+        self.apply_with_options(messages, ChatTemplateOptions::default())
+    }
+
+    pub fn apply_with_options(
+        &self,
+        messages: &[ChatMessage],
+        options: ChatTemplateOptions,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         // Try to render with the model's template, fall back to ChatML if it
         // uses Python methods that minijinja doesn't support (e.g. startswith).
-        match self.try_render(messages, &self.template) {
+        match self.try_render(messages, &self.template, options) {
             Ok(rendered) => Ok(rendered),
             Err(_) => {
                 // Fall back to simple ChatML format
                 let fallback = Self::default_qwen3();
-                self.try_render(messages, &fallback.template)
+                fallback.try_render(messages, &fallback.template, options)
             }
         }
     }
@@ -98,6 +125,7 @@ impl ChatTemplate {
         &self,
         messages: &[ChatMessage],
         template_str: &str,
+        options: ChatTemplateOptions,
     ) -> Result<String, Box<dyn std::error::Error>> {
         let mut env = minijinja::Environment::new();
         env.add_template("chat", template_str)?;
@@ -105,13 +133,22 @@ impl ChatTemplate {
 
         let bos = self.bos_token.as_deref().unwrap_or("");
         let eos = self.eos_token.as_deref().unwrap_or("");
+        let mut render_context = serde_json::Map::new();
+        render_context.insert("messages".into(), serde_json::to_value(messages)?);
+        render_context.insert(
+            "add_generation_prompt".into(),
+            serde_json::Value::Bool(options.add_generation_prompt),
+        );
+        render_context.insert("bos_token".into(), serde_json::Value::String(bos.to_string()));
+        render_context.insert("eos_token".into(), serde_json::Value::String(eos.to_string()));
+        if let Some(enable_thinking) = options.enable_thinking {
+            render_context.insert(
+                "enable_thinking".into(),
+                serde_json::Value::Bool(enable_thinking),
+            );
+        }
 
-        let rendered = tmpl.render(minijinja::context! {
-            messages => messages,
-            add_generation_prompt => true,
-            bos_token => bos,
-            eos_token => eos,
-        })?;
+        let rendered = tmpl.render(minijinja::Value::from_serialize(render_context))?;
 
         let mut result = String::new();
         if self.add_bos_token {
@@ -139,6 +176,9 @@ impl ChatTemplate {
                 "{% endfor %}",
                 "{% if add_generation_prompt %}",
                 "{{'<|im_start|>assistant\n'}}",
+                "{% if enable_thinking is defined and enable_thinking is false %}",
+                "{{'<think>\n\n</think>\n\n'}}",
+                "{% endif %}",
                 "{% endif %}",
             )
             .to_string(),
@@ -180,15 +220,32 @@ mod tests {
     #[test]
     fn test_default_qwen3_template() {
         let tmpl = ChatTemplate::default_qwen3();
-        let messages = vec![
-            ChatMessage {
-                role: "user".into(),
-                content: "Hello!".into(),
-            },
-        ];
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: "Hello!".into(),
+        }];
         let result = tmpl.apply(&messages).expect("template should render");
         assert!(result.contains("<|im_start|>user\nHello!<|im_end|>"));
         assert!(result.contains("<|im_start|>assistant\n"));
+    }
+
+    #[test]
+    fn test_default_qwen3_template_disables_thinking_via_options() {
+        let tmpl = ChatTemplate::default_qwen3();
+        let messages = vec![ChatMessage {
+            role: "user".into(),
+            content: "Hello!".into(),
+        }];
+        let result = tmpl
+            .apply_with_options(
+                &messages,
+                ChatTemplateOptions {
+                    enable_thinking: Some(false),
+                    ..Default::default()
+                },
+            )
+            .expect("template should render");
+        assert!(result.ends_with("<think>\n\n</think>\n\n"));
     }
 
     #[test]
@@ -238,6 +295,48 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_with_options_omits_enable_thinking_when_not_requested() {
+        let tmpl = ChatTemplate {
+            template: "{% if enable_thinking is defined %}defined{% else %}missing{% endif %}"
+                .to_string(),
+            bos_token: None,
+            eos_token: None,
+            add_bos_token: false,
+            add_eos_token: false,
+        };
+        let result = tmpl
+            .apply_with_options(&[], ChatTemplateOptions::default())
+            .expect("template should render");
+        assert_eq!(result, "missing");
+    }
+
+    #[test]
+    fn test_apply_with_options_passes_enable_thinking_to_qwen_template() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config_path = dir.path().join("tokenizer_config.json");
+
+        let json_content = serde_json::json!({
+            "chat_template": "{% if add_generation_prompt %}{{'<|im_start|>assistant\\n'}}{% if enable_thinking is defined and enable_thinking is false %}{{'<think>\\n\\n</think>\\n\\n'}}{% endif %}{% endif %}",
+            "eos_token": "<|im_end|>",
+            "add_bos_token": false,
+            "add_eos_token": false
+        });
+        std::fs::write(&config_path, json_content.to_string()).unwrap();
+
+        let tmpl = ChatTemplate::from_tokenizer_config(&config_path).expect("should parse config");
+        let result = tmpl
+            .apply_with_options(
+                &[],
+                ChatTemplateOptions {
+                    enable_thinking: Some(false),
+                    ..Default::default()
+                },
+            )
+            .expect("template should render");
+        assert_eq!(result, "<|im_start|>assistant\n<think>\n\n</think>\n\n");
+    }
+
+    #[test]
     fn test_from_tokenizer_config_json() {
         let dir = tempfile::tempdir().expect("create temp dir");
         let config_path = dir.path().join("tokenizer_config.json");
@@ -251,8 +350,7 @@ mod tests {
         });
         std::fs::write(&config_path, json_content.to_string()).unwrap();
 
-        let tmpl =
-            ChatTemplate::from_tokenizer_config(&config_path).expect("should parse config");
+        let tmpl = ChatTemplate::from_tokenizer_config(&config_path).expect("should parse config");
         assert_eq!(tmpl.bos_token.as_deref(), Some("<|endoftext|>"));
         assert_eq!(tmpl.eos_token.as_deref(), Some("<|im_end|>"));
         assert!(!tmpl.add_bos_token);
@@ -294,8 +392,7 @@ mod tests {
         });
         std::fs::write(&config_path, json_content.to_string()).unwrap();
 
-        let tmpl =
-            ChatTemplate::from_tokenizer_config(&config_path).expect("should parse config");
+        let tmpl = ChatTemplate::from_tokenizer_config(&config_path).expect("should parse config");
         assert_eq!(tmpl.bos_token.as_deref(), Some("<s>"));
         assert_eq!(tmpl.eos_token.as_deref(), Some("</s>"));
         assert!(tmpl.add_bos_token);

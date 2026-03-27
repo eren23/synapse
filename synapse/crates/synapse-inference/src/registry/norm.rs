@@ -22,7 +22,11 @@ impl RMSNorm {
 
     pub fn with_weights(eps: f64, gamma: Vec<f32>) -> Self {
         let hidden_size = gamma.len();
-        Self { eps, hidden_size, gamma }
+        Self {
+            eps,
+            hidden_size,
+            gamma,
+        }
     }
 
     pub fn hidden_size(&self) -> usize {
@@ -57,8 +61,7 @@ impl RMSNorm {
             let x = &input[off..off + self.hidden_size];
             let o = &mut output[off..off + self.hidden_size];
 
-            let mean_sq: f32 =
-                x.iter().map(|&xi| xi * xi).sum::<f32>() / self.hidden_size as f32;
+            let mean_sq: f32 = x.iter().map(|&xi| xi * xi).sum::<f32>() / self.hidden_size as f32;
             let rms_inv = 1.0 / (mean_sq + self.eps as f32).sqrt();
 
             for i in 0..self.hidden_size {
@@ -150,7 +153,12 @@ impl LayerNormInfer {
     pub fn with_weights(eps: f64, gamma: Vec<f32>, beta: Vec<f32>) -> Self {
         assert_eq!(gamma.len(), beta.len());
         let hidden_size = gamma.len();
-        Self { eps, hidden_size, gamma, beta }
+        Self {
+            eps,
+            hidden_size,
+            gamma,
+            beta,
+        }
     }
 
     pub fn hidden_size(&self) -> usize {
@@ -181,10 +189,7 @@ impl LayerNormInfer {
             let o = &mut output[off..off + self.hidden_size];
 
             let mean: f32 = x.iter().sum::<f32>() / self.hidden_size as f32;
-            let var: f32 = x
-                .iter()
-                .map(|&xi| (xi - mean) * (xi - mean))
-                .sum::<f32>()
+            let var: f32 = x.iter().map(|&xi| (xi - mean) * (xi - mean)).sum::<f32>()
                 / self.hidden_size as f32;
             let inv_std = 1.0 / (var + self.eps as f32).sqrt();
 

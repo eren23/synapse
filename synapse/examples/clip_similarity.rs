@@ -59,7 +59,7 @@ fn simple_tokenize(text: &str, max_len: usize) -> Vec<u32> {
         tokens.push(1000 + i as u32);
     }
     tokens.push(49407); // <EOS> token
-    // Pad to max_len
+                        // Pad to max_len
     tokens.resize(max_len, 0);
     tokens
 }
@@ -139,11 +139,7 @@ fn main() {
     );
 
     let start = std::time::Instant::now();
-    let img_embed = model.encode_image(
-        &image,
-        config.vision.image_size,
-        config.vision.image_size,
-    );
+    let img_embed = model.encode_image(&image, config.vision.image_size, config.vision.image_size);
     let img_time = start.elapsed();
 
     println!(

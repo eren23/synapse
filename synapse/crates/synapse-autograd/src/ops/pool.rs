@@ -49,7 +49,9 @@ impl GradFn for AvgPool2dBackward {
             for c in 0..channels {
                 for oh in 0..h_out {
                     for ow in 0..w_out {
-                        let g = grad_output.data[n * channels * h_out * w_out + c * h_out * w_out + oh * w_out + ow] / window;
+                        let g = grad_output.data
+                            [n * channels * h_out * w_out + c * h_out * w_out + oh * w_out + ow]
+                            / window;
                         for ki in 0..ks {
                             for kj in 0..ks {
                                 let ih = oh * self.stride + ki;
@@ -71,7 +73,12 @@ impl GradFn for AvgPool2dBackward {
 // ── Graph methods ──────────────────────────────────────────────────
 
 impl Graph {
-    pub fn max_pool2d(&mut self, input: VariableId, kernel_size: usize, stride: usize) -> VariableId {
+    pub fn max_pool2d(
+        &mut self,
+        input: VariableId,
+        kernel_size: usize,
+        stride: usize,
+    ) -> VariableId {
         let input_data = &self.variables[&input].data;
         let batch = input_data.shape[0];
         let channels = input_data.shape[1];
@@ -86,7 +93,8 @@ impl Graph {
             for c in 0..channels {
                 for oh in 0..h_out {
                     for ow in 0..w_out {
-                        let out_idx = n * channels * h_out * w_out + c * h_out * w_out + oh * w_out + ow;
+                        let out_idx =
+                            n * channels * h_out * w_out + c * h_out * w_out + oh * w_out + ow;
                         let mut max_val = f32::NEG_INFINITY;
                         let mut max_idx = 0;
                         for ki in 0..kernel_size {
@@ -112,13 +120,22 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(MaxPool2dBackward { input_ids: vec![input], max_indices, input_shape }),
+            Box::new(MaxPool2dBackward {
+                input_ids: vec![input],
+                max_indices,
+                input_shape,
+            }),
             &[input],
             output,
         )
     }
 
-    pub fn avg_pool2d(&mut self, input: VariableId, kernel_size: usize, stride: usize) -> VariableId {
+    pub fn avg_pool2d(
+        &mut self,
+        input: VariableId,
+        kernel_size: usize,
+        stride: usize,
+    ) -> VariableId {
         let input_data = &self.variables[&input].data;
         let batch = input_data.shape[0];
         let channels = input_data.shape[1];
@@ -137,10 +154,13 @@ impl Graph {
                             for kj in 0..kernel_size {
                                 let ih = oh * stride + ki;
                                 let iw = ow * stride + kj;
-                                sum += input_data.data[n * channels * h * w + c * h * w + ih * w + iw];
+                                sum +=
+                                    input_data.data[n * channels * h * w + c * h * w + ih * w + iw];
                             }
                         }
-                        out_data[n * channels * h_out * w_out + c * h_out * w_out + oh * w_out + ow] = sum / window;
+                        out_data
+                            [n * channels * h_out * w_out + c * h_out * w_out + oh * w_out + ow] =
+                            sum / window;
                     }
                 }
             }
@@ -151,7 +171,12 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(AvgPool2dBackward { input_ids: vec![input], input_shape, kernel_size, stride }),
+            Box::new(AvgPool2dBackward {
+                input_ids: vec![input],
+                input_shape,
+                kernel_size,
+                stride,
+            }),
             &[input],
             output,
         )

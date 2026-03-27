@@ -55,7 +55,16 @@ impl SGD {
     }
 
     /// Step a single parameter with the given hyperparameters.
-    fn step_param(&mut self, idx: usize, param: &mut Param, lr: f32, momentum: f32, dampening: f32, weight_decay: f32, nesterov: bool) {
+    fn step_param(
+        &mut self,
+        idx: usize,
+        param: &mut Param,
+        lr: f32,
+        momentum: f32,
+        dampening: f32,
+        weight_decay: f32,
+        nesterov: bool,
+    ) {
         let grad = match param.grad {
             Some(ref g) => g.clone(),
             None => return,
@@ -122,7 +131,15 @@ impl Optimizer for SGD {
 
         for i in 0..params.len() {
             if !grouped.contains(&i) {
-                self.step_param(i, &mut params[i], lr, momentum, dampening, weight_decay, nesterov);
+                self.step_param(
+                    i,
+                    &mut params[i],
+                    lr,
+                    momentum,
+                    dampening,
+                    weight_decay,
+                    nesterov,
+                );
             }
         }
 
@@ -205,10 +222,7 @@ mod tests {
     /// step 4: [0.331230897779, 2.367167350239, 1.911611068934]
     #[test]
     fn test_sgd_5step_pytorch_reference() {
-        let mut params = vec![Param::with_grad(
-            vec![1.0, 2.0, 3.0],
-            vec![0.5, -0.3, 0.8],
-        )];
+        let mut params = vec![Param::with_grad(vec![1.0, 2.0, 3.0], vec![0.5, -0.3, 0.8])];
 
         let mut opt = SGD::new(0.1).momentum(0.9).weight_decay(0.01);
 
@@ -253,7 +267,11 @@ mod tests {
 
         // Step 1: buf=1.0, d_p = 1.0 + 0.9*1.0 = 1.9, param = 1.0 - 0.1*1.9 = 0.81
         opt.step(&mut params);
-        assert!((params[0].data[0] - 0.81).abs() < 1e-6, "got {}", params[0].data[0]);
+        assert!(
+            (params[0].data[0] - 0.81).abs() < 1e-6,
+            "got {}",
+            params[0].data[0]
+        );
     }
 
     #[test]

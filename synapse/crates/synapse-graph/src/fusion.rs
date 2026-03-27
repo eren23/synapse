@@ -188,11 +188,11 @@ impl OptimizationPass for FuseConvBatchNorm {
             let mean = get_constant_data(graph, mean_id);
             let var = get_constant_data(graph, var_id);
 
-            let (conv_weight, gamma, beta, mean, var) =
-                match (conv_weight, gamma, beta, mean, var) {
-                    (Some(w), Some(g), Some(b), Some(m), Some(v)) => (w, g, b, m, v),
-                    _ => continue,
-                };
+            let (conv_weight, gamma, beta, mean, var) = match (conv_weight, gamma, beta, mean, var)
+            {
+                (Some(w), Some(g), Some(b), Some(m), Some(v)) => (w, g, b, m, v),
+                _ => continue,
+            };
 
             let eps = 1e-5_f32;
             let channels = gamma.len();
@@ -366,13 +366,43 @@ mod tests {
     #[test]
     fn test_fuse_matmul_bias_relu() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![2, 3], DType::F32), "a");
-        let w = g.add_node(NodeKind::Parameter("w".into()), vec![], NodeMeta::new(vec![3, 4], DType::F32), "w");
-        let bias = g.add_node(NodeKind::Constant(vec![0.1; 4]), vec![], NodeMeta::new(vec![4], DType::F32), "bias");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![2, 3], DType::F32),
+            "a",
+        );
+        let w = g.add_node(
+            NodeKind::Parameter("w".into()),
+            vec![],
+            NodeMeta::new(vec![3, 4], DType::F32),
+            "w",
+        );
+        let bias = g.add_node(
+            NodeKind::Constant(vec![0.1; 4]),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "bias",
+        );
 
-        let mm = g.add_node(NodeKind::Op(OpKind::MatMul), vec![a, w], NodeMeta::new(vec![2, 4], DType::F32), "mm");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![mm, bias], NodeMeta::new(vec![2, 4], DType::F32), "add");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![add], NodeMeta::new(vec![2, 4], DType::F32), "relu");
+        let mm = g.add_node(
+            NodeKind::Op(OpKind::MatMul),
+            vec![a, w],
+            NodeMeta::new(vec![2, 4], DType::F32),
+            "mm",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![mm, bias],
+            NodeMeta::new(vec![2, 4], DType::F32),
+            "add",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![add],
+            NodeMeta::new(vec![2, 4], DType::F32),
+            "relu",
+        );
         g.mark_output(relu);
 
         assert_eq!(g.node_count(), 6);
@@ -386,7 +416,10 @@ mod tests {
 
         let output_id = g.outputs()[0];
         let fused = g.node(output_id).unwrap();
-        assert!(matches!(fused.kind, NodeKind::Op(OpKind::FusedMatMulBiasRelu)));
+        assert!(matches!(
+            fused.kind,
+            NodeKind::Op(OpKind::FusedMatMulBiasRelu)
+        ));
         assert_eq!(fused.inputs.len(), 3); // A, W, bias
     }
 
@@ -397,15 +430,55 @@ mod tests {
         let spatial = 4;
         let total = channels * spatial;
 
-        let x = g.add_node(NodeKind::Input("x".into()), vec![], NodeMeta::new(vec![total], DType::F32), "x");
-        let w = g.add_node(NodeKind::Constant(vec![1.0; total]), vec![], NodeMeta::new(vec![total], DType::F32), "w");
-        let gamma = g.add_node(NodeKind::Constant(vec![1.0; channels]), vec![], NodeMeta::new(vec![channels], DType::F32), "gamma");
-        let beta = g.add_node(NodeKind::Constant(vec![0.0; channels]), vec![], NodeMeta::new(vec![channels], DType::F32), "beta");
-        let mean = g.add_node(NodeKind::Constant(vec![0.0; channels]), vec![], NodeMeta::new(vec![channels], DType::F32), "mean");
-        let var = g.add_node(NodeKind::Constant(vec![1.0; channels]), vec![], NodeMeta::new(vec![channels], DType::F32), "var");
+        let x = g.add_node(
+            NodeKind::Input("x".into()),
+            vec![],
+            NodeMeta::new(vec![total], DType::F32),
+            "x",
+        );
+        let w = g.add_node(
+            NodeKind::Constant(vec![1.0; total]),
+            vec![],
+            NodeMeta::new(vec![total], DType::F32),
+            "w",
+        );
+        let gamma = g.add_node(
+            NodeKind::Constant(vec![1.0; channels]),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "gamma",
+        );
+        let beta = g.add_node(
+            NodeKind::Constant(vec![0.0; channels]),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "beta",
+        );
+        let mean = g.add_node(
+            NodeKind::Constant(vec![0.0; channels]),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "mean",
+        );
+        let var = g.add_node(
+            NodeKind::Constant(vec![1.0; channels]),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "var",
+        );
 
-        let conv = g.add_node(NodeKind::Op(OpKind::Conv2d), vec![x, w], NodeMeta::new(vec![total], DType::F32), "conv");
-        let bn = g.add_node(NodeKind::Op(OpKind::BatchNorm), vec![conv, gamma, beta, mean, var], NodeMeta::new(vec![total], DType::F32), "bn");
+        let conv = g.add_node(
+            NodeKind::Op(OpKind::Conv2d),
+            vec![x, w],
+            NodeMeta::new(vec![total], DType::F32),
+            "conv",
+        );
+        let bn = g.add_node(
+            NodeKind::Op(OpKind::BatchNorm),
+            vec![conv, gamma, beta, mean, var],
+            NodeMeta::new(vec![total], DType::F32),
+            "bn",
+        );
         g.mark_output(bn);
 
         let pass = FuseConvBatchNorm::new();
@@ -419,7 +492,10 @@ mod tests {
 
         let output_id = g.outputs()[0];
         let fused = g.node(output_id).unwrap();
-        assert!(matches!(fused.kind, NodeKind::Op(OpKind::FusedConvBatchNorm)));
+        assert!(matches!(
+            fused.kind,
+            NodeKind::Op(OpKind::FusedConvBatchNorm)
+        ));
     }
 
     #[test]
@@ -437,14 +513,54 @@ mod tests {
 
         // Build unfused graph
         let mut g_unfused = Graph::new();
-        let x1 = g_unfused.add_node(NodeKind::Input("x".into()), vec![], NodeMeta::new(vec![total], DType::F32), "x");
-        let w1 = g_unfused.add_node(NodeKind::Constant(weight_data.clone()), vec![], NodeMeta::new(vec![total], DType::F32), "w");
-        let gam1 = g_unfused.add_node(NodeKind::Constant(gamma_data.clone()), vec![], NodeMeta::new(vec![channels], DType::F32), "gamma");
-        let bet1 = g_unfused.add_node(NodeKind::Constant(beta_data.clone()), vec![], NodeMeta::new(vec![channels], DType::F32), "beta");
-        let men1 = g_unfused.add_node(NodeKind::Constant(mean_data.clone()), vec![], NodeMeta::new(vec![channels], DType::F32), "mean");
-        let var1 = g_unfused.add_node(NodeKind::Constant(var_data.clone()), vec![], NodeMeta::new(vec![channels], DType::F32), "var");
-        let conv1 = g_unfused.add_node(NodeKind::Op(OpKind::Conv2d), vec![x1, w1], NodeMeta::new(vec![total], DType::F32), "conv");
-        let bn1 = g_unfused.add_node(NodeKind::Op(OpKind::BatchNorm), vec![conv1, gam1, bet1, men1, var1], NodeMeta::new(vec![total], DType::F32), "bn");
+        let x1 = g_unfused.add_node(
+            NodeKind::Input("x".into()),
+            vec![],
+            NodeMeta::new(vec![total], DType::F32),
+            "x",
+        );
+        let w1 = g_unfused.add_node(
+            NodeKind::Constant(weight_data.clone()),
+            vec![],
+            NodeMeta::new(vec![total], DType::F32),
+            "w",
+        );
+        let gam1 = g_unfused.add_node(
+            NodeKind::Constant(gamma_data.clone()),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "gamma",
+        );
+        let bet1 = g_unfused.add_node(
+            NodeKind::Constant(beta_data.clone()),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "beta",
+        );
+        let men1 = g_unfused.add_node(
+            NodeKind::Constant(mean_data.clone()),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "mean",
+        );
+        let var1 = g_unfused.add_node(
+            NodeKind::Constant(var_data.clone()),
+            vec![],
+            NodeMeta::new(vec![channels], DType::F32),
+            "var",
+        );
+        let conv1 = g_unfused.add_node(
+            NodeKind::Op(OpKind::Conv2d),
+            vec![x1, w1],
+            NodeMeta::new(vec![total], DType::F32),
+            "conv",
+        );
+        let bn1 = g_unfused.add_node(
+            NodeKind::Op(OpKind::BatchNorm),
+            vec![conv1, gam1, bet1, men1, var1],
+            NodeMeta::new(vec![total], DType::F32),
+            "bn",
+        );
         g_unfused.mark_output(bn1);
 
         let mut inputs1 = HashMap::new();
@@ -468,7 +584,10 @@ mod tests {
             assert!(
                 (u - f).abs() < 1e-5,
                 "Mismatch at index {}: unfused={}, fused={}, diff={}",
-                i, u, f, (u - f).abs()
+                i,
+                u,
+                f,
+                (u - f).abs()
             );
         }
     }
@@ -476,11 +595,36 @@ mod tests {
     #[test]
     fn test_fuse_elementwise_chain() {
         let mut g = Graph::new();
-        let a = g.add_node(NodeKind::Input("a".into()), vec![], NodeMeta::new(vec![4], DType::F32), "a");
-        let b = g.add_node(NodeKind::Input("b".into()), vec![], NodeMeta::new(vec![4], DType::F32), "b");
-        let add = g.add_node(NodeKind::Op(OpKind::Add), vec![a, b], NodeMeta::new(vec![4], DType::F32), "add");
-        let relu = g.add_node(NodeKind::Op(OpKind::Relu), vec![add], NodeMeta::new(vec![4], DType::F32), "relu");
-        let neg = g.add_node(NodeKind::Op(OpKind::Neg), vec![relu], NodeMeta::new(vec![4], DType::F32), "neg");
+        let a = g.add_node(
+            NodeKind::Input("a".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "a",
+        );
+        let b = g.add_node(
+            NodeKind::Input("b".into()),
+            vec![],
+            NodeMeta::new(vec![4], DType::F32),
+            "b",
+        );
+        let add = g.add_node(
+            NodeKind::Op(OpKind::Add),
+            vec![a, b],
+            NodeMeta::new(vec![4], DType::F32),
+            "add",
+        );
+        let relu = g.add_node(
+            NodeKind::Op(OpKind::Relu),
+            vec![add],
+            NodeMeta::new(vec![4], DType::F32),
+            "relu",
+        );
+        let neg = g.add_node(
+            NodeKind::Op(OpKind::Neg),
+            vec![relu],
+            NodeMeta::new(vec![4], DType::F32),
+            "neg",
+        );
         g.mark_output(neg);
 
         assert_eq!(g.node_count(), 5);

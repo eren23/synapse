@@ -8,9 +8,7 @@
 
 use std::path::PathBuf;
 
-use synapse_inference::model::{
-    parse_vit_config, parse_vit_labels, ViTModel,
-};
+use synapse_inference::model::{parse_vit_config, parse_vit_labels, ViTModel};
 use synapse_inference::weight_loading::{load_safetensors, WeightMapper};
 
 fn parse_args() -> PathBuf {
@@ -44,8 +42,8 @@ fn create_test_image(height: usize, width: usize, channels: usize) -> Vec<f32> {
             for c in 0..channels {
                 // Raw pixel in [0, 1]
                 let raw = match c {
-                    0 => y as f32 / height as f32,       // R: vertical gradient
-                    1 => x as f32 / width as f32,        // G: horizontal gradient
+                    0 => y as f32 / height as f32, // R: vertical gradient
+                    1 => x as f32 / width as f32,  // G: horizontal gradient
                     _ => 0.5 + 0.5 * ((x + y) as f32 / (width + height) as f32).sin(), // B
                 };
                 // Apply ImageNet normalization
@@ -96,13 +94,22 @@ fn main() {
     println!("  Loaded {} tensors from safetensors", weights.len());
 
     let mapper = WeightMapper::vit();
-    let result = model.load_weights(weights, &mapper).expect("Failed to load weights");
+    let result = model
+        .load_weights(weights, &mapper)
+        .expect("Failed to load weights");
 
     if !result.missing.is_empty() {
-        println!("  Warning: {} missing weights: {:?}", result.missing.len(), result.missing);
+        println!(
+            "  Warning: {} missing weights: {:?}",
+            result.missing.len(),
+            result.missing
+        );
     }
     if !result.unexpected.is_empty() {
-        println!("  Note: {} unmapped source tensors", result.unexpected.len());
+        println!(
+            "  Note: {} unmapped source tensors",
+            result.unexpected.len()
+        );
     }
     println!("  Weights loaded successfully.");
 
@@ -127,20 +134,12 @@ fn main() {
     );
     println!(
         "  Embedding L2 norm: {:.4}",
-        output
-            .embeddings
-            .iter()
-            .map(|v| v * v)
-            .sum::<f32>()
-            .sqrt()
+        output.embeddings.iter().map(|v| v * v).sum::<f32>().sqrt()
     );
 
     if let Some(ref logits) = output.logits {
         println!("  Logits: {} classes", logits.len());
-        println!(
-            "  Logits finite: {}",
-            logits.iter().all(|v| v.is_finite())
-        );
+        println!("  Logits finite: {}", logits.iter().all(|v| v.is_finite()));
 
         let top5 = top_k_indices(logits, 5);
         println!("\n  Top-5 predictions:");
@@ -160,5 +159,8 @@ fn main() {
         }
     }
 
-    println!("\n  Inference time: {:.1}ms", elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "\n  Inference time: {:.1}ms",
+        elapsed.as_secs_f64() * 1000.0
+    );
 }

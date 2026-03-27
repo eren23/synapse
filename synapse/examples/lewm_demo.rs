@@ -22,20 +22,25 @@ fn main() {
     // 1. Config (hardcoded from checkpoint inspection)
     let config = LeWMConfig::pusht();
     println!("Config:");
-    println!("  Encoder: {}x{} patches, {} hidden, {} layers, {} heads",
+    println!(
+        "  Encoder: {}x{} patches, {} hidden, {} layers, {} heads",
         config.image_size / config.patch_size,
         config.image_size / config.patch_size,
         config.encoder_hidden,
         config.encoder_layers,
         config.encoder_heads,
     );
-    println!("  Predictor: {} layers, {} heads, inner_dim={}, inter={}",
+    println!(
+        "  Predictor: {} layers, {} heads, inner_dim={}, inter={}",
         config.predictor_layers,
         config.predictor_heads,
         config.predictor_inner_dim,
         config.predictor_inter,
     );
-    println!("  Action dim: {}, Latent dim: {}", config.action_dim, config.latent_dim);
+    println!(
+        "  Action dim: {}, Latent dim: {}",
+        config.action_dim, config.latent_dim
+    );
     println!();
 
     // 2. Build model
@@ -70,14 +75,20 @@ fn main() {
     let image = create_test_image(config.image_size, config.image_size, config.channels);
 
     // 5. Encode
-    println!("Encoding {}x{}x{} test image...", config.image_size, config.image_size, config.channels);
+    println!(
+        "Encoding {}x{}x{} test image...",
+        config.image_size, config.image_size, config.channels
+    );
     let start = Instant::now();
     let z = model.encode(&image, config.image_size, config.image_size);
     let encode_time = start.elapsed();
     println!("  Encoded in {:.1}ms", encode_time.as_secs_f64() * 1000.0);
     println!("  Latent L2 norm: {:.4}", l2_norm(&z));
     println!("  Latent dim: {}", z.len());
-    assert!(z.iter().all(|v| v.is_finite()), "Encode produced non-finite values!");
+    assert!(
+        z.iter().all(|v| v.is_finite()),
+        "Encode produced non-finite values!"
+    );
     println!();
 
     // 6. Single predict_next
@@ -88,7 +99,10 @@ fn main() {
     println!("Single predict_next (zero action):");
     println!("  {:.2}ms", predict_time.as_secs_f64() * 1000.0);
     println!("  Next latent L2 norm: {:.4}", l2_norm(&z_next));
-    assert!(z_next.iter().all(|v| v.is_finite()), "predict_next produced non-finite values!");
+    assert!(
+        z_next.iter().all(|v| v.is_finite()),
+        "predict_next produced non-finite values!"
+    );
     println!();
 
     // 7. Rollout
@@ -100,12 +114,19 @@ fn main() {
     let trajectory = model.rollout(&z, &actions);
     let rollout_time = start.elapsed();
     println!("{}-step rollout:", num_steps);
-    println!("  {:.1}ms total ({:.2}ms/step)",
+    println!(
+        "  {:.1}ms total ({:.2}ms/step)",
         rollout_time.as_secs_f64() * 1000.0,
         rollout_time.as_secs_f64() * 1000.0 / num_steps as f64,
     );
-    println!("  All finite: {}", trajectory.iter().all(|s| s.iter().all(|v| v.is_finite())));
-    println!("  Final state L2 norm: {:.4}", l2_norm(trajectory.last().unwrap()));
+    println!(
+        "  All finite: {}",
+        trajectory.iter().all(|s| s.iter().all(|v| v.is_finite()))
+    );
+    println!(
+        "  Final state L2 norm: {:.4}",
+        l2_norm(trajectory.last().unwrap())
+    );
 
     // Show norm evolution
     println!();

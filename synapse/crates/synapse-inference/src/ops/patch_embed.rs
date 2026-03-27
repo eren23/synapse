@@ -69,7 +69,15 @@ mod tests {
             .map(|i| if i % (patch_dim + 1) == 0 { 1.0 } else { 0.01 })
             .collect();
 
-        let result = patch_embed(&image, height, width, channels, patch_size, &projection, embed_dim);
+        let result = patch_embed(
+            &image,
+            height,
+            width,
+            channels,
+            patch_size,
+            &projection,
+            embed_dim,
+        );
 
         // Should produce 4 patches x embed_dim
         let num_patches = (height / patch_size) * (width / patch_size);

@@ -11,15 +11,9 @@ pub enum AttentionConfig {
         head_dim: usize,
     },
     /// Multi-Head Attention: equal query and KV heads.
-    MHA {
-        num_heads: usize,
-        head_dim: usize,
-    },
+    MHA { num_heads: usize, head_dim: usize },
     /// Multi-Query Attention: single KV head shared across all query heads.
-    MQA {
-        num_heads: usize,
-        head_dim: usize,
-    },
+    MQA { num_heads: usize, head_dim: usize },
     /// Sliding-window attention with a fixed context window.
     SlidingWindow {
         num_heads: usize,
@@ -29,10 +23,7 @@ pub enum AttentionConfig {
     },
     /// Bidirectional (non-causal) attention for encoder models (ViT, BERT, JEPA).
     /// Every position attends to every other position — no causal mask.
-    Bidirectional {
-        num_heads: usize,
-        head_dim: usize,
-    },
+    Bidirectional { num_heads: usize, head_dim: usize },
 }
 
 impl AttentionConfig {

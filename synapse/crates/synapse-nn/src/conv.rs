@@ -101,13 +101,11 @@ impl Module for Conv2d {
                                         let ih = ih - ph;
                                         let iw = iw - pw;
                                         if ih < h_in && iw < w_in {
-                                            let input_idx =
-                                                n * (c_in * h_in * w_in)
+                                            let input_idx = n * (c_in * h_in * w_in)
                                                 + ic * (h_in * w_in)
                                                 + ih * w_in
                                                 + iw;
-                                            let weight_idx =
-                                                oc * (c_in * kh * kw)
+                                            let weight_idx = oc * (c_in * kh * kw)
                                                 + ic * (kh * kw)
                                                 + khi * kw
                                                 + kwi;

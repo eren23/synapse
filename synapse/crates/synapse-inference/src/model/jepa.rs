@@ -175,7 +175,13 @@ impl JEPAModel {
 
         // 3. Project context to predictor dimension: [num_context, pred_dim]
         let ctx_projected = if !self.predictor_embed_proj.is_empty() {
-            matmul_t(&context_embeds, &self.predictor_embed_proj, num_context, enc_dim, pred_dim)
+            matmul_t(
+                &context_embeds,
+                &self.predictor_embed_proj,
+                num_context,
+                enc_dim,
+                pred_dim,
+            )
         } else {
             // Fallback: truncate or zero-pad
             let mut proj = vec![0.0f32; num_context * pred_dim];
@@ -203,12 +209,23 @@ impl JEPAModel {
         }
 
         // 6. Apply final predictor norm
-        let normed = apply_norm(&x, &self.predictor_norm_weight, &*self.predictor_norm, pred_dim);
+        let normed = apply_norm(
+            &x,
+            &self.predictor_norm_weight,
+            &*self.predictor_norm,
+            pred_dim,
+        );
 
         // 7. Extract target positions and project back to encoder dim
         let target_tokens = &normed[num_context * pred_dim..];
         let predicted = if !self.predictor_output_proj.is_empty() {
-            matmul_t(target_tokens, &self.predictor_output_proj, num_target, pred_dim, enc_dim)
+            matmul_t(
+                target_tokens,
+                &self.predictor_output_proj,
+                num_target,
+                pred_dim,
+                enc_dim,
+            )
         } else {
             // Fallback: zero-pad
             let mut proj = vec![0.0f32; num_target * enc_dim];
@@ -269,7 +286,12 @@ impl JEPAModel {
         }
 
         // 4. Apply final norm to all tokens
-        let normed = apply_norm(&x, &self.encoder.final_norm_weight, &*self.encoder.final_norm, enc_dim);
+        let normed = apply_norm(
+            &x,
+            &self.encoder.final_norm_weight,
+            &*self.encoder.final_norm,
+            enc_dim,
+        );
 
         // 5. Return only patch embeddings (skip CLS at position 0)
         normed[enc_dim..].to_vec()
@@ -330,8 +352,14 @@ mod tests {
             layer.w_v = AlignedBuffer::from_slice(&gen_weights(enc_h * enc_h, s + 3));
             layer.w_o = AlignedBuffer::from_slice(&gen_weights(enc_h * enc_h, s + 4));
             layer.ffn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; enc_h]);
-            layer.ffn_up = AlignedBuffer::from_slice(&gen_weights(pred_inter.max(cfg.encoder.intermediate_size) * enc_h, s + 5));
-            layer.ffn_down = AlignedBuffer::from_slice(&gen_weights(enc_h * pred_inter.max(cfg.encoder.intermediate_size), s + 6));
+            layer.ffn_up = AlignedBuffer::from_slice(&gen_weights(
+                pred_inter.max(cfg.encoder.intermediate_size) * enc_h,
+                s + 5,
+            ));
+            layer.ffn_down = AlignedBuffer::from_slice(&gen_weights(
+                enc_h * pred_inter.max(cfg.encoder.intermediate_size),
+                s + 6,
+            ));
         }
 
         // Fix encoder FFN sizes to match encoder config
@@ -368,9 +396,10 @@ mod tests {
         let model = build_test_jepa(&cfg);
 
         let num_patches = cfg.encoder.num_patches(); // 4 patches (8/4)^2
-        let image: Vec<f32> = (0..cfg.encoder.image_size * cfg.encoder.image_size * cfg.encoder.channels)
-            .map(|i| (i as f32) / 255.0)
-            .collect();
+        let image: Vec<f32> =
+            (0..cfg.encoder.image_size * cfg.encoder.image_size * cfg.encoder.channels)
+                .map(|i| (i as f32) / 255.0)
+                .collect();
 
         // Context: first 2 patches, target: last 2 patches
         let mut context_mask = vec![false; num_patches];
@@ -438,27 +467,72 @@ mod tests {
             }
         };
 
-        weights.insert("embeddings.patch_embeddings.projection.weight".into(), rt(enc_h * patch_dim, 1));
-        weights.insert("embeddings.patch_embeddings.projection.bias".into(), rt(enc_h, 2));
+        weights.insert(
+            "embeddings.patch_embeddings.projection.weight".into(),
+            rt(enc_h * patch_dim, 1),
+        );
+        weights.insert(
+            "embeddings.patch_embeddings.projection.bias".into(),
+            rt(enc_h, 2),
+        );
         weights.insert("embeddings.cls_token".into(), rt(enc_h, 3));
-        weights.insert("embeddings.position_embeddings".into(), rt(enc_seq_len * enc_h, 4));
+        weights.insert(
+            "embeddings.position_embeddings".into(),
+            rt(enc_seq_len * enc_h, 4),
+        );
         weights.insert("layernorm.weight".into(), ones(enc_h));
         weights.insert("layernorm.bias".into(), rt(enc_h, 6));
 
         for i in 0..cfg.encoder.num_layers {
             let s = (i as u32 + 1) * 100;
-            weights.insert(format!("encoder.layer.{i}.attention.attention.query.weight"), rt(enc_h * enc_h, s + 1));
-            weights.insert(format!("encoder.layer.{i}.attention.attention.query.bias"), rt(enc_h, s + 2));
-            weights.insert(format!("encoder.layer.{i}.attention.attention.key.weight"), rt(enc_h * enc_h, s + 3));
-            weights.insert(format!("encoder.layer.{i}.attention.attention.key.bias"), rt(enc_h, s + 4));
-            weights.insert(format!("encoder.layer.{i}.attention.attention.value.weight"), rt(enc_h * enc_h, s + 5));
-            weights.insert(format!("encoder.layer.{i}.attention.attention.value.bias"), rt(enc_h, s + 6));
-            weights.insert(format!("encoder.layer.{i}.attention.output.dense.weight"), rt(enc_h * enc_h, s + 7));
-            weights.insert(format!("encoder.layer.{i}.attention.output.dense.bias"), rt(enc_h, s + 8));
-            weights.insert(format!("encoder.layer.{i}.intermediate.dense.weight"), rt(enc_inter * enc_h, s + 9));
-            weights.insert(format!("encoder.layer.{i}.intermediate.dense.bias"), rt(enc_inter, s + 10));
-            weights.insert(format!("encoder.layer.{i}.output.dense.weight"), rt(enc_h * enc_inter, s + 11));
-            weights.insert(format!("encoder.layer.{i}.output.dense.bias"), rt(enc_h, s + 12));
+            weights.insert(
+                format!("encoder.layer.{i}.attention.attention.query.weight"),
+                rt(enc_h * enc_h, s + 1),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.attention.query.bias"),
+                rt(enc_h, s + 2),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.attention.key.weight"),
+                rt(enc_h * enc_h, s + 3),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.attention.key.bias"),
+                rt(enc_h, s + 4),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.attention.value.weight"),
+                rt(enc_h * enc_h, s + 5),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.attention.value.bias"),
+                rt(enc_h, s + 6),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.output.dense.weight"),
+                rt(enc_h * enc_h, s + 7),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.attention.output.dense.bias"),
+                rt(enc_h, s + 8),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.intermediate.dense.weight"),
+                rt(enc_inter * enc_h, s + 9),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.intermediate.dense.bias"),
+                rt(enc_inter, s + 10),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.output.dense.weight"),
+                rt(enc_h * enc_inter, s + 11),
+            );
+            weights.insert(
+                format!("encoder.layer.{i}.output.dense.bias"),
+                rt(enc_h, s + 12),
+            );
             weights.insert(format!("encoder.layer.{i}.norm1.weight"), ones(enc_h));
             weights.insert(format!("encoder.layer.{i}.norm1.bias"), rt(enc_h, s + 14));
             weights.insert(format!("encoder.layer.{i}.norm2.weight"), ones(enc_h));
@@ -466,14 +540,31 @@ mod tests {
         }
 
         let mapper = WeightMapper::dinov2();
-        let result = model.load_encoder_weights(weights, &mapper).expect("load failed");
+        let result = model
+            .load_encoder_weights(weights, &mapper)
+            .expect("load failed");
 
         // Verify encoder weights loaded
-        assert!(!model.encoder.patch_proj.is_empty(), "encoder patch_proj should be loaded");
-        assert!(!model.encoder.cls_token.is_empty(), "encoder cls_token should be loaded");
-        assert!(!model.encoder.pos_embed.is_empty(), "encoder pos_embed should be loaded");
-        assert!(!model.encoder.final_norm_weight.is_empty(), "encoder final_norm should be loaded");
-        assert!(!model.encoder.layers[0].w_q.is_empty(), "encoder layer 0 w_q should be loaded");
+        assert!(
+            !model.encoder.patch_proj.is_empty(),
+            "encoder patch_proj should be loaded"
+        );
+        assert!(
+            !model.encoder.cls_token.is_empty(),
+            "encoder cls_token should be loaded"
+        );
+        assert!(
+            !model.encoder.pos_embed.is_empty(),
+            "encoder pos_embed should be loaded"
+        );
+        assert!(
+            !model.encoder.final_norm_weight.is_empty(),
+            "encoder final_norm should be loaded"
+        );
+        assert!(
+            !model.encoder.layers[0].w_q.is_empty(),
+            "encoder layer 0 w_q should be loaded"
+        );
 
         // Some keys will be missing (patch_proj_bias is provided but classifier is not expected)
         assert!(

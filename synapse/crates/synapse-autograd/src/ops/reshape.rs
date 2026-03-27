@@ -47,7 +47,10 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(ReshapeBackward { input_ids: vec![a], input_shape }),
+            Box::new(ReshapeBackward {
+                input_ids: vec![a],
+                input_shape,
+            }),
             &[a],
             output,
         )
@@ -59,7 +62,11 @@ impl Graph {
             return self.untracked(output);
         }
         self.record_op(
-            Box::new(TransposeBackward { input_ids: vec![a], dim0, dim1 }),
+            Box::new(TransposeBackward {
+                input_ids: vec![a],
+                dim0,
+                dim1,
+            }),
             &[a],
             output,
         )
