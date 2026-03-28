@@ -5,10 +5,12 @@
 
 pub mod config;
 pub mod mamba_block;
+pub mod mamba_model;
 pub mod selective_scan;
 pub mod state;
 
 pub use config::MambaConfig;
 pub use mamba_block::MambaBlock;
+pub use mamba_model::MambaModel;
 pub use selective_scan::{compute_delta, selective_scan_seq, selective_scan_step};
 pub use state::{MambaLayerState, RecurrentState};
