@@ -140,6 +140,10 @@ path = "tests/benchmarks/kvcache_speedup.rs"
 name = "mamba_validation"
 path = "tests/integration/mamba_validation.rs"
 
+[[test]]
+name = "rwkv_validation"
+path = "tests/integration/rwkv_validation.rs"
+
 [[example]]
 name = "qwen3_chat"
 path = "examples/qwen3_chat.rs"
