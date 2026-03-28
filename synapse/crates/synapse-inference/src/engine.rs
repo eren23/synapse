@@ -5,11 +5,14 @@ use crate::chat_template::{ChatMessage, ChatTemplate};
 use crate::config::ModelConfig;
 use crate::generation::{GenerationConfig, GenerationOutput, GenerationPipeline};
 use crate::kv_cache::KVCache;
-use crate::model::{CausalLM, ModelBuilder, ModelOutput};
+use crate::model::traits::Model;
+use crate::model::{CausalLM, ModelBuilder, ModelOutput, ModelState};
 use crate::model_adapter::{
     adapter_for_kind, ModelAdapter, ModelAdapterKind, ReasoningMarkers, ThinkingMode,
 };
 use crate::quantization::{quantize_model, quantize_model_ternary, QuantizedCausalLM, TernaryCausalLM};
+use crate::ssm::config::MambaConfig;
+use crate::ssm::mamba_model::MambaModel;
 use crate::tokenizer::{Tokenizer, TokenizerError};
 use crate::weight_loading::{
     load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper,
@@ -100,6 +103,8 @@ pub struct InferenceEngine {
     pub model: CausalLM,
     pub quantized_model: Option<QuantizedCausalLM>,
     pub ternary_model: Option<TernaryCausalLM>,
+    /// Optional SSM model (Mamba, RWKV, etc.) — takes priority over transformer models.
+    pub ssm_model: Option<Box<dyn Model>>,
     pub config: ModelConfig,
     pub model_adapter_kind: ModelAdapterKind,
     pub tokenizer: Option<Tokenizer>,
@@ -116,7 +121,17 @@ pub struct InferenceEngine {
 
 impl InferenceEngine {
     /// Build an engine from a Hugging Face-style pretrained model directory.
+    ///
+    /// Automatically detects the model type from `config.json`. For Mamba/SSM
+    /// models, delegates to [`from_pretrained_mamba`].
     pub fn from_pretrained(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        // Detect model type from config.json to route SSMs differently
+        let model_type = detect_model_type(&model_path.join("config.json")).unwrap_or_default();
+        match model_type.as_str() {
+            "mamba" | "mamba2" => return Self::from_pretrained_mamba(model_path),
+            _ => {}
+        }
+
         let config = ModelConfig::from_hf_file(&model_path.join("config.json"))?;
         let tokenizer = Tokenizer::from_model_dir(model_path)?;
         let mapper = WeightMapper::from_model_type(&config.name)?;
@@ -183,6 +198,7 @@ impl InferenceEngine {
             model,
             quantized_model: None,
             ternary_model: None,
+            ssm_model: None,
             config,
             model_adapter_kind,
             tokenizer: Some(tokenizer),
@@ -202,6 +218,7 @@ impl InferenceEngine {
             model,
             quantized_model: None,
             ternary_model: None,
+            ssm_model: None,
             config,
             model_adapter_kind,
             tokenizer: None,
@@ -226,6 +243,7 @@ impl InferenceEngine {
             model,
             quantized_model: None,
             ternary_model: None,
+            ssm_model: None,
             config,
             model_adapter_kind,
             tokenizer: None,
@@ -335,17 +353,24 @@ impl InferenceEngine {
     /// Create a model state sized for this model's architecture.
     ///
     /// For transformer models this wraps a KV cache.
+    /// For SSM models (Mamba, RWKV) this returns `ModelState::Recurrent`
+    /// since SSMs manage their own internal state.
     pub fn create_state(
         &self,
         max_seq_len: usize,
-    ) -> Result<crate::model::ModelState, Box<dyn std::error::Error>> {
-        let cache = KVCache::new(
-            self.config.architecture.num_layers,
-            max_seq_len,
-            self.config.attention.num_kv_heads(),
-            self.config.attention.head_dim(),
-        )?;
-        Ok(crate::model::ModelState::KvCache(cache))
+    ) -> Result<ModelState, Box<dyn std::error::Error>> {
+        if self.ssm_model.is_some() {
+            // SSMs manage their own state internally via RefCell
+            Ok(ModelState::Recurrent)
+        } else {
+            let cache = KVCache::new(
+                self.config.architecture.num_layers,
+                max_seq_len,
+                self.config.attention.num_kv_heads(),
+                self.config.attention.head_dim(),
+            )?;
+            Ok(ModelState::KvCache(cache))
+        }
     }
 
     /// Quantize the model to INT8. Call after loading weights.
@@ -428,7 +453,9 @@ impl InferenceEngine {
     }
 
     pub fn generation_pipeline(&self) -> GenerationPipeline<'_> {
-        if let Some(ref tmodel) = self.ternary_model {
+        if let Some(ref ssm) = self.ssm_model {
+            GenerationPipeline::new(ssm.as_ref())
+        } else if let Some(ref tmodel) = self.ternary_model {
             GenerationPipeline::new(tmodel)
         } else if let Some(ref qmodel) = self.quantized_model {
             GenerationPipeline::new(qmodel)
@@ -457,6 +484,151 @@ impl InferenceEngine {
         let generated = &output.token_ids[output.num_prompt_tokens..];
         output.text = self.decode(generated)?;
         Ok(output)
+    }
+
+    /// Load a Mamba model from a HuggingFace-style directory.
+    ///
+    /// Reads `config.json` for `MambaConfig`, loads safetensors weights,
+    /// and creates a `MambaModel` stored as `ssm_model`.
+    pub fn from_pretrained_mamba(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let mamba_config = parse_mamba_config(&model_path.join("config.json"))?;
+
+        // Load weights from safetensors
+        let weights = if model_path.join("model.safetensors.index.json").exists() {
+            load_safetensors_sharded(model_path)?
+        } else {
+            let checkpoint = find_checkpoint_file(model_path)?;
+            load_safetensors(&checkpoint)?
+        };
+
+        let mamba_model = MambaModel::from_weights(mamba_config.clone(), &weights)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+        // Try to load tokenizer (best-effort for Mamba models)
+        let tokenizer = Tokenizer::from_model_dir(model_path).ok();
+
+        // Try to load chat template (best-effort)
+        let chat_template = {
+            let tokenizer_config_path = model_path.join("tokenizer_config.json");
+            if tokenizer_config_path.exists() {
+                ChatTemplate::from_tokenizer_config(&tokenizer_config_path).ok()
+            } else {
+                None
+            }
+        };
+
+        // Build a minimal ModelConfig for engine metadata.
+        // SSM models don't use this for inference (they use MambaConfig internally),
+        // but it is needed for adapter selection and runtime metadata.
+        let config = minimal_config_for_ssm("mamba", &mamba_config);
+
+        let model_adapter_kind = ModelAdapterKind::from_model_name("mamba");
+        let model = ModelBuilder::from_config(&config);
+
+        #[cfg(feature = "metal")]
+        let backend = crate::metal::ComputeBackend::auto();
+
+        Ok(Self {
+            model,
+            quantized_model: None,
+            ternary_model: None,
+            ssm_model: Some(Box::new(mamba_model)),
+            config,
+            model_adapter_kind,
+            tokenizer,
+            chat_template,
+            #[cfg(feature = "metal")]
+            backend,
+            #[cfg(feature = "metal")]
+            metal_model_bufs_cell: None,
+        })
+    }
+
+    /// Whether the engine has an SSM model loaded.
+    pub fn is_ssm(&self) -> bool {
+        self.ssm_model.is_some()
+    }
+}
+
+/// Detect the `model_type` field from a HuggingFace `config.json`.
+fn detect_model_type(config_path: &Path) -> Result<String, Box<dyn std::error::Error>> {
+    let file = std::fs::File::open(config_path)?;
+    let json: serde_json::Value = serde_json::from_reader(file)?;
+    let model_type = json
+        .get("model_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    Ok(model_type.to_string())
+}
+
+/// Parse a `MambaConfig` from a HuggingFace-style `config.json`.
+///
+/// Supports both original Mamba naming (`d_state`, `d_conv`, `expand`) and
+/// HuggingFace transformers naming (`state_size`, `conv_kernel`).
+fn parse_mamba_config(config_path: &Path) -> Result<MambaConfig, Box<dyn std::error::Error>> {
+    let file = std::fs::File::open(config_path)?;
+    let json: serde_json::Value = serde_json::from_reader(file)?;
+    Ok(MambaConfig {
+        d_model: json["hidden_size"]
+            .as_u64()
+            .or(json["d_model"].as_u64())
+            .unwrap_or(768) as usize,
+        d_state: json["state_size"]
+            .as_u64()
+            .or(json["d_state"].as_u64())
+            .unwrap_or(16) as usize,
+        d_conv: json["conv_kernel"]
+            .as_u64()
+            .or(json["d_conv"].as_u64())
+            .unwrap_or(4) as usize,
+        expand: json["expand"].as_u64().unwrap_or(2) as usize,
+        num_layers: json["num_hidden_layers"]
+            .as_u64()
+            .or(json["n_layer"].as_u64())
+            .unwrap_or(24) as usize,
+        vocab_size: json["vocab_size"].as_u64().unwrap_or(50280) as usize,
+        norm_eps: json["layer_norm_epsilon"]
+            .as_f64()
+            .or(json["norm_epsilon"].as_f64())
+            .unwrap_or(1e-5),
+    })
+}
+
+/// Build a minimal `ModelConfig` for SSM models that need engine metadata.
+///
+/// The SSM model itself uses its own config for inference, but
+/// `InferenceEngine` needs a `ModelConfig` for things like adapter selection.
+fn minimal_config_for_ssm(name: &str, mamba: &MambaConfig) -> ModelConfig {
+    use crate::config::*;
+    ModelConfig {
+        name: name.to_string(),
+        architecture: ArchitectureConfig {
+            hidden_size: mamba.d_model,
+            num_layers: mamba.num_layers,
+            vocab_size: mamba.vocab_size,
+            max_sequence_length: 2048, // SSMs have no fixed max
+            tie_word_embeddings: false,
+            embed_scale: None,
+        },
+        // SSMs don't use attention, but we need valid placeholder values.
+        attention: AttentionConfig::GQA {
+            num_heads: 1,
+            num_kv_heads: 1,
+            head_dim: mamba.d_model,
+        },
+        norm: NormConfig::RMSNorm {
+            eps: mamba.norm_eps,
+        },
+        ffn: FFNConfig::SwiGLU {
+            intermediate_size: mamba.d_inner(),
+        },
+        position: PositionConfig::RoPE {
+            base: 10000.0,
+            max_position_embeddings: 2048,
+            style: Default::default(),
+            scaling: Default::default(),
+        },
+        quantization: QuantConfig::F32,
     }
 }
 
@@ -623,5 +795,195 @@ mod tests {
                 end: "</think>",
             })
         );
+    }
+
+    // ── SSM / Mamba engine tests ─────────────────────────────────────
+
+    fn make_tiny_mamba_model() -> MambaModel {
+        use crate::ssm::mamba_block::MambaBlock;
+
+        let config = MambaConfig::tiny_test();
+        let d_model = config.d_model;
+        let d_inner = config.d_inner();
+        let d_state = config.d_state;
+        let d_conv = config.d_conv;
+        let vocab = config.vocab_size;
+
+        let pseudo = |seed: u64, len: usize| -> Vec<f32> {
+            let mut state = seed;
+            (0..len)
+                .map(|_| {
+                    state = state
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    let bits = 0x3F800000u32 | ((state >> 41) as u32 & 0x7FFFFF);
+                    (f32::from_bits(bits) - 1.5) * 0.2
+                })
+                .collect()
+        };
+
+        let embed_tokens = pseudo(100, vocab * d_model);
+        let final_norm_weight = vec![1.0f32; d_model];
+        let lm_head_weight = pseudo(200, vocab * d_model);
+
+        let mut blocks = Vec::new();
+        for layer_idx in 0..config.num_layers {
+            let s = (layer_idx as u64 + 1) * 1000;
+            blocks.push(MambaBlock {
+                d_model,
+                d_inner,
+                d_state,
+                d_conv,
+                norm_weight: vec![1.0f32; d_model],
+                norm_eps: config.norm_eps as f32,
+                in_proj_weight: pseudo(s + 1, 2 * d_inner * d_model),
+                in_proj_bias: vec![],
+                conv1d_weight: pseudo(s + 2, d_inner * d_conv),
+                conv1d_bias: vec![0.0f32; d_inner],
+                x_proj_weight: pseudo(s + 3, (2 * d_state + 1) * d_inner),
+                dt_proj_weight: pseudo(s + 4, d_inner),
+                dt_proj_bias: vec![0.0f32; d_inner],
+                a_log: pseudo(s + 5, d_inner * d_state)
+                    .into_iter()
+                    .map(|v| -v.abs() - 0.1)
+                    .collect(),
+                d_param: vec![1.0f32; d_inner],
+                out_proj_weight: pseudo(s + 6, d_model * d_inner),
+                out_proj_bias: vec![],
+            });
+        }
+
+        MambaModel::new(config, embed_tokens, blocks, final_norm_weight, lm_head_weight)
+    }
+
+    #[test]
+    fn test_engine_with_ssm_model() {
+        let mamba = make_tiny_mamba_model();
+        let mamba_config = mamba.config.clone();
+
+        let config = minimal_config_for_ssm("mamba", &mamba_config);
+        let mut engine = InferenceEngine::from_config(config);
+        engine.ssm_model = Some(Box::new(mamba));
+
+        assert!(engine.is_ssm());
+
+        // generation_pipeline should use the SSM model
+        let pipeline = engine.generation_pipeline();
+        let output = pipeline.generate(
+            &[1, 2, 3],
+            crate::generation::GenerationConfig {
+                max_new_tokens: 4,
+                ..Default::default()
+            },
+            Some(&mut ModelState::Recurrent),
+        );
+        assert!(
+            output.token_ids.len() > 3,
+            "SSM engine should generate tokens beyond the prompt"
+        );
+    }
+
+    #[test]
+    fn test_engine_ssm_create_state_returns_recurrent() {
+        let mamba = make_tiny_mamba_model();
+        let mamba_config = mamba.config.clone();
+
+        let config = minimal_config_for_ssm("mamba", &mamba_config);
+        let mut engine = InferenceEngine::from_config(config);
+        engine.ssm_model = Some(Box::new(mamba));
+
+        let state = engine.create_state(128).expect("create_state should succeed");
+        assert!(
+            matches!(state, ModelState::Recurrent),
+            "SSM engine state should be Recurrent, got {:?}",
+            std::mem::discriminant(&state),
+        );
+    }
+
+    #[test]
+    fn test_engine_transformer_create_state_returns_kv_cache() {
+        let engine = InferenceEngine::from_config(test_config());
+        assert!(!engine.is_ssm());
+        let state = engine.create_state(64).expect("create_state should succeed");
+        assert!(
+            matches!(state, ModelState::KvCache(_)),
+            "Transformer engine state should be KvCache"
+        );
+    }
+
+    #[test]
+    fn test_detect_model_type_mamba() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            r#"{"model_type": "mamba", "hidden_size": 768}"#,
+        )
+        .unwrap();
+        let model_type = detect_model_type(&config_path).unwrap();
+        assert_eq!(model_type, "mamba");
+    }
+
+    #[test]
+    fn test_detect_model_type_unknown_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(&config_path, r#"{"hidden_size": 768}"#).unwrap();
+        let model_type = detect_model_type(&config_path).unwrap();
+        assert_eq!(model_type, "unknown");
+    }
+
+    #[test]
+    fn test_parse_mamba_config_hf_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            r#"{
+                "model_type": "mamba",
+                "hidden_size": 768,
+                "state_size": 16,
+                "conv_kernel": 4,
+                "expand": 2,
+                "num_hidden_layers": 24,
+                "vocab_size": 50280,
+                "layer_norm_epsilon": 1e-5
+            }"#,
+        )
+        .unwrap();
+
+        let cfg = parse_mamba_config(&config_path).unwrap();
+        assert_eq!(cfg.d_model, 768);
+        assert_eq!(cfg.d_state, 16);
+        assert_eq!(cfg.d_conv, 4);
+        assert_eq!(cfg.expand, 2);
+        assert_eq!(cfg.num_layers, 24);
+        assert_eq!(cfg.vocab_size, 50280);
+        assert!((cfg.norm_eps - 1e-5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_parse_mamba_config_original_style() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            r#"{
+                "model_type": "mamba",
+                "d_model": 1024,
+                "d_state": 16,
+                "d_conv": 4,
+                "expand": 2,
+                "n_layer": 48,
+                "vocab_size": 50280
+            }"#,
+        )
+        .unwrap();
+
+        let cfg = parse_mamba_config(&config_path).unwrap();
+        assert_eq!(cfg.d_model, 1024);
+        assert_eq!(cfg.d_state, 16);
+        assert_eq!(cfg.d_conv, 4);
+        assert_eq!(cfg.num_layers, 48);
     }
 }
