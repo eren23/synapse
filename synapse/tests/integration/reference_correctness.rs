@@ -7,6 +7,8 @@ use synapse_inference::ssm::{
     deltanet_step, selective_scan_seq, wkv_step, MambaBlock, MambaConfig, MambaModel,
 };
 use synapse_inference::quantization::TernaryLinear;
+use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
+use synapse_inference::model::ModelState;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 1: Selective Scan Reference Values
@@ -426,4 +428,82 @@ fn test_mamba_generation_deterministic() {
     for (i, &v) in out1.logits.iter().enumerate() {
         assert!(v.is_finite(), "logit[{i}] = {v} is not finite");
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 6: GenerationPipeline end-to-end with MambaModel
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Builds a tiny MambaModel, wraps it in a GenerationPipeline, and runs greedy
+// generation with a Recurrent state. Verifies:
+//   - output.token_ids contains prompt + generated tokens
+//   - All generated tokens are valid (< vocab_size)
+//   - Output is deterministic (run twice, same result)
+//   - num_generated_tokens > 0
+
+#[test]
+fn test_mamba_generation_pipeline_end_to_end() {
+    let model = build_tiny_mamba();
+    let vocab_size = model.config.vocab_size;
+    let prompt = vec![1u32, 2, 3, 4];
+    let max_new = 5usize;
+
+    let pipeline = GenerationPipeline::new(&model);
+
+    // ── Run 1 ─────────────────────────────────────────────────────────────────
+    model.reset_state();
+    let mut state1 = ModelState::Recurrent;
+    let config1 = GenerationConfig {
+        max_new_tokens: max_new,
+        seed: Some(42),
+        ..Default::default()
+    };
+    let output1 = pipeline.generate(&prompt, config1, Some(&mut state1));
+
+    // token_ids must be prompt + generated
+    assert_eq!(
+        output1.token_ids.len(),
+        prompt.len() + output1.num_generated_tokens,
+        "token_ids length must equal prompt length + num_generated_tokens"
+    );
+
+    // Prompt tokens are preserved at the front
+    assert_eq!(
+        &output1.token_ids[..prompt.len()],
+        prompt.as_slice(),
+        "first tokens in output must be the prompt"
+    );
+
+    // All generated tokens must be valid vocab IDs
+    for (i, &tok) in output1.token_ids[prompt.len()..].iter().enumerate() {
+        assert!(
+            (tok as usize) < vocab_size,
+            "generated token[{i}] = {tok} is out of vocab range (vocab_size={vocab_size})"
+        );
+    }
+
+    // At least one token was generated
+    assert!(
+        output1.num_generated_tokens > 0,
+        "num_generated_tokens must be > 0"
+    );
+
+    // ── Run 2 (determinism check) ─────────────────────────────────────────────
+    model.reset_state();
+    let mut state2 = ModelState::Recurrent;
+    let config2 = GenerationConfig {
+        max_new_tokens: max_new,
+        seed: Some(42),
+        ..Default::default()
+    };
+    let output2 = pipeline.generate(&prompt, config2, Some(&mut state2));
+
+    assert_eq!(
+        output1.token_ids, output2.token_ids,
+        "greedy generation must be deterministic across two runs"
+    );
+    assert_eq!(
+        output1.num_generated_tokens, output2.num_generated_tokens,
+        "num_generated_tokens must match across two runs"
+    );
 }
