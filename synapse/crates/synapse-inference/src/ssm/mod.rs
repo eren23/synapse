@@ -6,8 +6,11 @@
 //! Supported architectures:
 //! - **Mamba**: Selective State Space Model with selective scan.
 //! - **RWKV-7**: RNN-based architecture with WKV recurrence.
+//! - **DeltaNet**: Gated linear attention (used in Qwen3.5 hybrid models).
 
 pub mod config;
+pub mod deltanet;
+pub mod deltanet_state;
 pub mod mamba_block;
 pub mod mamba_model;
 pub mod rwkv_block;
@@ -19,6 +22,8 @@ pub mod state;
 pub mod wkv;
 
 pub use config::MambaConfig;
+pub use deltanet::{deltanet_seq, deltanet_step, l2_normalize};
+pub use deltanet_state::DeltaNetLayerState;
 pub use mamba_block::MambaBlock;
 pub use mamba_model::MambaModel;
 pub use rwkv_block::RwkvBlock;
