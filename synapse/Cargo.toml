@@ -168,6 +168,10 @@ name = "rwkv_hf_validation"
 path = "tests/integration/rwkv_hf_validation.rs"
 
 [[example]]
+name = "export_mamba_int8"
+path = "examples/export_mamba_int8.rs"
+
+[[example]]
 name = "mamba_generate"
 path = "examples/mamba_generate.rs"
 

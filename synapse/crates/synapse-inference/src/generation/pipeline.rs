@@ -1,7 +1,21 @@
-use std::time::Instant;
+use std::time::Duration;
 
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+
+// WASM doesn't support std::time::Instant. Use a shim that returns zero durations.
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct Instant;
+
+#[cfg(target_arch = "wasm32")]
+impl Instant {
+    fn now() -> Self { Instant }
+    fn elapsed(&self) -> Duration { Duration::ZERO }
+}
 
 use crate::model::traits::{Model, ModelState};
 

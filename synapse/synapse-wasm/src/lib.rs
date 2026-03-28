@@ -2091,6 +2091,207 @@ impl NeoUnify {
     }
 }
 
+// ════════════════════════════════════════════════════════════════════
+// SSM Models (Mamba / RWKV) — the moat: runs in browser, llama.cpp can't
+// ════════════════════════════════════════════════════════════════════
+
+use synapse_inference::ssm::{MambaConfig, MambaModel};
+use synapse_inference::quantization::QuantizedMambaModel;
+use synapse_inference::weight_loading::{parse_safetensors, RawTensor};
+use synapse_inference::model::Model;
+use synapse_inference::tokenizer::Tokenizer;
+
+/// Mamba language model running in WASM.
+///
+/// Usage from JS:
+/// ```js
+/// const configJson = await (await fetch("config.json")).text();
+/// const weightsBytes = new Uint8Array(await (await fetch("model.safetensors")).arrayBuffer());
+/// const model = WasmMamba.create(configJson, weightsBytes);
+/// const tokens = model.generate(new Uint32Array([510, 5347, 273]), 20, 0.8);
+/// ```
+#[wasm_bindgen]
+pub struct WasmMamba {
+    model: MambaModel,
+    tokenizer: Option<Tokenizer>,
+}
+
+#[wasm_bindgen]
+impl WasmMamba {
+    /// Create a Mamba model from config JSON and safetensors bytes.
+    pub fn create(config_json: &str, weights_bytes: &[u8]) -> Result<WasmMamba, JsError> {
+        console_error_panic_hook::set_once();
+        let json: serde_json::Value = serde_json::from_str(config_json)
+            .map_err(|e| JsError::new(&format!("Invalid config JSON: {e}")))?;
+
+        let d_model = json["hidden_size"].as_u64()
+            .or(json["d_model"].as_u64())
+            .unwrap_or(768) as usize;
+        let dt_rank = json["dt_rank"].as_u64()
+            .or(json["time_step_rank"].as_u64())
+            .map(|v| v as usize)
+            .unwrap_or_else(|| (d_model + 15) / 16);
+
+        let config = MambaConfig {
+            d_model,
+            d_state: json["state_size"].as_u64()
+                .or(json["d_state"].as_u64())
+                .unwrap_or(16) as usize,
+            d_conv: json["conv_kernel"].as_u64()
+                .or(json["d_conv"].as_u64())
+                .unwrap_or(4) as usize,
+            expand: json["expand"].as_u64().unwrap_or(2) as usize,
+            dt_rank,
+            num_layers: json["num_hidden_layers"].as_u64()
+                .or(json["n_layer"].as_u64())
+                .unwrap_or(24) as usize,
+            vocab_size: json["vocab_size"].as_u64().unwrap_or(50280) as usize,
+            norm_eps: json["layer_norm_epsilon"].as_f64()
+                .or(json["norm_epsilon"].as_f64())
+                .unwrap_or(1e-5),
+        };
+
+        let weights = parse_safetensors(weights_bytes)
+            .map_err(|e| JsError::new(&format!("Failed to parse weights: {e}")))?;
+
+        let model = MambaModel::from_weights(config, &weights)
+            .map_err(|e| JsError::new(&format!("Failed to load model: {e}")))?;
+
+        Ok(WasmMamba { model, tokenizer: None })
+    }
+
+    /// Load a tokenizer from tokenizer.json bytes.
+    pub fn load_tokenizer(&mut self, tokenizer_json: &[u8]) -> Result<(), JsError> {
+        let json_str = std::str::from_utf8(tokenizer_json)
+            .map_err(|e| JsError::new(&format!("Invalid UTF-8 in tokenizer: {e}")))?;
+        let tokenizer = Tokenizer::from_json(json_str)
+            .map_err(|e| JsError::new(&format!("Failed to parse tokenizer: {e}")))?;
+        self.tokenizer = Some(tokenizer);
+        Ok(())
+    }
+
+    /// Generate text from a string prompt. Tokenization happens in WASM.
+    pub fn generate_text(&self, prompt: &str, max_tokens: u32, temperature: f32, seed: u32) -> Result<String, JsError> {
+        let tok = self.tokenizer.as_ref()
+            .ok_or_else(|| JsError::new("Tokenizer not loaded. Call load_tokenizer() first."))?;
+
+        let prompt_tokens = tok.encode(prompt)
+            .map_err(|e| JsError::new(&format!("Encode failed: {e}")))?;
+
+        let gen_tokens = self.generate(&prompt_tokens, max_tokens, temperature, seed)?;
+
+        let text = tok.decode(&gen_tokens)
+            .map_err(|e| JsError::new(&format!("Decode failed: {e}")))?;
+
+        Ok(text)
+    }
+
+    /// Generate tokens from a prompt.
+    ///
+    /// Returns the generated token IDs (excluding prompt).
+    pub fn generate(&self, prompt_tokens: &[u32], max_tokens: u32, temperature: f32, seed: u32) -> Result<Vec<u32>, JsError> {
+        use synapse_inference::generation::{GenerationConfig, GenerationPipeline, TemperatureSampler, Sampler};
+        use synapse_inference::model::ModelState;
+
+        self.model.reset_state();
+
+        let pipeline = GenerationPipeline::new(&self.model);
+
+        let sampler: Option<Box<dyn Sampler>> = if temperature > 0.01 {
+            Some(Box::new(TemperatureSampler { temperature }))
+        } else {
+            None
+        };
+
+        let config = GenerationConfig {
+            max_new_tokens: max_tokens as usize,
+            sampler,
+            seed: Some(seed as u64),
+            ..Default::default()
+        };
+
+        let mut state = ModelState::Recurrent;
+        let output = pipeline.generate(prompt_tokens, config, Some(&mut state));
+
+        // Return only the generated tokens (after prompt)
+        Ok(output.token_ids[prompt_tokens.len()..].to_vec())
+    }
+
+    /// Run a forward pass and return logits for the last token.
+    pub fn forward(&self, token_ids: &[u32]) -> Vec<f32> {
+        self.model.forward(token_ids).logits
+    }
+
+    /// Get the vocabulary size.
+    pub fn vocab_size(&self) -> usize {
+        self.model.config.vocab_size
+    }
+
+    /// Get the model dimension.
+    pub fn d_model(&self) -> usize {
+        self.model.config.d_model
+    }
+
+    /// Get the number of layers.
+    pub fn num_layers(&self) -> usize {
+        self.model.config.num_layers
+    }
+
+    /// Quantize to INT8. Returns a new WasmMambaInt8 with ~4x smaller projections.
+    pub fn quantize_int8(self) -> WasmMambaInt8 {
+        let q_model = QuantizedMambaModel::from_f32(&self.model);
+        WasmMambaInt8 { model: q_model }
+    }
+}
+
+/// INT8-quantized Mamba model for WASM — ~4x smaller linear projections.
+#[wasm_bindgen]
+pub struct WasmMambaInt8 {
+    model: QuantizedMambaModel,
+}
+
+#[wasm_bindgen]
+impl WasmMambaInt8 {
+    /// Create directly from config + safetensors (loads f32 then quantizes).
+    pub fn create(config_json: &str, weights_bytes: &[u8]) -> Result<WasmMambaInt8, JsError> {
+        let f32_model = WasmMamba::create(config_json, weights_bytes)?;
+        Ok(f32_model.quantize_int8())
+    }
+
+    pub fn generate(&self, prompt_tokens: &[u32], max_tokens: u32, temperature: f32, seed: u32) -> Result<Vec<u32>, JsError> {
+        use synapse_inference::generation::{GenerationConfig, GenerationPipeline, TemperatureSampler, Sampler};
+        use synapse_inference::model::ModelState;
+
+        self.model.reset_state();
+        let pipeline = GenerationPipeline::new(&self.model);
+
+        let sampler: Option<Box<dyn Sampler>> = if temperature > 0.01 {
+            Some(Box::new(TemperatureSampler { temperature }))
+        } else {
+            None
+        };
+
+        let config = GenerationConfig {
+            max_new_tokens: max_tokens as usize,
+            sampler,
+            seed: Some(seed as u64),
+            ..Default::default()
+        };
+
+        let mut state = ModelState::Recurrent;
+        let output = pipeline.generate(prompt_tokens, config, Some(&mut state));
+        Ok(output.token_ids[prompt_tokens.len()..].to_vec())
+    }
+
+    pub fn forward(&self, token_ids: &[u32]) -> Vec<f32> {
+        self.model.forward(token_ids).logits
+    }
+
+    pub fn vocab_size(&self) -> usize { self.model.config.vocab_size }
+    pub fn d_model(&self) -> usize { self.model.config.d_model }
+    pub fn num_layers(&self) -> usize { self.model.config.num_layers }
+}
+
 #[cfg(test)]
 mod tests {
     use super::capability_report_json;

@@ -394,7 +394,19 @@ impl InferenceEngine {
     }
 
     /// Quantize the model to INT8. Call after loading weights.
+    ///
+    /// For transformer models, creates an INT8 quantized copy.
+    /// For SSM models (Mamba), replaces the SSM model with INT8 version.
     pub fn quantize(&mut self) {
+        if let Some(ref ssm) = self.ssm_model {
+            // Try to downcast to MambaModel for quantization
+            let ssm_ptr = ssm.as_ref() as *const dyn Model;
+            // Safety: we know SSM models from from_pretrained_mamba are MambaModel
+            let mamba: &MambaModel = unsafe { &*(ssm_ptr as *const MambaModel) };
+            let quantized = crate::quantization::QuantizedMambaModel::from_f32(mamba);
+            self.ssm_model = Some(Box::new(quantized));
+            return;
+        }
         self.quantized_model = Some(quantize_model(&self.model));
     }
 

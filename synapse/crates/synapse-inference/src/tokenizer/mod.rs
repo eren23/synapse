@@ -136,9 +136,20 @@ impl Tokenizer {
         Self::from_parts(vocab, parse_merges_txt(&merges_txt), HashMap::new(), None)
     }
 
+    /// Create a Tokenizer from a tokenizer.json string (no filesystem access).
+    /// Useful for WASM where files aren't available.
+    pub fn from_json(json: &str) -> Result<Self, TokenizerError> {
+        let value: Value = serde_json::from_str(json)?;
+        Self::from_tokenizer_json_value(&value)
+    }
+
     fn from_tokenizer_json(path: &Path) -> Result<Self, TokenizerError> {
         let json = fs::read_to_string(path)?;
         let value: Value = serde_json::from_str(&json)?;
+        Self::from_tokenizer_json_value(&value)
+    }
+
+    fn from_tokenizer_json_value(value: &Value) -> Result<Self, TokenizerError> {
         let model = value
             .get("model")
             .ok_or_else(|| TokenizerError::Invalid("tokenizer.json missing model".into()))?;

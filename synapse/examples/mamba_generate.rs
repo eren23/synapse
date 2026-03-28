@@ -22,6 +22,7 @@ fn main() {
     let mut max_tokens: usize = 50;
     let mut interactive = false;
     let mut temperature: f32 = 0.8;
+    let mut quantize = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -31,12 +32,14 @@ fn main() {
             "--max-tokens" => { i += 1; max_tokens = args[i].parse().expect("invalid --max-tokens"); }
             "--interactive" | "-i" => { interactive = true; }
             "--temperature" | "-t" => { i += 1; temperature = args[i].parse().expect("invalid --temperature"); }
+            "--quantize" | "-q" => { quantize = true; }
             "--help" | "-h" => {
                 eprintln!("Usage: mamba_generate [OPTIONS]");
-                eprintln!("  --model-dir DIR    Path to Mamba model directory (required)");
+                eprintln!("  --model-dir DIR    Path to Mamba/RWKV model directory (required)");
                 eprintln!("  --prompt TEXT       Input prompt (default: \"The meaning of life is\")");
                 eprintln!("  --max-tokens N      Max tokens to generate (default: 50)");
                 eprintln!("  --temperature T     Sampling temperature (default: 0.8, 0 = greedy)");
+                eprintln!("  --quantize, -q      Quantize to INT8 (faster, ~4x less memory)");
                 eprintln!("  --interactive, -i   Interactive mode (type prompts, Ctrl-D to quit)");
                 return;
             }
@@ -55,9 +58,15 @@ fn main() {
     eprint!("Loading model from {}... ", model_dir.display());
     io::stderr().flush().ok();
     let t0 = Instant::now();
-    let engine = InferenceEngine::from_pretrained(&model_dir)
+    let mut engine = InferenceEngine::from_pretrained(&model_dir)
         .unwrap_or_else(|e| { eprintln!("\nFailed: {e}"); std::process::exit(1); });
     eprintln!("done ({:.1}s)", t0.elapsed().as_secs_f32());
+
+    if quantize {
+        eprint!("Quantizing to INT8... ");
+        engine.quantize();
+        eprintln!("done");
+    }
 
     // Get tokenizer — try model dir first, fall back to GPT-NeoX from HF cache
     let tokenizer = engine.tokenizer.clone().unwrap_or_else(|| {
@@ -85,7 +94,8 @@ fn main() {
         std::process::exit(1);
     }
 
-    eprintln!("Model: {} | SSM | max_tokens={max_tokens} temperature={temperature}", engine.config.name);
+    let q_label = if quantize { " INT8" } else { " f32" };
+    eprintln!("Model: {} | SSM{q_label} | max_tokens={max_tokens} temperature={temperature}", engine.config.name);
 
     if interactive {
         eprintln!("Interactive mode. Type a prompt, press Enter. Ctrl-D to quit.\n");
