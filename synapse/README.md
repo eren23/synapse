@@ -98,6 +98,36 @@ See [BUILD.md](BUILD.md) for cross-compilation details.
 | Q4_K / Q6_K | GGUF | Dequant -> f32 | GGUF file |
 | Q8_0 | GGUF | Dequant -> f32 | GGUF file |
 
+## Supported Architectures
+
+Synapse supports multiple model architecture families beyond standard transformers:
+
+| Architecture | Models | Memory | Key Feature |
+|---|---|---|---|
+| **Transformer (GQA/MHA)** | Qwen3, LLaMA, Mistral, Phi-3, Gemma | O(n) KV cache | Standard attention, INT8/Q4/Ternary quantization |
+| **Mamba (SSM)** | Mamba-130M, Mamba-370M | O(1) constant | Selective state spaces, no KV cache |
+| **RWKV-7** | RWKV-7 0.1B, 0.4B | O(1) constant | WKV recurrence, infinite context |
+| **Hybrid DeltaNet** | Qwen3.5-0.8B | Mixed O(1)+O(n) | 75% linear attention + 25% GQA |
+| **Diffusion LLM** | Tiny-A2D 0.6B | O(1) per step | Non-autoregressive parallel decode |
+
+### SSM Models (Mamba, RWKV)
+
+State Space Models use constant O(1) memory regardless of sequence length — no KV cache. This makes them ideal for edge devices (ESP32-P4), browser WASM inference, and long-context applications.
+
+```rust
+let engine = InferenceEngine::from_pretrained(Path::new("./models/mamba-130m"))?;
+let output = engine.generate_text("Hello", GenerationConfig::default())?;
+```
+
+### Ternary Quantization
+
+2-bit weight quantization where weights are {-1, 0, +1}. Multiplication becomes addition/subtraction — ideal for WASM and microcontrollers.
+
+```rust
+let mut engine = InferenceEngine::from_pretrained(path)?;
+engine.quantize_ternary(); // 2-bit weights, ~16x compression
+```
+
 ## World Models (LEWM)
 
 Latent Emergent World Model — ViT encoder + DiT predictor for latent state prediction and trajectory rollouts. Runs on all three targets.
