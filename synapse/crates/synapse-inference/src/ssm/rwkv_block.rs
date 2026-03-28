@@ -9,7 +9,6 @@
 
 use crate::ops::matmul::matmul_t;
 use crate::ssm::rwkv_state::RwkvLayerState;
-use crate::ssm::wkv::wkv7_step;
 
 /// A single RWKV-7 "Goose" block.
 pub struct RwkvBlock {
@@ -71,6 +70,12 @@ pub struct RwkvBlock {
 
     // FFN
     pub ffn_x_k: Vec<f32>,           // [h]
+    // Value residual mixing (layers 1+, empty for layer 0)
+    pub v_rank: usize,  // typically 32, 0 if no value residual
+    pub v0: Vec<f32>,   // [h] or empty
+    pub v1: Vec<f32>,   // [v_rank, h] (transposed for matmul_t) or empty
+    pub v2: Vec<f32>,   // [h, v_rank] (transposed for matmul_t) or empty
+
     pub ffn_key_weight: Vec<f32>,     // [intermediate, h]
     pub ffn_value_weight: Vec<f32>,   // [h, intermediate]
 }
@@ -134,8 +139,11 @@ fn l2_norm_per_head(x: &[f32], scale: &[f32], num_heads: usize, head_size: usize
 }
 
 impl RwkvBlock {
-    /// Process a single token `[hidden_size]` -> `[hidden_size]`.
-    pub fn forward_one(&self, hidden: &[f32], state: &mut RwkvLayerState) -> Vec<f32> {
+    /// Process a single token `[hidden_size]` -> `(hidden_out, v_out)`.
+    ///
+    /// `v_first`: value from layer 0 (None for layer 0, Some for layers 1+).
+    /// Returns `(hidden_out, v)` where `v` is the raw value vector (for v_first tracking).
+    pub fn forward_one(&self, hidden: &[f32], state: &mut RwkvLayerState, v_first: Option<&[f32]>) -> (Vec<f32>, Vec<f32>) {
         let h = self.hidden_size;
         let nh = self.num_heads;
         let hs = self.head_size;
@@ -145,7 +153,7 @@ impl RwkvBlock {
         // 1. LayerNorm
         let normed = layernorm(hidden, &self.ln1_weight, &self.ln1_bias, self.norm_eps, h);
 
-        // 2. Token shift: xx = normed - prev
+        // 2. Token shift: xx = prev - normed (shifted - current)
         //    Per-component blend: xr = normed + xx * x_r, etc.
         let mut xr = vec![0.0f32; h];
         let mut xk = vec![0.0f32; h];
@@ -154,7 +162,7 @@ impl RwkvBlock {
         let mut xa = vec![0.0f32; h];
         let mut xg = vec![0.0f32; h];
         for i in 0..h {
-            let xx = normed[i] - state.time_mix_prev[i];
+            let xx = state.time_mix_prev[i] - normed[i];
             xr[i] = normed[i] + xx * self.x_r[i];
             xk[i] = normed[i] + xx * self.x_k[i];
             xv[i] = normed[i] + xx * self.x_v[i];
@@ -167,7 +175,21 @@ impl RwkvBlock {
         // 3. Linear projections
         let r = matmul_t(&xr, &self.r_proj, 1, h, h);
         let k = matmul_t(&xk, &self.k_proj, 1, h, h);
-        let v = matmul_t(&xv, &self.v_proj, 1, h, h);
+        let mut v = matmul_t(&xv, &self.v_proj, 1, h, h);
+        let v_out = v.clone(); // save raw v for v_first tracking
+
+        // 3b. Value residual mixing (layers 1+)
+        if let Some(vf) = v_first {
+            if !self.v0.is_empty() {
+                let vr = self.v_rank;
+                let xv_v1 = matmul_t(&xv, &self.v1, 1, h, vr);
+                let v_mix = matmul_t(&xv_v1, &self.v2, 1, vr, h);
+                for i in 0..h {
+                    let lerp = sigmoid(self.v0[i] + v_mix[i]);
+                    v[i] = v[i] + (vf[i] - v[i]) * lerp;
+                }
+            }
+        }
 
         // 4. Decay: w = exp(-0.606531 * sigmoid(w0 + tanh(xw @ w1) @ w2))
         let xw_w1 = matmul_t(&xw, &self.w1, 1, h, self.decay_rank);
@@ -189,48 +211,86 @@ impl RwkvBlock {
         let xg_g1_sig: Vec<f32> = xg_g1.iter().map(|&v| sigmoid(v)).collect();
         let g = matmul_t(&xg_g1_sig, &self.g2, 1, self.gate_rank, h);
 
-        // 7. Key modulation: kk = L2_norm(k * k_k) per head
+        // 7. Key modulation:
+        //    kk = L2_norm(k * k_k) per head  — used for ab feedback in WKV
+        //    k = k * (1 + (a-1) * k_a)       — modifies k used for vk outer product
         let k_scaled: Vec<f32> = (0..h).map(|i| k[i] * self.k_k[i]).collect();
         let kk = l2_norm_per_head(&k_scaled, &vec![1.0f32; h], nh, hs);
+        let k_mod: Vec<f32> = (0..h)
+            .map(|i| k[i] * (1.0 + (alpha[i] - 1.0) * self.k_a[i]))
+            .collect();
 
         // 8. Per-head WKV7 recurrence
-        // Alpha modulated by k_a: a_mod = kk * (a * k_a)
-        // But in the kernel, we pass kk (normalized key) and alpha separately
+        //    Uses kk (normalized) for ab feedback, k_mod for vk outer product
+        //    Python: vk = outer(v, k), ab = outer(-kk, kk*a)
+        //    We pass kk to the kernel (used for ab), but need k_mod for vk.
+        //    The kernel uses k for both ab and vk, so we need to do this:
+        //    Pass kk for ab computation, but the vk term uses k_mod.
+        //    Simplest: compute vk and ab separately, or modify the kernel.
+        //    For correctness, let's modify in-place: the kernel's k param is used for
+        //    ab (should be kk) and vk (should be k_mod). These differ.
+        //    → We must compute ab outside the kernel, or split the kernel.
+        //    For now, let's do it inline per head.
         let mut wkv_out = vec![0.0f32; h];
         for head in 0..nh {
             let off = head * hs;
             let r_head = &r[off..off + hs];
             let kk_head = &kk[off..off + hs];
+            let k_mod_head = &k_mod[off..off + hs];
             let v_head = &v[off..off + hs];
             let w_head = &w[off..off + hs];
-            // Alpha for this head, modulated by k_a
-            let a_head: Vec<f32> = (0..hs)
-                .map(|j| alpha[off + j] * self.k_a[off + j])
-                .collect();
+            let a_head = &alpha[off..off + hs];
             let wkv_state = &mut state.wkv_state[head * hs * hs..(head + 1) * hs * hs];
 
-            let o_head = wkv7_step(r_head, kk_head, v_head, w_head, &a_head, wkv_state, hs);
-            wkv_out[off..off + hs].copy_from_slice(&o_head);
+            // Inline WKV7 step with separate kk (for ab) and k_mod (for vk)
+            // ka[j] = kk[j] * a[j]
+            let ka: Vec<f32> = (0..hs).map(|j| kk_head[j] * a_head[j]).collect();
+
+            // sdk[d] = sum_l(state[d,l] * kk[l])
+            let mut sdk = vec![0.0f32; hs];
+            for d in 0..hs {
+                let mut dot = 0.0f32;
+                for l in 0..hs {
+                    dot += wkv_state[d * hs + l] * kk_head[l];
+                }
+                sdk[d] = dot;
+            }
+
+            // state[d,j] = w[j]*state[d,j] - sdk[d]*ka[j] + v[d]*k_mod[j]
+            for d in 0..hs {
+                let v_d = v_head[d];
+                for j in 0..hs {
+                    wkv_state[d * hs + j] = w_head[j] * wkv_state[d * hs + j]
+                        - sdk[d] * ka[j]
+                        + v_d * k_mod_head[j];
+                }
+            }
+
+            // output[d] = sum_j(state[d,j] * r[j])
+            for d in 0..hs {
+                let mut sum = 0.0f32;
+                for j in 0..hs {
+                    sum += wkv_state[d * hs + j] * r_head[j];
+                }
+                wkv_out[off + d] = sum;
+            }
         }
 
         // 9. GroupNorm (per-head, eps = head_size * 1e-5)
         let gn_eps = hs as f32 * 1e-5;
         let normed_wkv = group_norm_heads(&wkv_out, &self.g_norm_weight, &self.g_norm_bias, nh, hs, gn_eps);
 
-        // 10. R-K coupling: output += (r * k * r_k) @ v per head
+        // 10. R-K coupling: sum(r*k*r_k) per head → scalar, then * v
+        //    Python: ((r*k*self.r_k).sum(dim=-1, keepdim=True) * v)
         let mut rk_contrib = vec![0.0f32; h];
         for head in 0..nh {
             let off = head * hs;
-            // Compute per-element r * k * r_k, then dot with v
             let mut dot = 0.0f32;
             for j in 0..hs {
-                dot += r[off + j] * k[off + j] * self.r_k[head * hs + j] * v[off + j];
+                dot += r[off + j] * k[off + j] * self.r_k[head * hs + j];
             }
-            // This is a simplified version — each output dim gets the same scalar contribution
-            // Actually, the real RWKV does: (r * k * r_k).sum() * v per head
-            // Let me compute it correctly: sum_j(r[j] * k[j] * r_k[j]) then scale v
             for j in 0..hs {
-                rk_contrib[off + j] = r[off + j] * k[off + j] * self.r_k[head * hs + j] * v[off + j];
+                rk_contrib[off + j] = dot * v[off + j];
             }
         }
 
@@ -250,10 +310,10 @@ impl RwkvBlock {
         // 1. LayerNorm
         let normed2 = layernorm(&hidden_after_time, &self.ln2_weight, &self.ln2_bias, self.norm_eps, h);
 
-        // 2. Token shift (single lerp for FFN)
+        // 2. Token shift (single lerp for FFN): xx = prev - current
         let xk_ffn: Vec<f32> = (0..h)
             .map(|i| {
-                let xx = normed2[i] - state.channel_mix_prev[i];
+                let xx = state.channel_mix_prev[i] - normed2[i];
                 normed2[i] + xx * self.ffn_x_k[i]
             })
             .collect();
@@ -268,19 +328,23 @@ impl RwkvBlock {
         let v_ffn = matmul_t(&k_sq, &self.ffn_value_weight, 1, self.intermediate_size, h);
 
         // 4. Residual
-        (0..h).map(|i| hidden_after_time[i] + v_ffn[i]).collect()
+        let result: Vec<f32> = (0..h).map(|i| hidden_after_time[i] + v_ffn[i]).collect();
+        (result, v_out)
     }
 
     /// Process a full sequence `[seq_len * hidden_size]` -> `[seq_len * hidden_size]`.
-    pub fn forward_seq(&self, hidden: &[f32], seq_len: usize, state: &mut RwkvLayerState) -> Vec<f32> {
+    /// Returns `(output, last_v)` where `last_v` is the raw v from the last token.
+    pub fn forward_seq(&self, hidden: &[f32], seq_len: usize, state: &mut RwkvLayerState, v_first: Option<&[f32]>) -> (Vec<f32>, Vec<f32>) {
         let h = self.hidden_size;
         let mut output = Vec::with_capacity(seq_len * h);
+        let mut last_v = vec![0.0f32; h];
         for t in 0..seq_len {
             let token = &hidden[t * h..(t + 1) * h];
-            let out = self.forward_one(token, state);
+            let (out, v) = self.forward_one(token, state, v_first);
             output.extend_from_slice(&out);
+            last_v = v;
         }
-        output
+        (output, last_v)
     }
 }
 
@@ -347,6 +411,8 @@ mod tests {
             g_norm_bias: vec![0.0f32; hidden_size],
             ln2_weight: vec![1.0f32; hidden_size],
             ln2_bias: vec![0.0f32; hidden_size],
+            v_rank: 0,
+            v0: vec![], v1: vec![], v2: vec![],
             ffn_x_k: pseudo_random_vec(60, hidden_size),
             ffn_key_weight: pseudo_random_vec(8, intermediate_size * hidden_size),
             ffn_value_weight: pseudo_random_vec(9, hidden_size * intermediate_size),
@@ -359,7 +425,7 @@ mod tests {
         let mut state = RwkvLayerState::new(block.hidden_size, block.num_heads, block.head_size);
         let input = pseudo_random_vec(42, block.hidden_size);
 
-        let output = block.forward_one(&input, &mut state);
+        let (output, _v) = block.forward_one(&input, &mut state, None);
 
         assert_eq!(output.len(), block.hidden_size, "output length should be hidden_size");
         for (i, &v) in output.iter().enumerate() {
@@ -374,7 +440,7 @@ mod tests {
         let mut state = RwkvLayerState::new(block.hidden_size, block.num_heads, block.head_size);
         let input = pseudo_random_vec(7, seq_len * block.hidden_size);
 
-        let output = block.forward_seq(&input, seq_len, &mut state);
+        let (output, _v) = block.forward_seq(&input, seq_len, &mut state, None);
 
         assert_eq!(output.len(), seq_len * block.hidden_size);
         for (i, &v) in output.iter().enumerate() {
@@ -390,13 +456,13 @@ mod tests {
         let input = pseudo_random_vec(99, seq_len * h);
 
         let mut state_seq = RwkvLayerState::new(h, block.num_heads, block.head_size);
-        let seq_output = block.forward_seq(&input, seq_len, &mut state_seq);
+        let (seq_output, _) = block.forward_seq(&input, seq_len, &mut state_seq, None);
 
         let mut state_steps = RwkvLayerState::new(h, block.num_heads, block.head_size);
         let mut step_outputs = Vec::with_capacity(seq_len * h);
         for t in 0..seq_len {
             let token = &input[t * h..(t + 1) * h];
-            let out = block.forward_one(token, &mut state_steps);
+            let (out, _) = block.forward_one(token, &mut state_steps, None);
             step_outputs.extend_from_slice(&out);
         }
 

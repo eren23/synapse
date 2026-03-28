@@ -47,6 +47,9 @@ pub struct RwkvModel {
     pub config: RwkvConfig,
     /// Embedding table: `[vocab_size, hidden_size]` (row-major).
     pub embed_tokens: Vec<f32>,
+    /// Pre-LayerNorm applied to embeddings before first block.
+    pub pre_ln_weight: Option<Vec<f32>>,
+    pub pre_ln_bias: Option<Vec<f32>>,
     pub blocks: Vec<RwkvBlock>,
     /// Final LayerNorm weight: `[hidden_size]`.
     pub final_norm_weight: Vec<f32>,
@@ -77,6 +80,8 @@ impl RwkvModel {
         RwkvModel {
             config,
             embed_tokens,
+            pre_ln_weight: None,
+            pre_ln_bias: None,
             blocks,
             final_norm_weight,
             final_norm_bias,
@@ -110,10 +115,19 @@ impl RwkvModel {
             }
         }
 
+        // 1b. Pre-LayerNorm (applied to embeddings before blocks)
+        if let (Some(w), Some(b)) = (&self.pre_ln_weight, &self.pre_ln_bias) {
+            hidden = layernorm(&hidden, w, b, self.config.norm_eps as f32, h);
+        }
+
         // 2. Process through all blocks sequentially
         let mut state = self.state.borrow_mut();
+        let mut v_first: Option<Vec<f32>> = None;
         for (i, block) in self.blocks.iter().enumerate() {
-            hidden = block.forward_seq(&hidden, seq_len, &mut state.layers[i]);
+            let vf = v_first.as_deref();
+            let (h_out, v_out) = block.forward_seq(&hidden, seq_len, &mut state.layers[i], vf);
+            hidden = h_out;
+            if i == 0 { v_first = Some(v_out); }
         }
         state.advance(seq_len);
 
@@ -150,10 +164,19 @@ impl RwkvModel {
             hidden.copy_from_slice(&self.embed_tokens[id * h..(id + 1) * h]);
         }
 
+        // 1b. Pre-LayerNorm
+        if let (Some(w), Some(b)) = (&self.pre_ln_weight, &self.pre_ln_bias) {
+            hidden = layernorm(&hidden, w, b, self.config.norm_eps as f32, h);
+        }
+
         // 2. Process through all blocks
         let mut state = self.state.borrow_mut();
+        let mut v_first: Option<Vec<f32>> = None;
         for (i, block) in self.blocks.iter().enumerate() {
-            hidden = block.forward_one(&hidden, &mut state.layers[i]);
+            let vf = v_first.as_deref();
+            let (h_out, v_out) = block.forward_one(&hidden, &mut state.layers[i], vf);
+            hidden = h_out;
+            if i == 0 { v_first = Some(v_out); }
         }
         state.advance(1);
 
@@ -331,6 +354,16 @@ impl RwkvModel {
                     .or_else(|_| get(&format!("{att_p}.g_norm.weight")))?,
                 g_norm_bias: get(&format!("{att_p}.ln_x.bias"))
                     .or_else(|_| get(&format!("{att_p}.g_norm.bias")))?,
+                v0: if i > 0 { get_squeeze(&format!("{att_p}.v0")).unwrap_or_default() } else { vec![] },
+                v1: {
+                    let v1_data = if i > 0 { get(&format!("{att_p}.v1")).unwrap_or_default() } else { vec![] };
+                    v1_data
+                },
+                v2: if i > 0 { get(&format!("{att_p}.v2")).unwrap_or_default() } else { vec![] },
+                v_rank: if i > 0 {
+                    // Infer from v1 weight: v1 is [v_rank, h], so v_rank = v1.len() / h
+                    get(&format!("{att_p}.v1")).map(|v| v.len() / h).unwrap_or(0)
+                } else { 0 },
                 ln2_weight: get(&format!("{ln2_p}.weight"))?,
                 ln2_bias: get(&format!("{ln2_p}.bias"))?,
                 ffn_x_k: get_squeeze(&format!("{ffn_p}.x_k"))?,
@@ -339,7 +372,15 @@ impl RwkvModel {
             });
         }
 
-        Ok(RwkvModel::new(config, embed_tokens, blocks, final_norm_weight, final_norm_bias, lm_head_weight))
+        let mut model = RwkvModel::new(config, embed_tokens, blocks, final_norm_weight, final_norm_bias, lm_head_weight);
+
+        // Load pre-LN if present
+        if let Ok(w) = get("model.pre_ln.weight") {
+            model.pre_ln_weight = Some(w);
+            model.pre_ln_bias = Some(get("model.pre_ln.bias").unwrap_or_default());
+        }
+
+        Ok(model)
     }
 }
 
@@ -397,6 +438,10 @@ mod tests {
                 k_k: vec![1.0f32; h], k_a: vec![1.0f32; h],
                 r_k: pseudo_random_vec(s+50, nh*hs),
                 g_norm_weight: vec![1.0f32; h], g_norm_bias: vec![0.0f32; h],
+                v_rank: 0,
+                v0: vec![],
+                v1: vec![],
+                v2: vec![],
                 ln2_weight: vec![1.0f32; h], ln2_bias: vec![0.0f32; h],
                 ffn_x_k: pseudo_random_vec(s+60, h),
                 ffn_key_weight: pseudo_random_vec(s+8, inter*h),

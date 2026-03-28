@@ -134,7 +134,7 @@ fn generate(
     eprint!("{prompt}");
     io::stderr().flush().ok();
 
-    let t0 = Instant::now();
+    let _t0 = Instant::now();
 
     let sampler: Option<Box<dyn synapse_inference::generation::Sampler>> =
         if temperature > 0.01 {

@@ -328,7 +328,6 @@ impl HybridModel {
         let im = config.intermediate_size;
         let nh_dn = config.deltanet_num_heads;
         let hd_dn = config.deltanet_head_dim;
-        let nh_hd_dn = nh_dn * hd_dn;
         let ck = config.deltanet_conv_kernel;
         let nq = config.num_attention_heads;
         let nkv = config.num_kv_heads;

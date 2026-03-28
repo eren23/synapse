@@ -94,63 +94,50 @@ fn test_selective_scan_reference_values() {
 //
 // RWKV-7 WKV recurrence for one head (head_size=2):
 //   ka[j] = k[j] * a[j]
-//   state_dot_k[d] = sum_l(state[d,l] * k[l])
-//   state[d,j] = w[d] * state[d,j] - state_dot_k[d] * ka[j] + k[d] * v[j]
-//   output[d] = sum_j(state[d,j] * r[j])     ← output AFTER state update
+//   sdk[d] = sum_l(state[d,l] * k[l])
+//   state[d,j] = w[j]*state[d,j] - sdk[d]*ka[j] + v[d]*k[j]   ← w[j] column-wise, outer(v,k)
+//   output[d] = sum_j(state[d,j] * r[j])
 //
 // ── Step 1: r=[1,0], k=[1,0.5], v=[2,1], w=[0.9,0.9], a=[0,0] (zero alpha) ──
-//   ka = [0, 0]
-//   state starts at zero → state_dot_k = [0, 0]
-//   state[0,0] = 0.9*0 - 0*0 + 1.0*2.0 = 2.0
-//   state[0,1] = 0.9*0 - 0*0 + 1.0*1.0 = 1.0
-//   state[1,0] = 0.9*0 - 0*0 + 0.5*2.0 = 1.0
-//   state[1,1] = 0.9*0 - 0*0 + 0.5*1.0 = 0.5
-//   output[0] = 2.0*1 + 1.0*0 = 2.0
-//   output[1] = 1.0*1 + 0.5*0 = 1.0
+//   ka = [0, 0], state starts at zero → sdk = [0, 0]
+//   vk = outer(v,k): vk[0,0]=2*1=2, vk[0,1]=2*0.5=1, vk[1,0]=1*1=1, vk[1,1]=1*0.5=0.5
+//   state = 0 + 0 + vk: state = [[2, 1], [1, 0.5]]
+//   output[0] = 2*1 + 1*0 = 2.0
+//   output[1] = 1*1 + 0.5*0 = 1.0
+//
+// ── Step 2: r=[0.5,0.5], k=[1,1], v=[1,1], w=[0.9,0.9], a=[0,0] ──
+//   sdk[0] = state[0,0]*1 + state[0,1]*1 = 2+1 = 3
+//   sdk[1] = state[1,0]*1 + state[1,1]*1 = 1+0.5 = 1.5
+//   vk = outer([1,1],[1,1]) = [[1,1],[1,1]]
+//   state[0,0] = 0.9*2 - 3*0 + 1 = 2.8
+//   state[0,1] = 0.9*1 - 3*0 + 1 = 1.9
+//   state[1,0] = 0.9*1 - 1.5*0 + 1 = 1.9
+//   state[1,1] = 0.9*0.5 - 1.5*0 + 1 = 1.45
+//   output[0] = 2.8*0.5 + 1.9*0.5 = 2.35
+//   output[1] = 1.9*0.5 + 1.45*0.5 = 1.675
 
 #[test]
 fn test_wkv_step_reference_values() {
     let head_size = 2;
     let mut state = vec![0.0f32; head_size * head_size];
 
-    // ── Step 1 (zero alpha = no feedback) ─────────────────────────────────────
     let r1 = vec![1.0f32, 0.0];
     let k1 = vec![1.0f32, 0.5];
     let v1 = vec![2.0f32, 1.0];
-    let w1 = vec![0.9f32, 0.9]; // decay in (0,1)
-    let a1 = vec![0.0f32, 0.0]; // zero alpha = no feedback term
+    let w1 = vec![0.9f32, 0.9];
+    let a1 = vec![0.0f32, 0.0];
 
     let out1 = wkv7_step(&r1, &k1, &v1, &w1, &a1, &mut state, head_size);
-
-    // Output is AFTER state update, so we get state @ r immediately.
     assert_eq!(out1.len(), head_size);
-    assert!(
-        (out1[0] - 2.0).abs() < 1e-5,
-        "step1 out[0] = {} expected 2.0",
-        out1[0]
-    );
-    assert!(
-        (out1[1] - 1.0).abs() < 1e-5,
-        "step1 out[1] = {} expected 1.0",
-        out1[1]
-    );
+    assert!((out1[0] - 2.0).abs() < 1e-5, "step1 out[0] = {} expected 2.0", out1[0]);
+    assert!((out1[1] - 1.0).abs() < 1e-5, "step1 out[1] = {} expected 1.0", out1[1]);
 
-    // State should be k outer v:
+    // State = outer(v,k): [[2,1],[1,0.5]]
     assert!((state[0] - 2.0).abs() < 1e-6, "state[0,0] = {} expected 2.0", state[0]);
     assert!((state[1] - 1.0).abs() < 1e-6, "state[0,1] = {} expected 1.0", state[1]);
     assert!((state[2] - 1.0).abs() < 1e-6, "state[1,0] = {} expected 1.0", state[2]);
     assert!((state[3] - 0.5).abs() < 1e-6, "state[1,1] = {} expected 0.5", state[3]);
 
-    // ── Step 2 (still zero alpha) ─────────────────────────────────────────────
-    // k=[1,1], v=[1,1], w=[0.9,0.9], a=[0,0], r=[0.5,0.5]
-    // state_dot_k[0] = state[0,0]*1 + state[0,1]*1 = 2+1 = 3
-    // state_dot_k[1] = state[1,0]*1 + state[1,1]*1 = 1+0.5 = 1.5
-    // state[0,0] = 0.9*2 - 3*0 + 1*1 = 1.8 + 1 = 2.8
-    // state[0,1] = 0.9*1 - 3*0 + 1*1 = 0.9 + 1 = 1.9
-    // state[1,0] = 0.9*1 - 1.5*0 + 1*1 = 0.9 + 1 = 1.9
-    // state[1,1] = 0.9*0.5 - 1.5*0 + 1*1 = 0.45 + 1 = 1.45
-    // output[0] = 2.8*0.5 + 1.9*0.5 = 2.35
-    // output[1] = 1.9*0.5 + 1.45*0.5 = 1.675
     let r2 = vec![0.5f32, 0.5];
     let k2 = vec![1.0f32, 1.0];
     let v2 = vec![1.0f32, 1.0];
@@ -158,18 +145,9 @@ fn test_wkv_step_reference_values() {
     let a2 = vec![0.0f32, 0.0];
 
     let out2 = wkv7_step(&r2, &k2, &v2, &w2, &a2, &mut state, head_size);
-
     assert_eq!(out2.len(), head_size);
-    assert!(
-        (out2[0] - 2.35).abs() < 1e-4,
-        "step2 out[0] = {} expected 2.35",
-        out2[0]
-    );
-    assert!(
-        (out2[1] - 1.675).abs() < 1e-4,
-        "step2 out[1] = {} expected 1.675",
-        out2[1]
-    );
+    assert!((out2[0] - 2.35).abs() < 1e-4, "step2 out[0] = {} expected 2.35", out2[0]);
+    assert!((out2[1] - 1.675).abs() < 1e-4, "step2 out[1] = {} expected 1.675", out2[1]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

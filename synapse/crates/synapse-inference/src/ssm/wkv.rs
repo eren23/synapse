@@ -50,10 +50,17 @@ pub fn wkv7_step(
     }
 
     // Pure-Rust fallback
+    //
+    // Python reference (line 362-365 of modeling_rwkv7.py):
+    //   vk = v.view(N,1) @ k.view(1,N)              → vk[d,j] = v[d] * k[j]
+    //   ab = (-kk).view(N,1) @ (kk*a).view(1,N)     → ab[d,j] = -kk[d] * kk[j] * a[j]
+    //   state = state * w.view(1,N) + state @ ab + vk → decay is w[j] (column-wise!)
+    //   output = state @ r                            → output[d] = sum_j(state[d,j] * r[j])
     #[cfg(not(feature = "zig-ffi"))]
     {
         let ka: Vec<f32> = (0..n).map(|j| k[j] * a[j]).collect();
 
+        // state_dot_k[d] = sum_l(state[d,l] * k[l])  — for ab feedback
         let mut state_dot_k = vec![0.0f32; n];
         for d in 0..n {
             let mut dot = 0.0f32;
@@ -63,17 +70,19 @@ pub fn wkv7_step(
             state_dot_k[d] = dot;
         }
 
+        // State update: state[d,j] = w[j]*state[d,j] - sdk[d]*ka[j] + v[d]*k[j]
+        //                              ^^^^ column-wise    outer(v,k) not outer(k,v)
         for d in 0..n {
-            let w_d = w[d];
             let sdk = state_dot_k[d];
-            let k_d = k[d];
+            let v_d = v[d];
             for j in 0..n {
-                state[d * n + j] = w_d * state[d * n + j]
+                state[d * n + j] = w[j] * state[d * n + j]
                     - sdk * ka[j]
-                    + k_d * v[j];
+                    + v_d * k[j];
             }
         }
 
+        // Output: output[d] = sum_j(state[d,j] * r[j])
         let mut output = vec![0.0f32; n];
         for d in 0..n {
             let mut sum = 0.0f32;

@@ -66,6 +66,11 @@ def convert(src_dir, dst_dir):
         copy("model.ln_out.weight", "model.norm.weight")
         copy("model.ln_out.bias", "model.norm.bias")
 
+    # Pre-LN (applied to embeddings before first block)
+    if "model.pre_ln.weight" in src_tensors:
+        copy("model.pre_ln.weight")
+        copy("model.pre_ln.bias")
+
     for i in range(num_layers):
         # Detect naming style
         official = f"model.layers.{i}.attn" in ".".join(k for k in src_tensors if f"layers.{i}" in k or f"blocks.{i}" in k)
@@ -122,10 +127,16 @@ def convert(src_dir, dst_dir):
             dst_tensors[f"{att}.w0"] = src_tensors[w_lora_2b].clone()
         else:
             # SmerkyG flat naming
-            for name in ["w0", "w1", "w2"]:
-                src_key = f"{att}.{name}"
-                if src_key in src_tensors:
-                    copy(src_key, squeeze=(name == "w0"))
+            # matmul_t(a, b, M, K, N) needs b as [N, K].
+            # Python does xw @ w1 where w1=[h, rank] → matmul_t needs w1=[rank, h]
+            # Python does tanh_result @ w2 where w2=[rank, h] → matmul_t needs w2=[h, rank]
+            # So BOTH w1 and w2 need transposing for matmul_t convention.
+            if f"{att}.w0" in src_tensors:
+                copy(f"{att}.w0", squeeze=True)
+            if f"{att}.w1" in src_tensors:
+                dst_tensors[f"{att}.w1"] = src_tensors[f"{att}.w1"].t().contiguous().clone()
+            if f"{att}.w2" in src_tensors:
+                dst_tensors[f"{att}.w2"] = src_tensors[f"{att}.w2"].t().contiguous().clone()
 
         # Alpha (a) — LoRA-style → flat
         a_lora_0 = f"{att}.a_lora.lora.0.weight"
@@ -136,10 +147,14 @@ def convert(src_dir, dst_dir):
             dst_tensors[f"{att}.a2"] = src_tensors[a_lora_2w].t().contiguous().clone()
             dst_tensors[f"{att}.a0"] = src_tensors[a_lora_2b].clone()
         else:
-            for name in ["a0", "a1", "a2"]:
+            for name in ["a0"]:
                 src_key = f"{att}.{name}"
                 if src_key in src_tensors:
-                    copy(src_key, squeeze=(name == "a0"))
+                    copy(src_key, squeeze=True)
+            if f"{att}.a1" in src_tensors:
+                dst_tensors[f"{att}.a1"] = src_tensors[f"{att}.a1"].t().contiguous().clone()
+            if f"{att}.a2" in src_tensors:
+                dst_tensors[f"{att}.a2"] = src_tensors[f"{att}.a2"].t().contiguous().clone()
 
         # Gate (g) — LoRA-style → flat
         g_lora_0 = f"{att}.g_lora.lora.0.weight"
@@ -148,10 +163,16 @@ def convert(src_dir, dst_dir):
             dst_tensors[f"{att}.g1"] = src_tensors[g_lora_0].t().contiguous().clone()
             dst_tensors[f"{att}.g2"] = src_tensors[g_lora_2w].t().contiguous().clone()
         else:
-            for name in ["g1", "g2"]:
-                src_key = f"{att}.{name}"
-                if src_key in src_tensors:
-                    copy(src_key)
+            if f"{att}.g1" in src_tensors:
+                dst_tensors[f"{att}.g1"] = src_tensors[f"{att}.g1"].t().contiguous().clone()
+            if f"{att}.g2" in src_tensors:
+                dst_tensors[f"{att}.g2"] = src_tensors[f"{att}.g2"].t().contiguous().clone()
+
+        # Value residual (layers 1+): v0, v1, v2
+        if f"{att}.v0" in src_tensors:
+            copy(f"{att}.v0", squeeze=True)
+            dst_tensors[f"{att}.v1"] = src_tensors[f"{att}.v1"].t().contiguous().clone()
+            dst_tensors[f"{att}.v2"] = src_tensors[f"{att}.v2"].t().contiguous().clone()
 
         # Key modulation — squeeze [1,1,h] or [h]
         for name in ["k_k", "k_a"]:

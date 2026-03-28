@@ -67,33 +67,33 @@ pub fn wkv7Step(
     }
 
     // 3. State update + output in one pass over rows
+    // Python: state = state * w.view(1,N) + state @ ab + vk
+    //   decay w[j] is column-wise, vk[d,j] = v[d]*k[j]
     for (0..n) |d| {
         const row = state + d * n;
-        const w_d = w[d];
         const neg_sdk: F32x4 = @splat(-sdk[d]);
-        const w_splat: F32x4 = @splat(w_d);
-        const kd_splat: F32x4 = @splat(k[d]);
+        const vd_splat: F32x4 = @splat(v[d]);
         var o_acc: f32 = 0.0;
 
         // Vectorized over columns
         var j: usize = 0;
         while (j + VEC_LEN <= n) : (j += VEC_LEN) {
             const h: F32x4 = row[j..][0..VEC_LEN].*;
+            const wv: F32x4 = w[j..][0..VEC_LEN].*;
             const ka_v: F32x4 = ka[j..][0..VEC_LEN].*;
-            const vv: F32x4 = v[j..][0..VEC_LEN].*;
+            const kv: F32x4 = k[j..][0..VEC_LEN].*;
             const rv: F32x4 = r[j..][0..VEC_LEN].*;
 
-            // state[d,j] = w[d]*h + (-sdk[d])*ka[j] + k[d]*v[j]
-            const h_new = w_splat * h + neg_sdk * ka_v + kd_splat * vv;
+            // state[d,j] = w[j]*h + (-sdk[d])*ka[j] + v[d]*k[j]
+            const h_new = wv * h + neg_sdk * ka_v + vd_splat * kv;
             row[j..][0..VEC_LEN].* = h_new;
 
-            // output[d] += state[d,j] * r[j]
             o_acc += @reduce(.Add, h_new * rv);
         }
 
         // Scalar tail
         while (j < n) : (j += 1) {
-            const h_new = w_d * row[j] - sdk[d] * ka[j] + k[d] * v[j];
+            const h_new = w[j] * row[j] - sdk[d] * ka[j] + v[d] * k[j];
             row[j] = h_new;
             o_acc += h_new * r[j];
         }

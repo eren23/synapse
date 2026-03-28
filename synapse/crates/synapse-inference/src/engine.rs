@@ -827,7 +827,11 @@ fn parse_rwkv_config(config_path: &Path) -> Result<RwkvConfig, Box<dyn std::erro
         vocab_size: json["vocab_size"].as_u64().unwrap_or(50304) as usize,
         intermediate_size: json["intermediate_size"]
             .as_u64()
-            .unwrap_or((hidden_size as f64 * 3.5) as u64) as usize,
+            .map(|v| v as usize)
+            .unwrap_or_else(|| {
+                let ratio = json["hidden_ratio"].as_f64().unwrap_or(4.0);
+                (hidden_size as f64 * ratio) as usize
+            }),
         norm_eps: json["layer_norm_epsilon"]
             .as_f64()
             .or(json["norm_eps"].as_f64())
