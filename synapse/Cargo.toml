@@ -144,6 +144,10 @@ path = "tests/integration/mamba_validation.rs"
 name = "rwkv_validation"
 path = "tests/integration/rwkv_validation.rs"
 
+[[test]]
+name = "hybrid_validation"
+path = "tests/integration/hybrid_validation.rs"
+
 [[example]]
 name = "qwen3_chat"
 path = "examples/qwen3_chat.rs"
