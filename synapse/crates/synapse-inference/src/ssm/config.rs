@@ -5,6 +5,7 @@ pub struct MambaConfig {
     pub d_state: usize,
     pub d_conv: usize,
     pub expand: usize,
+    pub dt_rank: usize,
     pub num_layers: usize,
     pub vocab_size: usize,
     pub norm_eps: f64,
@@ -21,6 +22,7 @@ impl MambaConfig {
             d_state: 16,
             d_conv: 4,
             expand: 2,
+            dt_rank: 48, // ceil(768 / 16)
             num_layers: 24,
             vocab_size: 50280,
             norm_eps: 1e-5,
@@ -33,6 +35,7 @@ impl MambaConfig {
             d_state: 16,
             d_conv: 4,
             expand: 2,
+            dt_rank: 64, // ceil(1024 / 16)
             num_layers: 48,
             vocab_size: 50280,
             norm_eps: 1e-5,
@@ -45,6 +48,7 @@ impl MambaConfig {
             d_state: 4,
             d_conv: 4,
             expand: 2,
+            dt_rank: 4, // ceil(64 / 16)
             num_layers: 2,
             vocab_size: 128,
             norm_eps: 1e-5,

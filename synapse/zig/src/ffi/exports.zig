@@ -34,6 +34,8 @@ const silu_ops = synapse.ops.silu;
 const quantize_ops = synapse.ops.quantize;
 const qmatmul_ops = synapse.ops.qmatmul;
 const kvcache_ops = synapse.ops.kvcache;
+const selective_scan_ops = synapse.ops.selective_scan;
+const wkv7_ops = synapse.ops.wkv7;
 
 // --- Allocator modules (separate named modules, no file overlap with synapse) ---
 const ArenaAllocator = @import("arena").ArenaAllocator;
@@ -1680,5 +1682,105 @@ pub export fn syn_kvcache_reset(cache: ?*anyopaque) c_int {
 pub export fn syn_kvcache_truncate(cache: ?*anyopaque, new_len: usize) c_int {
     const c = ptrToKvCache(cache) orelse return SYN_ERR_NULL_PTR;
     c.truncateTo(new_len);
+    return SYN_OK;
+}
+
+// ============================================================
+// Selective Scan (Mamba SSM kernel)
+// ============================================================
+
+pub export fn syn_selective_scan_step(
+    x: ?[*]const f32,
+    delta: ?[*]const f32,
+    a_log: ?[*]const f32,
+    b: ?[*]const f32,
+    c: ?[*]const f32,
+    d_skip: ?[*]const f32,
+    state: ?[*]f32,
+    y: ?[*]f32,
+    d_inner: usize,
+    d_state: usize,
+) c_int {
+    const xp = x orelse return SYN_ERR_NULL_PTR;
+    const dp = delta orelse return SYN_ERR_NULL_PTR;
+    const ap = a_log orelse return SYN_ERR_NULL_PTR;
+    const bp = b orelse return SYN_ERR_NULL_PTR;
+    const cp = c orelse return SYN_ERR_NULL_PTR;
+    const ds = d_skip orelse return SYN_ERR_NULL_PTR;
+    const sp = state orelse return SYN_ERR_NULL_PTR;
+    const yp = y orelse return SYN_ERR_NULL_PTR;
+    selective_scan_ops.selectiveScanStep(xp, dp, ap, bp, cp, ds, sp, yp, d_inner, d_state);
+    return SYN_OK;
+}
+
+pub export fn syn_selective_scan_seq(
+    xs: ?[*]const f32,
+    deltas: ?[*]const f32,
+    a_log: ?[*]const f32,
+    bs: ?[*]const f32,
+    cs: ?[*]const f32,
+    d_skip: ?[*]const f32,
+    state: ?[*]f32,
+    ys: ?[*]f32,
+    seq_len: usize,
+    d_inner: usize,
+    d_state: usize,
+) c_int {
+    const xp = xs orelse return SYN_ERR_NULL_PTR;
+    const dp = deltas orelse return SYN_ERR_NULL_PTR;
+    const ap = a_log orelse return SYN_ERR_NULL_PTR;
+    const bp = bs orelse return SYN_ERR_NULL_PTR;
+    const cp = cs orelse return SYN_ERR_NULL_PTR;
+    const ds = d_skip orelse return SYN_ERR_NULL_PTR;
+    const sp = state orelse return SYN_ERR_NULL_PTR;
+    const yp = ys orelse return SYN_ERR_NULL_PTR;
+    selective_scan_ops.selectiveScanSeq(xp, dp, ap, bp, cp, ds, sp, yp, seq_len, d_inner, d_state);
+    return SYN_OK;
+}
+
+// ============================================================
+// WKV7 (RWKV-7 recurrence kernel)
+// ============================================================
+
+pub export fn syn_wkv7_step(
+    r: ?[*]const f32,
+    k: ?[*]const f32,
+    v: ?[*]const f32,
+    w: ?[*]const f32,
+    a: ?[*]const f32,
+    state: ?[*]f32,
+    out: ?[*]f32,
+    head_size: usize,
+) c_int {
+    const rp = r orelse return SYN_ERR_NULL_PTR;
+    const kp = k orelse return SYN_ERR_NULL_PTR;
+    const vp = v orelse return SYN_ERR_NULL_PTR;
+    const wp = w orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const sp = state orelse return SYN_ERR_NULL_PTR;
+    const op = out orelse return SYN_ERR_NULL_PTR;
+    wkv7_ops.wkv7Step(rp, kp, vp, wp, ap, sp, op, head_size);
+    return SYN_OK;
+}
+
+pub export fn syn_wkv7_seq(
+    r: ?[*]const f32,
+    k: ?[*]const f32,
+    v: ?[*]const f32,
+    w: ?[*]const f32,
+    a: ?[*]const f32,
+    state: ?[*]f32,
+    out: ?[*]f32,
+    seq_len: usize,
+    head_size: usize,
+) c_int {
+    const rp = r orelse return SYN_ERR_NULL_PTR;
+    const kp = k orelse return SYN_ERR_NULL_PTR;
+    const vp = v orelse return SYN_ERR_NULL_PTR;
+    const wp = w orelse return SYN_ERR_NULL_PTR;
+    const ap = a orelse return SYN_ERR_NULL_PTR;
+    const sp = state orelse return SYN_ERR_NULL_PTR;
+    const op = out orelse return SYN_ERR_NULL_PTR;
+    wkv7_ops.wkv7Seq(rp, kp, vp, wp, ap, sp, op, seq_len, head_size);
     return SYN_OK;
 }

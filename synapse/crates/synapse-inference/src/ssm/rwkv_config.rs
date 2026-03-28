@@ -1,4 +1,4 @@
-/// Configuration for an RWKV-7 model.
+/// Configuration for an RWKV-7 "Goose" model.
 #[derive(Debug, Clone)]
 pub struct RwkvConfig {
     pub hidden_size: usize,       // d_model (e.g., 768 for 0.1B, 1024 for 0.4B)
@@ -6,8 +6,13 @@ pub struct RwkvConfig {
     pub head_size: usize,         // per-head dimension (typically 64)
     pub num_layers: usize,
     pub vocab_size: usize,
-    pub intermediate_size: usize, // FFN hidden size (typically 3.5-4x hidden_size)
+    pub intermediate_size: usize, // FFN hidden size (typically 4x hidden_size)
     pub norm_eps: f64,
+
+    // Low-rank decomposition dimensions
+    pub decay_rank: usize,   // w1/w2 rank (typically 64)
+    pub alpha_rank: usize,   // a1/a2 rank (typically 64)
+    pub gate_rank: usize,    // g1/g2 rank (typically 128)
 }
 
 impl RwkvConfig {
@@ -18,8 +23,11 @@ impl RwkvConfig {
             head_size: 64,
             num_layers: 12,
             vocab_size: 50304,
-            intermediate_size: 2688,
+            intermediate_size: 3072, // 4x hidden
             norm_eps: 1e-5,
+            decay_rank: 64,
+            alpha_rank: 64,
+            gate_rank: 128,
         }
     }
 
@@ -30,8 +38,11 @@ impl RwkvConfig {
             head_size: 64,
             num_layers: 24,
             vocab_size: 50304,
-            intermediate_size: 3584,
+            intermediate_size: 4096,
             norm_eps: 1e-5,
+            decay_rank: 64,
+            alpha_rank: 64,
+            gate_rank: 128,
         }
     }
 
@@ -44,6 +55,9 @@ impl RwkvConfig {
             vocab_size: 128,
             intermediate_size: 128,
             norm_eps: 1e-5,
+            decay_rank: 8,
+            alpha_rank: 8,
+            gate_rank: 16,
         }
     }
 }
@@ -60,8 +74,9 @@ mod tests {
         assert_eq!(cfg.head_size, 64);
         assert_eq!(cfg.num_layers, 12);
         assert_eq!(cfg.vocab_size, 50304);
-        assert_eq!(cfg.intermediate_size, 2688);
         assert_eq!(cfg.num_heads * cfg.head_size, cfg.hidden_size);
+        assert_eq!(cfg.decay_rank, 64);
+        assert_eq!(cfg.gate_rank, 128);
     }
 
     #[test]
@@ -82,7 +97,6 @@ mod tests {
         assert_eq!(cfg.head_size, 32);
         assert_eq!(cfg.num_layers, 2);
         assert_eq!(cfg.vocab_size, 128);
-        assert_eq!(cfg.intermediate_size, 128);
         assert_eq!(cfg.num_heads * cfg.head_size, cfg.hidden_size);
     }
 

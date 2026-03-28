@@ -4,7 +4,7 @@
 //! verify mathematical correctness of the kernel implementations.
 
 use synapse_inference::ssm::{
-    deltanet_step, selective_scan_seq, wkv_step, MambaBlock, MambaConfig, MambaModel,
+    deltanet_step, selective_scan_seq, wkv7_step, MambaBlock, MambaConfig, MambaModel,
 };
 use synapse_inference::quantization::TernaryLinear;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
@@ -15,27 +15,29 @@ use synapse_inference::model::ModelState;
 // ─────────────────────────────────────────────────────────────────────────────
 //
 // The selective scan recurrence (one step, channel i, state j):
+//   A[i,j] = -exp(a_log[i,j])                           (always negative)
 //   h[i,j] = exp(delta[i] * A[i,j]) * h[i,j] + delta[i] * B[j] * x[i]
 //   y[i]   = sum_j( C[j] * h[i,j] ) + D[i] * x[i]
 //
-// Test parameters: d_inner=2, d_state=2, seq_len=2, all A=-1, D=0.
-// exp(-0.5) ≈ 0.60653.
+// Test parameters: d_inner=2, d_state=2, seq_len=2, all a_log=-1, D=0.
+// A = -exp(-1) = -0.36788.  decay = exp(0.5 * -0.36788) = exp(-0.18394) ≈ 0.83194.
 //
 // ── Step 1: x=[1.0,2.0], delta=[0.5,0.5], B=[1.0,0.5], C=[1.0,1.0] ──────────
-//   h[0,0] = exp(-0.5)*0 + 0.5*1.0*1.0 = 0.5
-//   h[0,1] = exp(-0.5)*0 + 0.5*0.5*1.0 = 0.25
-//   h[1,0] = exp(-0.5)*0 + 0.5*1.0*2.0 = 1.0
-//   h[1,1] = exp(-0.5)*0 + 0.5*0.5*2.0 = 0.5
+//   (state starts at 0, so decay * 0 = 0)
+//   h[0,0] = 0 + 0.5*1.0*1.0 = 0.5
+//   h[0,1] = 0 + 0.5*0.5*1.0 = 0.25
+//   h[1,0] = 0 + 0.5*1.0*2.0 = 1.0
+//   h[1,1] = 0 + 0.5*0.5*2.0 = 0.5
 //   y[0] = 1.0*0.5 + 1.0*0.25 = 0.75
 //   y[1] = 1.0*1.0 + 1.0*0.5  = 1.5
 //
 // ── Step 2: x=[0.5,1.0], delta=[0.5,0.5], B=[0.5,1.0], C=[1.0,0.5] ──────────
-//   h[0,0] = 0.60653*0.5  + 0.5*0.5*0.5   = 0.30327 + 0.125   = 0.42827
-//   h[0,1] = 0.60653*0.25 + 0.5*1.0*0.5   = 0.15163 + 0.25    = 0.40163
-//   h[1,0] = 0.60653*1.0  + 0.5*0.5*1.0   = 0.60653 + 0.25    = 0.85653
-//   h[1,1] = 0.60653*0.5  + 0.5*1.0*1.0   = 0.30327 + 0.5     = 0.80327
-//   y[2] = 1.0*0.42827 + 0.5*0.40163 = 0.42827 + 0.20082 = 0.62909
-//   y[3] = 1.0*0.85653 + 0.5*0.80327 = 0.85653 + 0.40163 = 1.25816
+//   h[0,0] = 0.83194*0.5  + 0.5*0.5*0.5   = 0.41597 + 0.125   = 0.54097
+//   h[0,1] = 0.83194*0.25 + 0.5*1.0*0.5   = 0.20799 + 0.25    = 0.45799
+//   h[1,0] = 0.83194*1.0  + 0.5*0.5*1.0   = 0.83194 + 0.25    = 1.08194
+//   h[1,1] = 0.83194*0.5  + 0.5*1.0*1.0   = 0.41597 + 0.5     = 0.91597
+//   y[2] = 1.0*0.54097 + 0.5*0.45799 = 0.54097 + 0.22899 = 0.76996
+//   y[3] = 1.0*1.08194 + 0.5*0.91597 = 1.08194 + 0.45799 = 1.53993
 
 #[test]
 fn test_selective_scan_reference_values() {
@@ -71,134 +73,102 @@ fn test_selective_scan_reference_values() {
         y[1]
     );
 
-    // Step 2 outputs — exp(-0.5) introduces minor f32 rounding; use 1e-4 tolerance.
-    // Expected: y[2] = 0.42827 + 0.20082 = 0.62909
-    //           y[3] = 0.85653 + 0.40163 = 1.25816
+    // Step 2 outputs — decay = exp(-delta * exp(a_log)); use 1e-4 tolerance.
+    // Expected: y[2] = 0.54097 + 0.22899 = 0.76996
+    //           y[3] = 1.08194 + 0.45799 = 1.53993
     assert!(
-        (y[2] - 0.62909).abs() < 1e-4,
-        "y[2] = {} expected ≈ 0.62909",
+        (y[2] - 0.76996).abs() < 1e-3,
+        "y[2] = {} expected ≈ 0.76996",
         y[2]
     );
     assert!(
-        (y[3] - 1.25816).abs() < 1e-4,
-        "y[3] = {} expected ≈ 1.25816",
+        (y[3] - 1.53993).abs() < 1e-3,
+        "y[3] = {} expected ≈ 1.53993",
         y[3]
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 2: WKV Reference Values
+// Test 2: WKV7 Reference Values
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// The WKV kernel for one head (head_size=2):
-//   output[d] = sum_j( state[d,j] * r[j] )   ← output computed FIRST (pre-update)
-//   state[d,j] = exp(w[d]) * state[d,j] + k[d] * v[j]  ← then state updated
+// RWKV-7 WKV recurrence for one head (head_size=2):
+//   ka[j] = k[j] * a[j]
+//   state_dot_k[d] = sum_l(state[d,l] * k[l])
+//   state[d,j] = w[d] * state[d,j] - state_dot_k[d] * ka[j] + k[d] * v[j]
+//   output[d] = sum_j(state[d,j] * r[j])     ← output AFTER state update
 //
-// ── Step 1: r=[1.0,0.0], k=[1.0,0.5], v=[2.0,1.0], w=[-0.5,-0.5] ────────────
-//   Initial state = zeros → output = [0, 0]
-//   State update (exp(-0.5)≈0.60653):
-//     state[0,0] = 0.60653*0 + 1.0*2.0 = 2.0
-//     state[0,1] = 0.60653*0 + 1.0*1.0 = 1.0
-//     state[1,0] = 0.60653*0 + 0.5*2.0 = 1.0
-//     state[1,1] = 0.60653*0 + 0.5*1.0 = 0.5
-//
-// ── Step 2: r=[0.5,0.5], k=[1.0,1.0], v=[1.0,1.0], w=[-0.5,-0.5] ─────────────
-//   Output (from state after step 1):
-//     o[0] = state[0,0]*r[0] + state[0,1]*r[1] = 2.0*0.5 + 1.0*0.5 = 1.5
-//     o[1] = state[1,0]*r[0] + state[1,1]*r[1] = 1.0*0.5 + 0.5*0.5 = 0.75
-//   State update (exp(-0.5)≈0.60653):
-//     state[0,0] = 0.60653*2.0 + 1.0*1.0 = 1.21306 + 1.0 = 2.21306
-//     state[0,1] = 0.60653*1.0 + 1.0*1.0 = 0.60653 + 1.0 = 1.60653
-//     state[1,0] = 0.60653*1.0 + 1.0*1.0 = 0.60653 + 1.0 = 1.60653
-//     state[1,1] = 0.60653*0.5 + 1.0*1.0 = 0.30327 + 1.0 = 1.30327
+// ── Step 1: r=[1,0], k=[1,0.5], v=[2,1], w=[0.9,0.9], a=[0,0] (zero alpha) ──
+//   ka = [0, 0]
+//   state starts at zero → state_dot_k = [0, 0]
+//   state[0,0] = 0.9*0 - 0*0 + 1.0*2.0 = 2.0
+//   state[0,1] = 0.9*0 - 0*0 + 1.0*1.0 = 1.0
+//   state[1,0] = 0.9*0 - 0*0 + 0.5*2.0 = 1.0
+//   state[1,1] = 0.9*0 - 0*0 + 0.5*1.0 = 0.5
+//   output[0] = 2.0*1 + 1.0*0 = 2.0
+//   output[1] = 1.0*1 + 0.5*0 = 1.0
 
 #[test]
 fn test_wkv_step_reference_values() {
     let head_size = 2;
-    let mut wkv_state = vec![0.0f32; head_size * head_size];
+    let mut state = vec![0.0f32; head_size * head_size];
 
-    // ── Step 1 ────────────────────────────────────────────────────────────────
+    // ── Step 1 (zero alpha = no feedback) ─────────────────────────────────────
     let r1 = vec![1.0f32, 0.0];
     let k1 = vec![1.0f32, 0.5];
     let v1 = vec![2.0f32, 1.0];
-    let w  = vec![-0.5f32, -0.5]; // decay in log-space, negative
+    let w1 = vec![0.9f32, 0.9]; // decay in (0,1)
+    let a1 = vec![0.0f32, 0.0]; // zero alpha = no feedback term
 
-    let out1 = wkv_step(&r1, &k1, &v1, &w, &mut wkv_state, head_size);
+    let out1 = wkv7_step(&r1, &k1, &v1, &w1, &a1, &mut state, head_size);
 
-    // Output is read BEFORE the state update, so from zero state → both zero.
+    // Output is AFTER state update, so we get state @ r immediately.
     assert_eq!(out1.len(), head_size);
     assert!(
-        out1[0].abs() < 1e-7,
-        "step1 out[0] = {} expected 0.0 (zero initial state)",
+        (out1[0] - 2.0).abs() < 1e-5,
+        "step1 out[0] = {} expected 2.0",
         out1[0]
     );
     assert!(
-        out1[1].abs() < 1e-7,
-        "step1 out[1] = {} expected 0.0 (zero initial state)",
+        (out1[1] - 1.0).abs() < 1e-5,
+        "step1 out[1] = {} expected 1.0",
         out1[1]
     );
 
-    // After step 1, state = k ⊗ v (no decay from zero state):
-    //   state[0,0]=2.0  state[0,1]=1.0  state[1,0]=1.0  state[1,1]=0.5
-    assert!(
-        (wkv_state[0] - 2.0).abs() < 1e-6,
-        "state[0,0] = {} expected 2.0",
-        wkv_state[0]
-    );
-    assert!(
-        (wkv_state[1] - 1.0).abs() < 1e-6,
-        "state[0,1] = {} expected 1.0",
-        wkv_state[1]
-    );
-    assert!(
-        (wkv_state[2] - 1.0).abs() < 1e-6,
-        "state[1,0] = {} expected 1.0",
-        wkv_state[2]
-    );
-    assert!(
-        (wkv_state[3] - 0.5).abs() < 1e-6,
-        "state[1,1] = {} expected 0.5",
-        wkv_state[3]
-    );
+    // State should be k outer v:
+    assert!((state[0] - 2.0).abs() < 1e-6, "state[0,0] = {} expected 2.0", state[0]);
+    assert!((state[1] - 1.0).abs() < 1e-6, "state[0,1] = {} expected 1.0", state[1]);
+    assert!((state[2] - 1.0).abs() < 1e-6, "state[1,0] = {} expected 1.0", state[2]);
+    assert!((state[3] - 0.5).abs() < 1e-6, "state[1,1] = {} expected 0.5", state[3]);
 
-    // ── Step 2 ────────────────────────────────────────────────────────────────
+    // ── Step 2 (still zero alpha) ─────────────────────────────────────────────
+    // k=[1,1], v=[1,1], w=[0.9,0.9], a=[0,0], r=[0.5,0.5]
+    // state_dot_k[0] = state[0,0]*1 + state[0,1]*1 = 2+1 = 3
+    // state_dot_k[1] = state[1,0]*1 + state[1,1]*1 = 1+0.5 = 1.5
+    // state[0,0] = 0.9*2 - 3*0 + 1*1 = 1.8 + 1 = 2.8
+    // state[0,1] = 0.9*1 - 3*0 + 1*1 = 0.9 + 1 = 1.9
+    // state[1,0] = 0.9*1 - 1.5*0 + 1*1 = 0.9 + 1 = 1.9
+    // state[1,1] = 0.9*0.5 - 1.5*0 + 1*1 = 0.45 + 1 = 1.45
+    // output[0] = 2.8*0.5 + 1.9*0.5 = 2.35
+    // output[1] = 1.9*0.5 + 1.45*0.5 = 1.675
     let r2 = vec![0.5f32, 0.5];
     let k2 = vec![1.0f32, 1.0];
     let v2 = vec![1.0f32, 1.0];
+    let w2 = vec![0.9f32, 0.9];
+    let a2 = vec![0.0f32, 0.0];
 
-    let out2 = wkv_step(&r2, &k2, &v2, &w, &mut wkv_state, head_size);
+    let out2 = wkv7_step(&r2, &k2, &v2, &w2, &a2, &mut state, head_size);
 
     assert_eq!(out2.len(), head_size);
-    // o[0] = 2.0*0.5 + 1.0*0.5 = 1.5
     assert!(
-        (out2[0] - 1.5).abs() < 1e-5,
-        "step2 out[0] = {} expected 1.5",
+        (out2[0] - 2.35).abs() < 1e-4,
+        "step2 out[0] = {} expected 2.35",
         out2[0]
     );
-    // o[1] = 1.0*0.5 + 0.5*0.5 = 0.75
     assert!(
-        (out2[1] - 0.75).abs() < 1e-5,
-        "step2 out[1] = {} expected 0.75",
+        (out2[1] - 1.675).abs() < 1e-4,
+        "step2 out[1] = {} expected 1.675",
         out2[1]
-    );
-
-    // Verify state after step 2 (exp(-0.5) ≈ 0.60653):
-    //   state[0,0] = 0.60653*2.0 + 1.0 ≈ 2.21306
-    //   state[0,1] = 0.60653*1.0 + 1.0 ≈ 1.60653
-    let exp_neg_half = (-0.5f32).exp();
-    let expected_s00 = exp_neg_half * 2.0 + 1.0;
-    let expected_s01 = exp_neg_half * 1.0 + 1.0;
-    assert!(
-        (wkv_state[0] - expected_s00).abs() < 1e-5,
-        "state[0,0] = {} expected {}",
-        wkv_state[0],
-        expected_s00
-    );
-    assert!(
-        (wkv_state[1] - expected_s01).abs() < 1e-5,
-        "state[0,1] = {} expected {}",
-        wkv_state[1],
-        expected_s01
     );
 }
 
@@ -359,6 +329,7 @@ fn build_tiny_mamba() -> MambaModel {
     let d_inner = config.d_inner();
     let d_state = config.d_state;
     let d_conv  = config.d_conv;
+    let dt_rank = config.dt_rank;
     let vocab   = config.vocab_size;
 
     let embed_tokens      = pseudo_random_vec(100, vocab * d_model);
@@ -373,14 +344,15 @@ fn build_tiny_mamba() -> MambaModel {
             d_inner,
             d_state,
             d_conv,
+            dt_rank,
             norm_weight:    vec![1.0f32; d_model],
             norm_eps:        config.norm_eps as f32,
             in_proj_weight:  pseudo_random_vec(s + 1, 2 * d_inner * d_model),
             in_proj_bias:    vec![],
             conv1d_weight:   pseudo_random_vec(s + 2, d_inner * d_conv),
             conv1d_bias:     vec![0.0f32; d_inner],
-            x_proj_weight:   pseudo_random_vec(s + 3, (2 * d_state + 1) * d_inner),
-            dt_proj_weight:  pseudo_random_vec(s + 4, d_inner),
+            x_proj_weight:   pseudo_random_vec(s + 3, (dt_rank + 2 * d_state) * d_inner),
+            dt_proj_weight:  pseudo_random_vec(s + 4, d_inner * dt_rank),
             dt_proj_bias:    vec![0.0f32; d_inner],
             a_log: pseudo_random_vec(s + 5, d_inner * d_state)
                 .into_iter()

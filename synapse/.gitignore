@@ -12,6 +12,7 @@ web/synapse-wasm-pkg
 synapse-esp32/target/
 
 # Model weights (too large for git — download separately)
+models/
 web/*.bin
 web/*.pt
 web/*.npz

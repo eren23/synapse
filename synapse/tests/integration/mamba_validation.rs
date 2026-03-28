@@ -22,6 +22,7 @@ fn build_test_model() -> MambaModel {
     let d_inner = config.d_inner();
     let d_state = config.d_state;
     let d_conv = config.d_conv;
+    let dt_rank = config.dt_rank;
     let vocab = config.vocab_size;
 
     let embed_tokens = pseudo_random_vec(100, vocab * d_model);
@@ -36,14 +37,15 @@ fn build_test_model() -> MambaModel {
             d_inner,
             d_state,
             d_conv,
+            dt_rank,
             norm_weight: vec![1.0f32; d_model],
             norm_eps: config.norm_eps as f32,
             in_proj_weight: pseudo_random_vec(seed_base + 1, 2 * d_inner * d_model),
             in_proj_bias: vec![],
             conv1d_weight: pseudo_random_vec(seed_base + 2, d_inner * d_conv),
             conv1d_bias: vec![0.0f32; d_inner],
-            x_proj_weight: pseudo_random_vec(seed_base + 3, (2 * d_state + 1) * d_inner),
-            dt_proj_weight: pseudo_random_vec(seed_base + 4, d_inner),
+            x_proj_weight: pseudo_random_vec(seed_base + 3, (dt_rank + 2 * d_state) * d_inner),
+            dt_proj_weight: pseudo_random_vec(seed_base + 4, d_inner * dt_rank),
             dt_proj_bias: vec![0.0f32; d_inner],
             a_log: pseudo_random_vec(seed_base + 5, d_inner * d_state)
                 .into_iter()

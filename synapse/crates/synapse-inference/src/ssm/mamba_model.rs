@@ -192,6 +192,7 @@ impl MambaModel {
         let d_inner = config.d_inner();
         let d_state = config.d_state;
         let d_conv = config.d_conv;
+        let dt_rank = config.dt_rank;
         let vocab = config.vocab_size;
 
         // Helper: get a weight tensor as Vec<f32>, with optional reshape tolerance.
@@ -275,24 +276,26 @@ impl MambaModel {
             let conv1d_bias = get(&format!("{layer_prefix}.mixer.conv1d.bias"))?;
 
             let x_proj_weight = get(&format!("{layer_prefix}.mixer.x_proj.weight"))?;
-            if x_proj_weight.len() != (2 * d_state + 1) * d_inner {
+            let expected_x_proj = (dt_rank + 2 * d_state) * d_inner;
+            if x_proj_weight.len() != expected_x_proj {
                 return Err(format!(
-                    "layer {i} x_proj shape mismatch: expected {} got {}",
-                    (2 * d_state + 1) * d_inner,
+                    "layer {i} x_proj shape mismatch: expected {} (dt_rank={dt_rank} + 2*d_state={}) * d_inner={d_inner}, got {}",
+                    expected_x_proj,
+                    2 * d_state,
                     x_proj_weight.len()
                 ));
             }
 
-            // dt_proj weight may be [d_inner], [d_inner, 1], or [1, d_inner]
-            let dt_proj_weight_raw = get(&format!("{layer_prefix}.mixer.dt_proj.weight"))?;
-            let dt_proj_weight = if dt_proj_weight_raw.len() == d_inner {
-                dt_proj_weight_raw
-            } else {
+            // dt_proj is a linear projection [d_inner, dt_rank]
+            let dt_proj_weight = get(&format!("{layer_prefix}.mixer.dt_proj.weight"))?;
+            let expected_dt_proj = d_inner * dt_rank;
+            if dt_proj_weight.len() != expected_dt_proj {
                 return Err(format!(
-                    "layer {i} dt_proj weight unexpected size: {}",
-                    dt_proj_weight_raw.len()
+                    "layer {i} dt_proj shape mismatch: expected {} (d_inner={d_inner} * dt_rank={dt_rank}), got {}",
+                    expected_dt_proj,
+                    dt_proj_weight.len()
                 ));
-            };
+            }
 
             let dt_proj_bias = get(&format!("{layer_prefix}.mixer.dt_proj.bias"))?;
 
@@ -328,6 +331,7 @@ impl MambaModel {
                 d_inner,
                 d_state,
                 d_conv,
+                dt_rank,
                 norm_weight,
                 norm_eps: config.norm_eps as f32,
                 in_proj_weight,
@@ -377,6 +381,7 @@ mod tests {
         let d_inner = config.d_inner();
         let d_state = config.d_state;
         let d_conv = config.d_conv;
+        let dt_rank = config.dt_rank;
         let vocab = config.vocab_size;
 
         let embed_tokens = pseudo_random_vec(100, vocab * d_model);
@@ -391,14 +396,15 @@ mod tests {
                 d_inner,
                 d_state,
                 d_conv,
+                dt_rank,
                 norm_weight: vec![1.0f32; d_model],
                 norm_eps: config.norm_eps as f32,
                 in_proj_weight: pseudo_random_vec(seed_base + 1, 2 * d_inner * d_model),
                 in_proj_bias: vec![],
                 conv1d_weight: pseudo_random_vec(seed_base + 2, d_inner * d_conv),
                 conv1d_bias: vec![0.0f32; d_inner],
-                x_proj_weight: pseudo_random_vec(seed_base + 3, (2 * d_state + 1) * d_inner),
-                dt_proj_weight: pseudo_random_vec(seed_base + 4, d_inner),
+                x_proj_weight: pseudo_random_vec(seed_base + 3, (dt_rank + 2 * d_state) * d_inner),
+                dt_proj_weight: pseudo_random_vec(seed_base + 4, d_inner * dt_rank),
                 dt_proj_bias: vec![0.0f32; d_inner],
                 a_log: pseudo_random_vec(seed_base + 5, d_inner * d_state)
                     .into_iter()
@@ -479,6 +485,7 @@ mod tests {
         let d_inner = config.d_inner();
         let d_state = config.d_state;
         let d_conv = config.d_conv;
+        let dt_rank = config.dt_rank;
         let vocab = config.vocab_size;
 
         let mut weights: HashMap<String, RawTensor> = HashMap::new();
@@ -524,11 +531,11 @@ mod tests {
             );
             weights.insert(
                 format!("{p}.mixer.x_proj.weight"),
-                make_tensor(vec![2 * d_state + 1, d_inner], seed_base + 4),
+                make_tensor(vec![dt_rank + 2 * d_state, d_inner], seed_base + 4),
             );
             weights.insert(
                 format!("{p}.mixer.dt_proj.weight"),
-                make_tensor(vec![d_inner], seed_base + 5),
+                make_tensor(vec![d_inner, dt_rank], seed_base + 5),
             );
             weights.insert(
                 format!("{p}.mixer.dt_proj.bias"),

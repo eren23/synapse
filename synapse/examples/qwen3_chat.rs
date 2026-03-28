@@ -144,6 +144,8 @@ fn demo_engine() -> InferenceEngine {
     InferenceEngine {
         model,
         quantized_model: None,
+        ternary_model: None,
+        ssm_model: None,
         config: cfg,
         model_adapter_kind: ModelAdapterKind::Qwen3,
         tokenizer: None,

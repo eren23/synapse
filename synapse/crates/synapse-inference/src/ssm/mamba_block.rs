@@ -15,14 +15,15 @@ pub struct MambaBlock {
     pub d_inner: usize,
     pub d_state: usize,
     pub d_conv: usize,
+    pub dt_rank: usize,
     pub norm_weight: Vec<f32>,    // [d_model]
     pub norm_eps: f32,
     pub in_proj_weight: Vec<f32>, // [2*d_inner, d_model]
     pub in_proj_bias: Vec<f32>,   // may be empty
     pub conv1d_weight: Vec<f32>,  // [d_inner, d_conv]
     pub conv1d_bias: Vec<f32>,    // [d_inner]
-    pub x_proj_weight: Vec<f32>,  // [2*d_state + 1, d_inner]
-    pub dt_proj_weight: Vec<f32>, // [d_inner]
+    pub x_proj_weight: Vec<f32>,  // [dt_rank + 2*d_state, d_inner]
+    pub dt_proj_weight: Vec<f32>, // [d_inner, dt_rank]
     pub dt_proj_bias: Vec<f32>,   // [d_inner]
     pub a_log: Vec<f32>,          // [d_inner, d_state]
     pub d_param: Vec<f32>,        // [d_inner]
@@ -64,23 +65,31 @@ impl MambaBlock {
         out
     }
 
-    /// Project `x` through x_proj, expand dt, then run one SSM step.
+    /// Project `x` through x_proj, then dt_proj linear layer, then run one SSM step.
+    ///
+    /// x_proj outputs `[dt_rank + 2*d_state]`: the first `dt_rank` values are the
+    /// low-rank dt input, followed by B and C vectors. The dt input is then projected
+    /// through dt_proj `[d_inner, dt_rank]` to produce the per-channel delta.
     ///
     /// Returns `y` of shape `[d_inner]`.
     pub fn ssm_forward_step(&self, x: &[f32], state: &mut MambaLayerState) -> Vec<f32> {
         let d_inner = self.d_inner;
         let d_state = self.d_state;
+        let dt_rank = self.dt_rank;
 
-        // x_proj: [1, d_inner] × [2*d_state+1, d_inner]^T → [1, 2*d_state+1]
-        let x_proj_out = matmul_t(x, &self.x_proj_weight, 1, d_inner, 2 * d_state + 1);
+        // x_proj: [1, d_inner] × [dt_rank+2*d_state, d_inner]^T → [1, dt_rank+2*d_state]
+        let x_proj_out = matmul_t(x, &self.x_proj_weight, 1, d_inner, dt_rank + 2 * d_state);
 
-        let b_slice = &x_proj_out[0..d_state];
-        let c_slice = &x_proj_out[d_state..2 * d_state];
-        let dt_raw = x_proj_out[2 * d_state];
+        let dt_input = &x_proj_out[0..dt_rank];
+        let b_slice = &x_proj_out[dt_rank..dt_rank + d_state];
+        let c_slice = &x_proj_out[dt_rank + d_state..dt_rank + 2 * d_state];
 
-        // Expand scalar dt_raw to delta[d_inner] via dt_proj
+        // dt_proj: [1, dt_rank] × [d_inner, dt_rank]^T → [1, d_inner]
+        let dt_projected = matmul_t(dt_input, &self.dt_proj_weight, 1, dt_rank, d_inner);
+
+        // Apply softplus to get positive delta values
         let delta: Vec<f32> = (0..d_inner)
-            .map(|i| softplus(dt_raw * self.dt_proj_weight[i] + self.dt_proj_bias[i]))
+            .map(|i| softplus(dt_projected[i] + self.dt_proj_bias[i]))
             .collect();
 
         selective_scan_step(
@@ -229,20 +238,22 @@ mod tests {
         let d_inner = 32usize;
         let d_state = 4usize;
         let d_conv = 4usize;
+        let dt_rank = 2usize; // ceil(16 / 16) = 1, but use 2 for test variety
 
         MambaBlock {
             d_model,
             d_inner,
             d_state,
             d_conv,
+            dt_rank,
             norm_weight: vec![1.0f32; d_model],
             norm_eps: 1e-5,
             in_proj_weight: pseudo_random_vec(1, 2 * d_inner * d_model),
             in_proj_bias: vec![],
             conv1d_weight: pseudo_random_vec(2, d_inner * d_conv),
             conv1d_bias: vec![0.0f32; d_inner],
-            x_proj_weight: pseudo_random_vec(3, (2 * d_state + 1) * d_inner),
-            dt_proj_weight: pseudo_random_vec(4, d_inner),
+            x_proj_weight: pseudo_random_vec(3, (dt_rank + 2 * d_state) * d_inner),
+            dt_proj_weight: pseudo_random_vec(4, d_inner * dt_rank),
             dt_proj_bias: vec![0.0f32; d_inner],
             a_log: pseudo_random_vec(5, d_inner * d_state)
                 .into_iter()

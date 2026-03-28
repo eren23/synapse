@@ -13,6 +13,10 @@ use crate::model_adapter::{
 use crate::quantization::{quantize_model, quantize_model_ternary, QuantizedCausalLM, TernaryCausalLM};
 use crate::ssm::config::MambaConfig;
 use crate::ssm::mamba_model::MambaModel;
+use crate::ssm::rwkv_config::RwkvConfig;
+use crate::ssm::rwkv_model::RwkvModel;
+use crate::ssm::hybrid_config::HybridConfig;
+use crate::ssm::hybrid_model::HybridModel;
 use crate::tokenizer::{Tokenizer, TokenizerError};
 use crate::weight_loading::{
     load_gguf, load_safetensors, load_safetensors_sharded, WeightError, WeightMapper,
@@ -129,7 +133,23 @@ impl InferenceEngine {
         let model_type = detect_model_type(&model_path.join("config.json")).unwrap_or_default();
         match model_type.as_str() {
             "mamba" | "mamba2" => return Self::from_pretrained_mamba(model_path),
-            _ => {}
+            "rwkv" | "rwkv7" => return Self::from_pretrained_rwkv(model_path),
+            "qwen3_5" | "qwen3.5" => return Self::from_pretrained_hybrid(model_path),
+            _ => {
+                // Also detect hybrid from config fields
+                let config_path = model_path.join("config.json");
+                if config_path.exists() {
+                    if let Ok(file) = std::fs::File::open(&config_path) {
+                        if let Ok(json) = serde_json::from_reader::<_, serde_json::Value>(file) {
+                            if json.get("full_attention_interval").is_some()
+                                || json.get("layer_types").is_some()
+                            {
+                                return Self::from_pretrained_hybrid(model_path);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         let config = ModelConfig::from_hf_file(&model_path.join("config.json"))?;
@@ -548,6 +568,112 @@ impl InferenceEngine {
     pub fn is_ssm(&self) -> bool {
         self.ssm_model.is_some()
     }
+
+    /// Load an RWKV-7 model from a HuggingFace-style directory.
+    ///
+    /// Reads `config.json` for `RwkvConfig`, loads safetensors weights,
+    /// and creates an `RwkvModel` stored as `ssm_model`.
+    pub fn from_pretrained_rwkv(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let rwkv_config = parse_rwkv_config(&model_path.join("config.json"))?;
+
+        // Load weights from safetensors
+        let weights = if model_path.join("model.safetensors.index.json").exists() {
+            load_safetensors_sharded(model_path)?
+        } else {
+            let checkpoint = find_checkpoint_file(model_path)?;
+            load_safetensors(&checkpoint)?
+        };
+
+        let rwkv_model = RwkvModel::from_weights(rwkv_config.clone(), &weights)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+        // Try to load tokenizer (best-effort)
+        let tokenizer = Tokenizer::from_model_dir(model_path).ok();
+
+        // Try to load chat template (best-effort)
+        let chat_template = {
+            let tokenizer_config_path = model_path.join("tokenizer_config.json");
+            if tokenizer_config_path.exists() {
+                ChatTemplate::from_tokenizer_config(&tokenizer_config_path).ok()
+            } else {
+                None
+            }
+        };
+
+        let config = minimal_config_for_rwkv("rwkv", &rwkv_config);
+        let model_adapter_kind = ModelAdapterKind::from_model_name("rwkv");
+        let model = ModelBuilder::from_config(&config);
+
+        #[cfg(feature = "metal")]
+        let backend = crate::metal::ComputeBackend::auto();
+
+        Ok(Self {
+            model,
+            quantized_model: None,
+            ternary_model: None,
+            ssm_model: Some(Box::new(rwkv_model)),
+            config,
+            model_adapter_kind,
+            tokenizer,
+            chat_template,
+            #[cfg(feature = "metal")]
+            backend,
+            #[cfg(feature = "metal")]
+            metal_model_bufs_cell: None,
+        })
+    }
+
+    /// Load a Qwen3.5-style hybrid model from a HuggingFace-style directory.
+    ///
+    /// Reads `config.json` for `HybridConfig`, loads safetensors weights,
+    /// and creates a `HybridModel` stored as `ssm_model`.
+    pub fn from_pretrained_hybrid(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let hybrid_config = parse_hybrid_config(&model_path.join("config.json"))?;
+
+        let weights = if model_path.join("model.safetensors.index.json").exists() {
+            load_safetensors_sharded(model_path)?
+        } else {
+            let checkpoint = find_checkpoint_file(model_path)?;
+            load_safetensors(&checkpoint)?
+        };
+
+        let max_kv_seq = 2048;
+        let hybrid_model = HybridModel::from_weights(hybrid_config.clone(), &weights, max_kv_seq)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+        let tokenizer = Tokenizer::from_model_dir(model_path).ok();
+
+        let chat_template = {
+            let tokenizer_config_path = model_path.join("tokenizer_config.json");
+            if tokenizer_config_path.exists() {
+                ChatTemplate::from_tokenizer_config(&tokenizer_config_path).ok()
+            } else {
+                None
+            }
+        };
+
+        let config = minimal_config_for_hybrid("qwen3.5", &hybrid_config);
+        let model_adapter_kind = ModelAdapterKind::from_model_name("qwen3.5");
+        let model = ModelBuilder::from_config(&config);
+
+        #[cfg(feature = "metal")]
+        let backend = crate::metal::ComputeBackend::auto();
+
+        Ok(Self {
+            model,
+            quantized_model: None,
+            ternary_model: None,
+            ssm_model: Some(Box::new(hybrid_model)),
+            config,
+            model_adapter_kind,
+            tokenizer,
+            chat_template,
+            #[cfg(feature = "metal")]
+            backend,
+            #[cfg(feature = "metal")]
+            metal_model_bufs_cell: None,
+        })
+    }
 }
 
 /// Detect the `model_type` field from a HuggingFace `config.json`.
@@ -568,11 +694,20 @@ fn detect_model_type(config_path: &Path) -> Result<String, Box<dyn std::error::E
 fn parse_mamba_config(config_path: &Path) -> Result<MambaConfig, Box<dyn std::error::Error>> {
     let file = std::fs::File::open(config_path)?;
     let json: serde_json::Value = serde_json::from_reader(file)?;
+    let d_model = json["hidden_size"]
+        .as_u64()
+        .or(json["d_model"].as_u64())
+        .unwrap_or(768) as usize;
+
+    // dt_rank defaults to ceil(d_model / 16) per Mamba paper
+    let dt_rank = json["dt_rank"]
+        .as_u64()
+        .or(json["time_step_rank"].as_u64())
+        .map(|v| v as usize)
+        .unwrap_or_else(|| (d_model + 15) / 16);
+
     Ok(MambaConfig {
-        d_model: json["hidden_size"]
-            .as_u64()
-            .or(json["d_model"].as_u64())
-            .unwrap_or(768) as usize,
+        d_model,
         d_state: json["state_size"]
             .as_u64()
             .or(json["d_state"].as_u64())
@@ -582,6 +717,7 @@ fn parse_mamba_config(config_path: &Path) -> Result<MambaConfig, Box<dyn std::er
             .or(json["d_conv"].as_u64())
             .unwrap_or(4) as usize,
         expand: json["expand"].as_u64().unwrap_or(2) as usize,
+        dt_rank,
         num_layers: json["num_hidden_layers"]
             .as_u64()
             .or(json["n_layer"].as_u64())
@@ -630,6 +766,165 @@ fn minimal_config_for_ssm(name: &str, mamba: &MambaConfig) -> ModelConfig {
         },
         quantization: QuantConfig::F32,
     }
+}
+
+/// Build a minimal `ModelConfig` for RWKV models.
+fn minimal_config_for_rwkv(name: &str, rwkv: &RwkvConfig) -> ModelConfig {
+    use crate::config::*;
+    ModelConfig {
+        name: name.to_string(),
+        architecture: ArchitectureConfig {
+            hidden_size: rwkv.hidden_size,
+            num_layers: rwkv.num_layers,
+            vocab_size: rwkv.vocab_size,
+            max_sequence_length: 4096,
+            tie_word_embeddings: false,
+            embed_scale: None,
+        },
+        attention: AttentionConfig::GQA {
+            num_heads: rwkv.num_heads,
+            num_kv_heads: rwkv.num_heads,
+            head_dim: rwkv.head_size,
+        },
+        norm: NormConfig::LayerNorm {
+            eps: rwkv.norm_eps,
+        },
+        ffn: FFNConfig::SwiGLU {
+            intermediate_size: rwkv.intermediate_size,
+        },
+        position: PositionConfig::RoPE {
+            base: 10000.0,
+            max_position_embeddings: 4096,
+            style: Default::default(),
+            scaling: Default::default(),
+        },
+        quantization: QuantConfig::F32,
+    }
+}
+
+/// Parse an `RwkvConfig` from a HuggingFace-style `config.json`.
+fn parse_rwkv_config(config_path: &Path) -> Result<RwkvConfig, Box<dyn std::error::Error>> {
+    let file = std::fs::File::open(config_path)?;
+    let json: serde_json::Value = serde_json::from_reader(file)?;
+
+    let hidden_size = json["hidden_size"].as_u64().unwrap_or(768) as usize;
+    let num_heads = json["num_attention_heads"]
+        .as_u64()
+        .or(json["num_heads"].as_u64())
+        .unwrap_or(12) as usize;
+    let head_size = json["head_size"]
+        .as_u64()
+        .unwrap_or_else(|| (hidden_size / num_heads) as u64) as usize;
+
+    Ok(RwkvConfig {
+        hidden_size,
+        num_heads,
+        head_size,
+        num_layers: json["num_hidden_layers"]
+            .as_u64()
+            .or(json["num_layers"].as_u64())
+            .unwrap_or(12) as usize,
+        vocab_size: json["vocab_size"].as_u64().unwrap_or(50304) as usize,
+        intermediate_size: json["intermediate_size"]
+            .as_u64()
+            .unwrap_or((hidden_size as f64 * 3.5) as u64) as usize,
+        norm_eps: json["layer_norm_epsilon"]
+            .as_f64()
+            .or(json["norm_eps"].as_f64())
+            .or(json["norm_epsilon"].as_f64())
+            .unwrap_or(1e-5),
+        decay_rank: json["decay_low_rank_dim"]
+            .as_u64()
+            .or(json["lora_rank_decay"].as_u64())
+            .unwrap_or(64) as usize,
+        alpha_rank: json["a_low_rank_dim"]
+            .as_u64()
+            .or(json["lora_rank_iclr"].as_u64())
+            .unwrap_or(64) as usize,
+        gate_rank: json["gate_low_rank_dim"]
+            .as_u64()
+            .or(json["lora_rank_gate"].as_u64())
+            .unwrap_or(128) as usize,
+    })
+}
+
+/// Build a minimal `ModelConfig` for hybrid models.
+fn minimal_config_for_hybrid(name: &str, hybrid: &HybridConfig) -> ModelConfig {
+    use crate::config::*;
+    ModelConfig {
+        name: name.to_string(),
+        architecture: ArchitectureConfig {
+            hidden_size: hybrid.hidden_size,
+            num_layers: hybrid.num_layers,
+            vocab_size: hybrid.vocab_size,
+            max_sequence_length: 4096,
+            tie_word_embeddings: false,
+            embed_scale: None,
+        },
+        attention: AttentionConfig::GQA {
+            num_heads: hybrid.num_attention_heads,
+            num_kv_heads: hybrid.num_kv_heads,
+            head_dim: hybrid.gqa_head_dim,
+        },
+        norm: NormConfig::RMSNorm {
+            eps: hybrid.norm_eps,
+        },
+        ffn: FFNConfig::SwiGLU {
+            intermediate_size: hybrid.intermediate_size,
+        },
+        position: PositionConfig::RoPE {
+            base: 10000.0,
+            max_position_embeddings: 4096,
+            style: Default::default(),
+            scaling: Default::default(),
+        },
+        quantization: QuantConfig::F32,
+    }
+}
+
+/// Parse a `HybridConfig` from a HuggingFace-style `config.json`.
+fn parse_hybrid_config(config_path: &Path) -> Result<HybridConfig, Box<dyn std::error::Error>> {
+    let file = std::fs::File::open(config_path)?;
+    let json: serde_json::Value = serde_json::from_reader(file)?;
+
+    let hidden_size = json["hidden_size"].as_u64().unwrap_or(1024) as usize;
+    let num_attention_heads = json["num_attention_heads"].as_u64().unwrap_or(16) as usize;
+    let num_kv_heads = json["num_key_value_heads"]
+        .as_u64()
+        .or(json["num_kv_heads"].as_u64())
+        .unwrap_or(8) as usize;
+
+    let gqa_head_dim = json["head_dim"]
+        .as_u64()
+        .unwrap_or_else(|| (hidden_size / num_attention_heads) as u64) as usize;
+
+    let full_attention_interval = json["full_attention_interval"]
+        .as_u64()
+        .unwrap_or(4) as usize;
+
+    Ok(HybridConfig {
+        hidden_size,
+        num_layers: json["num_hidden_layers"].as_u64().unwrap_or(24) as usize,
+        vocab_size: json["vocab_size"].as_u64().unwrap_or(151936) as usize,
+        norm_eps: json["rms_norm_eps"].as_f64()
+            .or(json["layer_norm_epsilon"].as_f64())
+            .unwrap_or(1e-6),
+        num_attention_heads,
+        num_kv_heads,
+        gqa_head_dim,
+        deltanet_num_heads: json["deltanet_num_heads"]
+            .as_u64()
+            .unwrap_or(num_attention_heads as u64) as usize,
+        deltanet_head_dim: json["deltanet_head_dim"]
+            .as_u64()
+            .unwrap_or(gqa_head_dim as u64) as usize,
+        deltanet_conv_kernel: json["deltanet_conv_kernel"]
+            .as_u64()
+            .or(json["conv_kernel_size"].as_u64())
+            .unwrap_or(4) as usize,
+        intermediate_size: json["intermediate_size"].as_u64().unwrap_or(3072) as usize,
+        full_attention_interval,
+    })
 }
 
 fn find_checkpoint_file(model_path: &Path) -> Result<PathBuf, WeightError> {
@@ -807,6 +1102,7 @@ mod tests {
         let d_inner = config.d_inner();
         let d_state = config.d_state;
         let d_conv = config.d_conv;
+        let dt_rank = config.dt_rank;
         let vocab = config.vocab_size;
 
         let pseudo = |seed: u64, len: usize| -> Vec<f32> {
@@ -834,14 +1130,15 @@ mod tests {
                 d_inner,
                 d_state,
                 d_conv,
+                dt_rank,
                 norm_weight: vec![1.0f32; d_model],
                 norm_eps: config.norm_eps as f32,
                 in_proj_weight: pseudo(s + 1, 2 * d_inner * d_model),
                 in_proj_bias: vec![],
                 conv1d_weight: pseudo(s + 2, d_inner * d_conv),
                 conv1d_bias: vec![0.0f32; d_inner],
-                x_proj_weight: pseudo(s + 3, (2 * d_state + 1) * d_inner),
-                dt_proj_weight: pseudo(s + 4, d_inner),
+                x_proj_weight: pseudo(s + 3, (dt_rank + 2 * d_state) * d_inner),
+                dt_proj_weight: pseudo(s + 4, d_inner * dt_rank),
                 dt_proj_bias: vec![0.0f32; d_inner],
                 a_log: pseudo(s + 5, d_inner * d_state)
                     .into_iter()

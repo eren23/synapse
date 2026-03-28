@@ -210,149 +210,136 @@ impl Model for RwkvModel {
 impl RwkvModel {
     /// Build an RwkvModel from a HuggingFace-style weight dictionary.
     ///
-    /// Expects RWKV-7 HF weight names like `blocks.{i}.att.receptance.weight`,
-    /// `emb.weight`, `ln_out.weight`, `head.weight`, etc.
+    /// Supports two naming conventions:
+    /// - SmerkyG: `model.blocks.{i}.attention.*`, `model.blocks.{i}.feed_forward.*`
+    /// - Official: `model.layers.{i}.attn.*`, `model.layers.{i}.ffn.*`
     pub fn from_weights(
         config: RwkvConfig,
         weights: &HashMap<String, RawTensor>,
     ) -> Result<Self, String> {
         let h = config.hidden_size;
-        let nh = config.num_heads;
-        let hs = config.head_size;
         let inter = config.intermediate_size;
         let vocab = config.vocab_size;
+        let dr = config.decay_rank;
+        let ar = config.alpha_rank;
+        let gr = config.gate_rank;
 
-        // Helper: get a weight tensor as Vec<f32>.
+        // Detect naming convention
+        let (embed_key, head_key, norm_w_key, norm_b_key, layer_fmt) =
+            if weights.keys().any(|k| k.starts_with("model.blocks.")) {
+                // SmerkyG style
+                ("model.embeddings.weight", "head.weight", "model.ln_out.weight", "model.ln_out.bias", "smerkyg")
+            } else if weights.keys().any(|k| k.starts_with("model.layers.")) {
+                // Official RWKV HF style
+                ("model.embeddings.weight", "lm_head.weight", "model.norm.weight", "model.norm.bias", "official")
+            } else {
+                // Legacy style
+                ("emb.weight", "head.weight", "ln_out.weight", "ln_out.bias", "legacy")
+            };
+
         let get = |name: &str| -> Result<Vec<f32>, String> {
-            weights
-                .get(name)
-                .map(|t| t.data.to_vec())
+            weights.get(name).map(|t| t.data.to_vec())
                 .ok_or_else(|| format!("missing weight: {name}"))
         };
 
-        // Embedding
-        let embed_tokens = get("emb.weight")?;
+        // Helper: try primary name, fallback to alternate
+        let get_or = |a: &str, b: &str| -> Result<Vec<f32>, String> {
+            get(a).or_else(|_| get(b))
+        };
+
+        let embed_tokens = get(embed_key)?;
         if embed_tokens.len() != vocab * h {
-            return Err(format!(
-                "emb.weight shape mismatch: expected {} got {}",
-                vocab * h,
-                embed_tokens.len()
-            ));
+            return Err(format!("embed shape mismatch: expected {} got {}", vocab * h, embed_tokens.len()));
         }
+        let final_norm_weight = get_or(norm_w_key, "model.norm.weight")?;
+        let final_norm_bias = get_or(norm_b_key, "model.norm.bias")?;
+        let lm_head_weight = get_or(head_key, "lm_head.weight")?;
 
-        // Final LayerNorm
-        let final_norm_weight = get("ln_out.weight")?;
-        if final_norm_weight.len() != h {
-            return Err(format!(
-                "ln_out.weight shape mismatch: expected {h} got {}",
-                final_norm_weight.len()
-            ));
-        }
-        let final_norm_bias = get("ln_out.bias")?;
-
-        // LM head
-        let lm_head_weight = get("head.weight")?;
-        if lm_head_weight.len() != vocab * h {
-            return Err(format!(
-                "head.weight shape mismatch: expected {} got {}",
-                vocab * h,
-                lm_head_weight.len()
-            ));
-        }
-
-        // Blocks
         let mut blocks = Vec::with_capacity(config.num_layers);
         for i in 0..config.num_layers {
-            let p = format!("blocks.{i}");
+            // Build per-layer weight prefix based on naming convention
+            let (att_p, ffn_p, ln1_p, ln2_p) = match layer_fmt {
+                "smerkyg" => (
+                    format!("model.blocks.{i}.attention"),
+                    format!("model.blocks.{i}.feed_forward"),
+                    format!("model.blocks.{i}.ln1"),
+                    format!("model.blocks.{i}.ln2"),
+                ),
+                "official" => (
+                    format!("model.layers.{i}.attn"),
+                    format!("model.layers.{i}.ffn"),
+                    format!("model.layers.{i}.attn_norm"),
+                    format!("model.layers.{i}.ffn_norm"),
+                ),
+                _ => (
+                    format!("blocks.{i}.att"),
+                    format!("blocks.{i}.ffn"),
+                    format!("blocks.{i}.ln1"),
+                    format!("blocks.{i}.ln2"),
+                ),
+            };
 
-            let ln1_weight = get(&format!("{p}.ln1.weight"))?;
-            let ln1_bias = get(&format!("{p}.ln1.bias"))?;
-
-            let time_mix_x = get(&format!("{p}.att.time_mix_x"))?;
-
-            let receptance_weight = get(&format!("{p}.att.receptance.weight"))?;
-            if receptance_weight.len() != h * h {
-                return Err(format!(
-                    "layer {i} att.receptance.weight shape mismatch: expected {} got {}",
-                    h * h,
-                    receptance_weight.len()
-                ));
-            }
-
-            let key_weight = get(&format!("{p}.att.key.weight"))?;
-            let value_weight = get(&format!("{p}.att.value.weight"))?;
-            let gate_weight = get(&format!("{p}.att.gate.weight"))?;
-            let output_weight = get(&format!("{p}.att.output.weight"))?;
-
-            let time_decay = get(&format!("{p}.att.time_decay"))?;
-            if time_decay.len() != nh * hs {
-                return Err(format!(
-                    "layer {i} att.time_decay shape mismatch: expected {} got {}",
-                    nh * hs,
-                    time_decay.len()
-                ));
-            }
-
-            let att_ln_weight = get(&format!("{p}.att.ln_x.weight"))?;
-            let att_ln_bias = get(&format!("{p}.att.ln_x.bias"))?;
-
-            let ln2_weight = get(&format!("{p}.ln2.weight"))?;
-            let ln2_bias = get(&format!("{p}.ln2.bias"))?;
-
-            let channel_mix_x = get(&format!("{p}.ffn.time_mix_x"))?;
-
-            let ffn_receptance_weight = get(&format!("{p}.ffn.receptance.weight"))?;
-            let ffn_key_weight = get(&format!("{p}.ffn.key.weight"))?;
-            if ffn_key_weight.len() != inter * h {
-                return Err(format!(
-                    "layer {i} ffn.key.weight shape mismatch: expected {} got {}",
-                    inter * h,
-                    ffn_key_weight.len()
-                ));
-            }
-            let ffn_value_weight = get(&format!("{p}.ffn.value.weight"))?;
-            if ffn_value_weight.len() != h * inter {
-                return Err(format!(
-                    "layer {i} ffn.value.weight shape mismatch: expected {} got {}",
-                    h * inter,
-                    ffn_value_weight.len()
-                ));
-            }
+            // Helper to squeeze leading 1-dims from lerp weights like [1,1,h] -> [h]
+            let get_squeeze = |name: &str| -> Result<Vec<f32>, String> {
+                let raw = get(name)?;
+                if raw.len() == h { return Ok(raw); }
+                // Squeeze: [1,1,h] or [1,h] → [h]
+                if raw.len() == h {
+                    Ok(raw)
+                } else {
+                    Ok(raw) // data is the same regardless of shape metadata
+                }
+            };
 
             blocks.push(RwkvBlock {
                 hidden_size: h,
-                num_heads: nh,
-                head_size: hs,
+                num_heads: config.num_heads,
+                head_size: config.head_size,
                 intermediate_size: inter,
+                decay_rank: dr,
+                alpha_rank: ar,
+                gate_rank: gr,
                 norm_eps: config.norm_eps as f32,
-                ln1_weight,
-                ln1_bias,
-                time_mix_x,
-                receptance_weight,
-                key_weight,
-                value_weight,
-                gate_weight,
-                output_weight,
-                time_decay,
-                att_ln_weight,
-                att_ln_bias,
-                ln2_weight,
-                ln2_bias,
-                channel_mix_x,
-                ffn_receptance_weight,
-                ffn_key_weight,
-                ffn_value_weight,
+                ln1_weight: get(&format!("{ln1_p}.weight"))?,
+                ln1_bias: get(&format!("{ln1_p}.bias"))?,
+                x_r: get_squeeze(&format!("{att_p}.x_r"))?,
+                x_k: get_squeeze(&format!("{att_p}.x_k"))?,
+                x_v: get_squeeze(&format!("{att_p}.x_v"))?,
+                x_w: get_squeeze(&format!("{att_p}.x_w"))?,
+                x_a: get_squeeze(&format!("{att_p}.x_a"))?,
+                x_g: get_squeeze(&format!("{att_p}.x_g"))?,
+                r_proj: get(&format!("{att_p}.receptance.weight"))
+                    .or_else(|_| get(&format!("{att_p}.r_proj.weight")))?,
+                k_proj: get(&format!("{att_p}.key.weight"))
+                    .or_else(|_| get(&format!("{att_p}.k_proj.weight")))?,
+                v_proj: get(&format!("{att_p}.value.weight"))
+                    .or_else(|_| get(&format!("{att_p}.v_proj.weight")))?,
+                o_proj: get(&format!("{att_p}.output.weight"))
+                    .or_else(|_| get(&format!("{att_p}.o_proj.weight")))?,
+                w0: get_squeeze(&format!("{att_p}.w0"))?,
+                w1: get(&format!("{att_p}.w1"))?,
+                w2: get(&format!("{att_p}.w2"))?,
+                a0: get_squeeze(&format!("{att_p}.a0"))?,
+                a1: get(&format!("{att_p}.a1"))?,
+                a2: get(&format!("{att_p}.a2"))?,
+                g1: get(&format!("{att_p}.g1"))?,
+                g2: get(&format!("{att_p}.g2"))?,
+                k_k: get_squeeze(&format!("{att_p}.k_k"))?,
+                k_a: get_squeeze(&format!("{att_p}.k_a"))?,
+                r_k: get(&format!("{att_p}.r_k"))?,
+                g_norm_weight: get(&format!("{att_p}.ln_x.weight"))
+                    .or_else(|_| get(&format!("{att_p}.g_norm.weight")))?,
+                g_norm_bias: get(&format!("{att_p}.ln_x.bias"))
+                    .or_else(|_| get(&format!("{att_p}.g_norm.bias")))?,
+                ln2_weight: get(&format!("{ln2_p}.weight"))?,
+                ln2_bias: get(&format!("{ln2_p}.bias"))?,
+                ffn_x_k: get_squeeze(&format!("{ffn_p}.x_k"))?,
+                ffn_key_weight: get(&format!("{ffn_p}.key.weight"))?,
+                ffn_value_weight: get(&format!("{ffn_p}.value.weight"))?,
             });
         }
 
-        Ok(RwkvModel::new(
-            config,
-            embed_tokens,
-            blocks,
-            final_norm_weight,
-            final_norm_bias,
-            lm_head_weight,
-        ))
+        Ok(RwkvModel::new(config, embed_tokens, blocks, final_norm_weight, final_norm_bias, lm_head_weight))
     }
 }
 
@@ -379,6 +366,9 @@ mod tests {
         let nh = config.num_heads;
         let hs = config.head_size;
         let inter = config.intermediate_size;
+        let dr = config.decay_rank;
+        let ar = config.alpha_rank;
+        let gr = config.gate_rank;
         let vocab = config.vocab_size;
 
         let embed_tokens = pseudo_random_vec(100, vocab * h);
@@ -388,44 +378,33 @@ mod tests {
 
         let mut blocks = Vec::new();
         for layer_idx in 0..config.num_layers {
-            let seed_base = (layer_idx as u64 + 1) * 1000;
+            let s = (layer_idx as u64 + 1) * 1000;
             blocks.push(RwkvBlock {
-                hidden_size: h,
-                num_heads: nh,
-                head_size: hs,
-                intermediate_size: inter,
+                hidden_size: h, num_heads: nh, head_size: hs,
+                intermediate_size: inter, decay_rank: dr, alpha_rank: ar, gate_rank: gr,
                 norm_eps: config.norm_eps as f32,
-                ln1_weight: vec![1.0f32; h],
-                ln1_bias: vec![0.0f32; h],
-                time_mix_x: vec![0.5f32; h],
-                receptance_weight: pseudo_random_vec(seed_base + 1, h * h),
-                key_weight: pseudo_random_vec(seed_base + 2, h * h),
-                value_weight: pseudo_random_vec(seed_base + 3, h * h),
-                gate_weight: pseudo_random_vec(seed_base + 4, h * h),
-                output_weight: pseudo_random_vec(seed_base + 5, h * h),
-                time_decay: pseudo_random_vec(seed_base + 6, nh * hs)
-                    .into_iter()
-                    .map(|v| -v.abs() - 0.1)
-                    .collect(),
-                att_ln_weight: vec![1.0f32; h],
-                att_ln_bias: vec![0.0f32; h],
-                ln2_weight: vec![1.0f32; h],
-                ln2_bias: vec![0.0f32; h],
-                channel_mix_x: vec![0.5f32; h],
-                ffn_receptance_weight: pseudo_random_vec(seed_base + 7, h * h),
-                ffn_key_weight: pseudo_random_vec(seed_base + 8, inter * h),
-                ffn_value_weight: pseudo_random_vec(seed_base + 9, h * inter),
+                ln1_weight: vec![1.0f32; h], ln1_bias: vec![0.0f32; h],
+                x_r: pseudo_random_vec(s+10, h), x_k: pseudo_random_vec(s+11, h),
+                x_v: pseudo_random_vec(s+12, h), x_w: pseudo_random_vec(s+13, h),
+                x_a: pseudo_random_vec(s+14, h), x_g: pseudo_random_vec(s+15, h),
+                r_proj: pseudo_random_vec(s+1, h*h), k_proj: pseudo_random_vec(s+2, h*h),
+                v_proj: pseudo_random_vec(s+3, h*h), o_proj: pseudo_random_vec(s+5, h*h),
+                w0: pseudo_random_vec(s+20, h),
+                w1: pseudo_random_vec(s+21, h*dr), w2: pseudo_random_vec(s+22, dr*h),
+                a0: pseudo_random_vec(s+30, h),
+                a1: pseudo_random_vec(s+31, h*ar), a2: pseudo_random_vec(s+32, ar*h),
+                g1: pseudo_random_vec(s+40, h*gr), g2: pseudo_random_vec(s+41, gr*h),
+                k_k: vec![1.0f32; h], k_a: vec![1.0f32; h],
+                r_k: pseudo_random_vec(s+50, nh*hs),
+                g_norm_weight: vec![1.0f32; h], g_norm_bias: vec![0.0f32; h],
+                ln2_weight: vec![1.0f32; h], ln2_bias: vec![0.0f32; h],
+                ffn_x_k: pseudo_random_vec(s+60, h),
+                ffn_key_weight: pseudo_random_vec(s+8, inter*h),
+                ffn_value_weight: pseudo_random_vec(s+9, h*inter),
             });
         }
 
-        RwkvModel::new(
-            config,
-            embed_tokens,
-            blocks,
-            final_norm_weight,
-            final_norm_bias,
-            lm_head_weight,
-        )
+        RwkvModel::new(config, embed_tokens, blocks, final_norm_weight, final_norm_bias, lm_head_weight)
     }
 
     #[test]
@@ -494,11 +473,14 @@ mod tests {
         let nh = config.num_heads;
         let hs = config.head_size;
         let inter = config.intermediate_size;
+        let dr = config.decay_rank;
+        let ar = config.alpha_rank;
+        let gr = config.gate_rank;
         let vocab = config.vocab_size;
 
         let mut weights: HashMap<String, RawTensor> = HashMap::new();
 
-        let make_tensor = |shape: Vec<usize>, seed: u64| -> RawTensor {
+        let make = |shape: Vec<usize>, seed: u64| -> RawTensor {
             let len: usize = shape.iter().product();
             RawTensor {
                 data: AlignedBuffer::from_slice(&pseudo_random_vec(seed, len)),
@@ -506,89 +488,63 @@ mod tests {
             }
         };
 
-        // Global weights
-        weights.insert("emb.weight".to_string(), make_tensor(vec![vocab, h], 10));
-        weights.insert("ln_out.weight".to_string(), make_tensor(vec![h], 11));
-        weights.insert("ln_out.bias".to_string(), make_tensor(vec![h], 12));
-        weights.insert("head.weight".to_string(), make_tensor(vec![vocab, h], 13));
+        // Legacy naming (no prefix)
+        weights.insert("emb.weight".into(), make(vec![vocab, h], 10));
+        weights.insert("ln_out.weight".into(), make(vec![h], 11));
+        weights.insert("ln_out.bias".into(), make(vec![h], 12));
+        weights.insert("head.weight".into(), make(vec![vocab, h], 13));
 
         for i in 0..config.num_layers {
-            let seed_base = (i as u64 + 1) * 100;
+            let s = (i as u64 + 1) * 100;
             let p = format!("blocks.{i}");
+            let a = format!("{p}.att");
+            let f = format!("{p}.ffn");
 
-            weights.insert(format!("{p}.ln1.weight"), make_tensor(vec![h], seed_base));
-            weights.insert(format!("{p}.ln1.bias"), make_tensor(vec![h], seed_base + 1));
-            weights.insert(format!("{p}.att.time_mix_x"), make_tensor(vec![h], seed_base + 2));
-            weights.insert(
-                format!("{p}.att.receptance.weight"),
-                make_tensor(vec![h, h], seed_base + 3),
-            );
-            weights.insert(
-                format!("{p}.att.key.weight"),
-                make_tensor(vec![h, h], seed_base + 4),
-            );
-            weights.insert(
-                format!("{p}.att.value.weight"),
-                make_tensor(vec![h, h], seed_base + 5),
-            );
-            weights.insert(
-                format!("{p}.att.gate.weight"),
-                make_tensor(vec![h, h], seed_base + 6),
-            );
-            weights.insert(
-                format!("{p}.att.output.weight"),
-                make_tensor(vec![h, h], seed_base + 7),
-            );
-            // time_decay: negative values for stability
-            let td_len = nh * hs;
-            let td_data: Vec<f32> = pseudo_random_vec(seed_base + 8, td_len)
-                .into_iter()
-                .map(|v| -v.abs() - 0.1)
-                .collect();
-            weights.insert(
-                format!("{p}.att.time_decay"),
-                RawTensor {
-                    data: AlignedBuffer::from_slice(&td_data),
-                    shape: vec![nh, hs],
-                },
-            );
-            weights.insert(
-                format!("{p}.att.ln_x.weight"),
-                make_tensor(vec![h], seed_base + 9),
-            );
-            weights.insert(
-                format!("{p}.att.ln_x.bias"),
-                make_tensor(vec![h], seed_base + 10),
-            );
-            weights.insert(format!("{p}.ln2.weight"), make_tensor(vec![h], seed_base + 11));
-            weights.insert(format!("{p}.ln2.bias"), make_tensor(vec![h], seed_base + 12));
-            weights.insert(
-                format!("{p}.ffn.time_mix_x"),
-                make_tensor(vec![h], seed_base + 13),
-            );
-            weights.insert(
-                format!("{p}.ffn.receptance.weight"),
-                make_tensor(vec![h, h], seed_base + 14),
-            );
-            weights.insert(
-                format!("{p}.ffn.key.weight"),
-                make_tensor(vec![inter, h], seed_base + 15),
-            );
-            weights.insert(
-                format!("{p}.ffn.value.weight"),
-                make_tensor(vec![h, inter], seed_base + 16),
-            );
+            weights.insert(format!("{p}.ln1.weight"), make(vec![h], s));
+            weights.insert(format!("{p}.ln1.bias"), make(vec![h], s+1));
+            // 6 token shift lerps
+            weights.insert(format!("{a}.x_r"), make(vec![h], s+10));
+            weights.insert(format!("{a}.x_k"), make(vec![h], s+11));
+            weights.insert(format!("{a}.x_v"), make(vec![h], s+12));
+            weights.insert(format!("{a}.x_w"), make(vec![h], s+13));
+            weights.insert(format!("{a}.x_a"), make(vec![h], s+14));
+            weights.insert(format!("{a}.x_g"), make(vec![h], s+15));
+            // Projections
+            weights.insert(format!("{a}.receptance.weight"), make(vec![h, h], s+20));
+            weights.insert(format!("{a}.key.weight"), make(vec![h, h], s+21));
+            weights.insert(format!("{a}.value.weight"), make(vec![h, h], s+22));
+            weights.insert(format!("{a}.output.weight"), make(vec![h, h], s+23));
+            // Low-rank decay
+            weights.insert(format!("{a}.w0"), make(vec![h], s+30));
+            weights.insert(format!("{a}.w1"), make(vec![h, dr], s+31));
+            weights.insert(format!("{a}.w2"), make(vec![dr, h], s+32));
+            // Low-rank alpha
+            weights.insert(format!("{a}.a0"), make(vec![h], s+40));
+            weights.insert(format!("{a}.a1"), make(vec![h, ar], s+41));
+            weights.insert(format!("{a}.a2"), make(vec![ar, h], s+42));
+            // Low-rank gate
+            weights.insert(format!("{a}.g1"), make(vec![h, gr], s+50));
+            weights.insert(format!("{a}.g2"), make(vec![gr, h], s+51));
+            // Key modulation
+            weights.insert(format!("{a}.k_k"), make(vec![h], s+60));
+            weights.insert(format!("{a}.k_a"), make(vec![h], s+61));
+            weights.insert(format!("{a}.r_k"), make(vec![nh, hs], s+62));
+            // GroupNorm
+            weights.insert(format!("{a}.ln_x.weight"), make(vec![h], s+70));
+            weights.insert(format!("{a}.ln_x.bias"), make(vec![h], s+71));
+            // LN2 + FFN
+            weights.insert(format!("{p}.ln2.weight"), make(vec![h], s+80));
+            weights.insert(format!("{p}.ln2.bias"), make(vec![h], s+81));
+            weights.insert(format!("{f}.x_k"), make(vec![h], s+82));
+            weights.insert(format!("{f}.key.weight"), make(vec![inter, h], s+83));
+            weights.insert(format!("{f}.value.weight"), make(vec![h, inter], s+84));
         }
 
-        let model =
-            RwkvModel::from_weights(config, &weights).expect("from_weights should succeed");
+        let model = RwkvModel::from_weights(config, &weights).expect("from_weights should succeed");
         let output = model.forward(&[1, 2, 3]);
         assert_eq!(output.shape, [1, 1, model.config.vocab_size]);
         for (i, &v) in output.logits.iter().enumerate() {
-            assert!(
-                v.is_finite(),
-                "from_weights logit[{i}] = {v} is not finite"
-            );
+            assert!(v.is_finite(), "from_weights logit[{i}] = {v} is not finite");
         }
     }
 }

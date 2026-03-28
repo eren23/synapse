@@ -39,4 +39,4 @@ pub use rwkv_model::RwkvModel;
 pub use rwkv_state::{RwkvLayerState, RwkvState};
 pub use selective_scan::{compute_delta, selective_scan_seq, selective_scan_step};
 pub use state::{MambaLayerState, RecurrentState};
-pub use wkv::{wkv_seq, wkv_step};
+pub use wkv::{wkv7_seq, wkv7_step};

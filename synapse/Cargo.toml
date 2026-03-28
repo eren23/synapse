@@ -28,6 +28,9 @@ synapse-sys = { path = "crates/synapse-sys" }
 rand = "0.8"
 rand_distr = "0.4"
 
+[dev-dependencies]
+serde_json = "1"
+
 [[example]]
 name = "xor"
 path = "examples/xor.rs"
@@ -155,6 +158,18 @@ path = "tests/integration/diffusion_validation.rs"
 [[test]]
 name = "reference_correctness"
 path = "tests/integration/reference_correctness.rs"
+
+[[test]]
+name = "mamba_hf_validation"
+path = "tests/integration/mamba_hf_validation.rs"
+
+[[test]]
+name = "rwkv_hf_validation"
+path = "tests/integration/rwkv_hf_validation.rs"
+
+[[example]]
+name = "mamba_generate"
+path = "examples/mamba_generate.rs"
 
 [[example]]
 name = "qwen3_chat"

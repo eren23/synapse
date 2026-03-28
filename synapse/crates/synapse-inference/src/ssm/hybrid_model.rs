@@ -299,6 +299,190 @@ impl Model for HybridModel {
     }
 }
 
+// ── Weight loading ──────────────────────────────────────────────────
+
+use std::collections::HashMap;
+use crate::weight_loading::RawTensor;
+
+impl HybridModel {
+    /// Build a HybridModel from a HuggingFace-style weight dictionary.
+    ///
+    /// Expects Qwen3.5-style weight names:
+    /// - `model.embed_tokens.weight`
+    /// - `model.layers.{i}.input_layernorm.weight`
+    /// - GQA layers: `model.layers.{i}.self_attn.{q,k,v,o}_proj.weight`,
+    ///   `q_norm.weight`, `k_norm.weight`
+    /// - DeltaNet layers: `model.layers.{i}.self_attn.qkv_proj.weight`,
+    ///   `gate_proj.weight`, `alpha_proj.weight`, `beta_proj.weight`,
+    ///   `q_conv1d.{weight,bias}`, `k_conv1d.{weight,bias}`, `v_conv1d.{weight,bias}`,
+    ///   `o_norm.weight`, `o_proj.weight`
+    /// - Both: `model.layers.{i}.mlp.{gate,up,down}_proj.weight`
+    /// - `model.norm.weight`, `lm_head.weight`
+    pub fn from_weights(
+        config: HybridConfig,
+        weights: &HashMap<String, RawTensor>,
+        max_kv_seq: usize,
+    ) -> Result<Self, String> {
+        let d = config.hidden_size;
+        let vocab = config.vocab_size;
+        let im = config.intermediate_size;
+        let nh_dn = config.deltanet_num_heads;
+        let hd_dn = config.deltanet_head_dim;
+        let nh_hd_dn = nh_dn * hd_dn;
+        let ck = config.deltanet_conv_kernel;
+        let nq = config.num_attention_heads;
+        let nkv = config.num_kv_heads;
+        let hd_gqa = config.gqa_head_dim;
+
+        let prefix = if weights.keys().any(|k| k.starts_with("model.")) {
+            "model"
+        } else {
+            ""
+        };
+
+        let get = |name: &str| -> Result<Vec<f32>, String> {
+            weights.get(name)
+                .map(|t| t.data.to_vec())
+                .ok_or_else(|| format!("missing weight: {name}"))
+        };
+
+        // Embedding
+        let embed_key = if prefix.is_empty() {
+            "embed_tokens.weight".to_string()
+        } else {
+            format!("{prefix}.embed_tokens.weight")
+        };
+        let embed_tokens = get(&embed_key)?;
+        if embed_tokens.len() != vocab * d {
+            return Err(format!("embed_tokens shape mismatch: expected {} got {}", vocab * d, embed_tokens.len()));
+        }
+
+        // Final norm
+        let norm_key = if prefix.is_empty() { "norm.weight".to_string() } else { format!("{prefix}.norm.weight") };
+        let final_norm_weight = get(&norm_key)?;
+
+        // LM head
+        let lm_head_weight = weights.get("lm_head.weight").map(|t| t.data.to_vec());
+
+        // RoPE tables
+        let (rope_cos, rope_sin) = compute_rope_tables(max_kv_seq, hd_gqa);
+
+        // Layers
+        let mut layers = Vec::with_capacity(config.num_layers);
+        for i in 0..config.num_layers {
+            let lp = if prefix.is_empty() {
+                format!("layers.{i}")
+            } else {
+                format!("{prefix}.layers.{i}")
+            };
+
+            if config.is_full_attention(i) {
+                // GQA layer
+                let attn_norm = get(&format!("{lp}.input_layernorm.weight"))?;
+                let w_q = get(&format!("{lp}.self_attn.q_proj.weight"))?;
+                let w_k = get(&format!("{lp}.self_attn.k_proj.weight"))?;
+                let w_v = get(&format!("{lp}.self_attn.v_proj.weight"))?;
+                let w_o = get(&format!("{lp}.self_attn.o_proj.weight"))?;
+                let q_norm = get(&format!("{lp}.self_attn.q_norm.weight"))?;
+                let k_norm = get(&format!("{lp}.self_attn.k_norm.weight"))?;
+                let ffn_norm = get(&format!("{lp}.post_attention_layernorm.weight"))?;
+                let ffn_gate = get(&format!("{lp}.mlp.gate_proj.weight"))?;
+                let ffn_up = get(&format!("{lp}.mlp.up_proj.weight"))?;
+                let ffn_down = get(&format!("{lp}.mlp.down_proj.weight"))?;
+
+                layers.push(HybridLayer::Gqa(GqaDecoderLayer {
+                    hidden_size: d,
+                    num_q_heads: nq,
+                    num_kv_heads: nkv,
+                    head_dim: hd_gqa,
+                    intermediate_size: im,
+                    norm_eps: config.norm_eps as f32,
+                    attn_norm_weight: attn_norm,
+                    w_q, w_k, w_v, w_o,
+                    q_norm_weight: q_norm,
+                    k_norm_weight: k_norm,
+                    ffn_norm_weight: ffn_norm,
+                    ffn_gate_weight: ffn_gate,
+                    ffn_up_weight: ffn_up,
+                    ffn_down_weight: ffn_down,
+                }));
+            } else {
+                // DeltaNet layer
+                let attn_norm = get(&format!("{lp}.input_layernorm.weight"))?;
+                let qkv = get(&format!("{lp}.self_attn.qkv_proj.weight"))?;
+                let gate = get(&format!("{lp}.self_attn.gate_proj.weight"))?;
+                let beta = get(&format!("{lp}.self_attn.beta_proj.weight"))?;
+                let alpha = get(&format!("{lp}.self_attn.alpha_proj.weight"))?;
+                let q_conv_w = get(&format!("{lp}.self_attn.q_conv1d.weight"))?;
+                let q_conv_b = get(&format!("{lp}.self_attn.q_conv1d.bias"))?;
+                let k_conv_w = get(&format!("{lp}.self_attn.k_conv1d.weight"))?;
+                let k_conv_b = get(&format!("{lp}.self_attn.k_conv1d.bias"))?;
+                let v_conv_w = get(&format!("{lp}.self_attn.v_conv1d.weight"))?;
+                let v_conv_b = get(&format!("{lp}.self_attn.v_conv1d.bias"))?;
+                let o_norm = get(&format!("{lp}.self_attn.o_norm.weight"))?;
+                let o_proj = get(&format!("{lp}.self_attn.o_proj.weight"))?;
+                let ffn_norm = get(&format!("{lp}.post_attention_layernorm.weight"))?;
+                let ffn_gate = get(&format!("{lp}.mlp.gate_proj.weight"))?;
+                let ffn_up = get(&format!("{lp}.mlp.up_proj.weight"))?;
+                let ffn_down = get(&format!("{lp}.mlp.down_proj.weight"))?;
+
+                layers.push(HybridLayer::DeltaNet(DeltaNetDecoderLayer {
+                    hidden_size: d,
+                    num_heads: nh_dn,
+                    head_dim: hd_dn,
+                    intermediate_size: im,
+                    conv_kernel: ck,
+                    norm_eps: config.norm_eps as f32,
+                    attn_norm_weight: attn_norm,
+                    qkv_weight: qkv,
+                    gate_proj_weight: gate,
+                    beta_proj_weight: beta,
+                    alpha_proj_weight: alpha,
+                    q_conv_weight: q_conv_w,
+                    q_conv_bias: q_conv_b,
+                    k_conv_weight: k_conv_w,
+                    k_conv_bias: k_conv_b,
+                    v_conv_weight: v_conv_w,
+                    v_conv_bias: v_conv_b,
+                    o_norm_weight: o_norm,
+                    o_proj_weight: o_proj,
+                    ffn_norm_weight: ffn_norm,
+                    ffn_gate_weight: ffn_gate,
+                    ffn_up_weight: ffn_up,
+                    ffn_down_weight: ffn_down,
+                }));
+            }
+        }
+
+        Ok(HybridModel::new(
+            config,
+            embed_tokens,
+            layers,
+            final_norm_weight,
+            lm_head_weight,
+            rope_cos,
+            rope_sin,
+            max_kv_seq,
+        ))
+    }
+}
+
+/// Compute RoPE cos/sin tables for the given max position and head dimension.
+fn compute_rope_tables(max_pos: usize, head_dim: usize) -> (Vec<f32>, Vec<f32>) {
+    let half_d = head_dim / 2;
+    let mut cos = vec![0.0f32; max_pos * half_d];
+    let mut sin = vec![0.0f32; max_pos * half_d];
+    for pos in 0..max_pos {
+        for i in 0..half_d {
+            let freq = 1.0 / (10000.0f32).powf(2.0 * i as f32 / head_dim as f32);
+            let angle = pos as f32 * freq;
+            cos[pos * half_d + i] = angle.cos();
+            sin[pos * half_d + i] = angle.sin();
+        }
+    }
+    (cos, sin)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -534,6 +718,82 @@ mod tests {
                     "layer {i} is GQA but config says DeltaNet"
                 ),
             }
+        }
+    }
+
+    #[test]
+    fn test_hybrid_model_from_weights() {
+        use crate::weight_loading::AlignedBuffer;
+
+        let config = HybridConfig::tiny_test();
+        let d = config.hidden_size;
+        let vocab = config.vocab_size;
+        let im = config.intermediate_size;
+        let nh_dn = config.deltanet_num_heads;
+        let hd_dn = config.deltanet_head_dim;
+        let nh_hd_dn = nh_dn * hd_dn;
+        let ck = config.deltanet_conv_kernel;
+        let nq = config.num_attention_heads;
+        let nkv = config.num_kv_heads;
+        let hd_gqa = config.gqa_head_dim;
+
+        let mut weights: HashMap<String, RawTensor> = HashMap::new();
+        let make = |shape: Vec<usize>, seed: u64| -> RawTensor {
+            let len: usize = shape.iter().product();
+            RawTensor {
+                data: AlignedBuffer::from_slice(&pseudo_random_vec(seed, len)),
+                shape,
+            }
+        };
+
+        weights.insert("model.embed_tokens.weight".into(), make(vec![vocab, d], 10));
+        weights.insert("model.norm.weight".into(), make(vec![d], 11));
+        weights.insert("lm_head.weight".into(), make(vec![vocab, d], 12));
+
+        for i in 0..config.num_layers {
+            let s = (i as u64 + 1) * 100;
+            let p = format!("model.layers.{i}");
+
+            if config.is_full_attention(i) {
+                weights.insert(format!("{p}.input_layernorm.weight"), make(vec![d], s));
+                weights.insert(format!("{p}.self_attn.q_proj.weight"), make(vec![nq * hd_gqa, d], s+1));
+                weights.insert(format!("{p}.self_attn.k_proj.weight"), make(vec![nkv * hd_gqa, d], s+2));
+                weights.insert(format!("{p}.self_attn.v_proj.weight"), make(vec![nkv * hd_gqa, d], s+3));
+                weights.insert(format!("{p}.self_attn.o_proj.weight"), make(vec![d, nq * hd_gqa], s+4));
+                weights.insert(format!("{p}.self_attn.q_norm.weight"), make(vec![hd_gqa], s+5));
+                weights.insert(format!("{p}.self_attn.k_norm.weight"), make(vec![hd_gqa], s+6));
+                weights.insert(format!("{p}.post_attention_layernorm.weight"), make(vec![d], s+7));
+                weights.insert(format!("{p}.mlp.gate_proj.weight"), make(vec![im, d], s+8));
+                weights.insert(format!("{p}.mlp.up_proj.weight"), make(vec![im, d], s+9));
+                weights.insert(format!("{p}.mlp.down_proj.weight"), make(vec![d, im], s+10));
+            } else {
+                weights.insert(format!("{p}.input_layernorm.weight"), make(vec![d], s));
+                weights.insert(format!("{p}.self_attn.qkv_proj.weight"), make(vec![3 * nh_hd_dn, d], s+1));
+                weights.insert(format!("{p}.self_attn.gate_proj.weight"), make(vec![nh_hd_dn, d], s+2));
+                weights.insert(format!("{p}.self_attn.beta_proj.weight"), make(vec![nh_dn, d], s+3));
+                weights.insert(format!("{p}.self_attn.alpha_proj.weight"), make(vec![nh_dn, d], s+4));
+                weights.insert(format!("{p}.self_attn.q_conv1d.weight"), make(vec![nh_hd_dn, ck], s+5));
+                weights.insert(format!("{p}.self_attn.q_conv1d.bias"), make(vec![nh_hd_dn], s+6));
+                weights.insert(format!("{p}.self_attn.k_conv1d.weight"), make(vec![nh_hd_dn, ck], s+7));
+                weights.insert(format!("{p}.self_attn.k_conv1d.bias"), make(vec![nh_hd_dn], s+8));
+                weights.insert(format!("{p}.self_attn.v_conv1d.weight"), make(vec![nh_hd_dn, ck], s+9));
+                weights.insert(format!("{p}.self_attn.v_conv1d.bias"), make(vec![nh_hd_dn], s+10));
+                weights.insert(format!("{p}.self_attn.o_norm.weight"), make(vec![nh_hd_dn], s+11));
+                weights.insert(format!("{p}.self_attn.o_proj.weight"), make(vec![d, nh_hd_dn], s+12));
+                weights.insert(format!("{p}.post_attention_layernorm.weight"), make(vec![d], s+13));
+                weights.insert(format!("{p}.mlp.gate_proj.weight"), make(vec![im, d], s+14));
+                weights.insert(format!("{p}.mlp.up_proj.weight"), make(vec![im, d], s+15));
+                weights.insert(format!("{p}.mlp.down_proj.weight"), make(vec![d, im], s+16));
+            }
+        }
+
+        let model = HybridModel::from_weights(config, &weights, 64)
+            .expect("from_weights should succeed");
+
+        let output = model.forward(&[1, 2, 3]);
+        assert_eq!(output.shape, [1, 1, model.config.vocab_size]);
+        for (i, &v) in output.logits.iter().enumerate() {
+            assert!(v.is_finite(), "from_weights logit[{i}] = {v} is not finite");
         }
     }
 }

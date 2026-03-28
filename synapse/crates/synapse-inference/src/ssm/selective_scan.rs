@@ -51,28 +51,49 @@ pub fn selective_scan_step(
     debug_assert_eq!(d.len(), d_inner);
     debug_assert_eq!(ssm_state.len(), d_inner * d_state);
 
-    let mut y = vec![0.0f32; d_inner];
-
-    for i in 0..d_inner {
-        let dt_i = delta[i];
-        let x_i = x[i];
-        let mut yi = 0.0f32;
-
-        for j in 0..d_state {
-            let idx = i * d_state + j;
-            // Discretise A: exp(delta * A). a_log stores log(A) (negative).
-            let a_disc = (dt_i * a_log[idx]).exp();
-            // Update hidden state
-            let h_new = a_disc * ssm_state[idx] + dt_i * b[j] * x_i;
-            ssm_state[idx] = h_new;
-            yi += c[j] * h_new;
+    // Zig SIMD fast path
+    #[cfg(feature = "zig-ffi")]
+    {
+        let mut y = vec![0.0f32; d_inner];
+        unsafe {
+            synapse_sys::syn_selective_scan_step(
+                x.as_ptr(), delta.as_ptr(), a_log.as_ptr(),
+                b.as_ptr(), c.as_ptr(), d.as_ptr(),
+                ssm_state.as_mut_ptr(), y.as_mut_ptr(),
+                d_inner, d_state,
+            );
         }
-
-        // Skip connection
-        y[i] = yi + d[i] * x_i;
+        return y;
     }
 
-    y
+    // Pure-Rust fallback
+    #[cfg(not(feature = "zig-ffi"))]
+    {
+        let mut y = vec![0.0f32; d_inner];
+
+        for i in 0..d_inner {
+            let dt_i = delta[i];
+            let x_i = x[i];
+            let mut yi = 0.0f32;
+
+            for j in 0..d_state {
+                let idx = i * d_state + j;
+                // A = -exp(a_log) (always negative for stability)
+                // Discretise: exp(delta * A) = exp(-delta * exp(a_log))
+                let a = -(a_log[idx].exp());
+                let a_disc = (dt_i * a).exp();
+                // Update hidden state
+                let h_new = a_disc * ssm_state[idx] + dt_i * b[j] * x_i;
+                ssm_state[idx] = h_new;
+                yi += c[j] * h_new;
+            }
+
+            // Skip connection
+            y[i] = yi + d[i] * x_i;
+        }
+
+        y
+    }
 }
 
 /// Sequential selective scan for prefill (processes a sequence of tokens).

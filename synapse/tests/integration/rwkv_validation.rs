@@ -22,6 +22,9 @@ fn build_test_model() -> RwkvModel {
     let nh = config.num_heads;
     let hs = config.head_size;
     let inter = config.intermediate_size;
+    let dr = config.decay_rank;
+    let ar = config.alpha_rank;
+    let gr = config.gate_rank;
     let vocab = config.vocab_size;
 
     let embed_tokens = pseudo_random_vec(100, vocab * h);
@@ -31,44 +34,33 @@ fn build_test_model() -> RwkvModel {
 
     let mut blocks = Vec::new();
     for layer_idx in 0..config.num_layers {
-        let seed_base = (layer_idx as u64 + 1) * 1000;
+        let s = (layer_idx as u64 + 1) * 1000;
         blocks.push(RwkvBlock {
-            hidden_size: h,
-            num_heads: nh,
-            head_size: hs,
-            intermediate_size: inter,
+            hidden_size: h, num_heads: nh, head_size: hs,
+            intermediate_size: inter, decay_rank: dr, alpha_rank: ar, gate_rank: gr,
             norm_eps: config.norm_eps as f32,
-            ln1_weight: vec![1.0f32; h],
-            ln1_bias: vec![0.0f32; h],
-            time_mix_x: vec![0.5f32; h],
-            receptance_weight: pseudo_random_vec(seed_base + 1, h * h),
-            key_weight: pseudo_random_vec(seed_base + 2, h * h),
-            value_weight: pseudo_random_vec(seed_base + 3, h * h),
-            gate_weight: pseudo_random_vec(seed_base + 4, h * h),
-            output_weight: pseudo_random_vec(seed_base + 5, h * h),
-            time_decay: pseudo_random_vec(seed_base + 6, nh * hs)
-                .into_iter()
-                .map(|v| -v.abs() - 0.1)
-                .collect(),
-            att_ln_weight: vec![1.0f32; h],
-            att_ln_bias: vec![0.0f32; h],
-            ln2_weight: vec![1.0f32; h],
-            ln2_bias: vec![0.0f32; h],
-            channel_mix_x: vec![0.5f32; h],
-            ffn_receptance_weight: pseudo_random_vec(seed_base + 7, h * h),
-            ffn_key_weight: pseudo_random_vec(seed_base + 8, inter * h),
-            ffn_value_weight: pseudo_random_vec(seed_base + 9, h * inter),
+            ln1_weight: vec![1.0f32; h], ln1_bias: vec![0.0f32; h],
+            x_r: pseudo_random_vec(s+10, h), x_k: pseudo_random_vec(s+11, h),
+            x_v: pseudo_random_vec(s+12, h), x_w: pseudo_random_vec(s+13, h),
+            x_a: pseudo_random_vec(s+14, h), x_g: pseudo_random_vec(s+15, h),
+            r_proj: pseudo_random_vec(s+1, h*h), k_proj: pseudo_random_vec(s+2, h*h),
+            v_proj: pseudo_random_vec(s+3, h*h), o_proj: pseudo_random_vec(s+5, h*h),
+            w0: pseudo_random_vec(s+20, h),
+            w1: pseudo_random_vec(s+21, h*dr), w2: pseudo_random_vec(s+22, dr*h),
+            a0: pseudo_random_vec(s+30, h),
+            a1: pseudo_random_vec(s+31, h*ar), a2: pseudo_random_vec(s+32, ar*h),
+            g1: pseudo_random_vec(s+40, h*gr), g2: pseudo_random_vec(s+41, gr*h),
+            k_k: vec![1.0f32; h], k_a: vec![1.0f32; h],
+            r_k: pseudo_random_vec(s+50, nh*hs),
+            g_norm_weight: vec![1.0f32; h], g_norm_bias: vec![0.0f32; h],
+            ln2_weight: vec![1.0f32; h], ln2_bias: vec![0.0f32; h],
+            ffn_x_k: pseudo_random_vec(s+60, h),
+            ffn_key_weight: pseudo_random_vec(s+8, inter*h),
+            ffn_value_weight: pseudo_random_vec(s+9, h*inter),
         });
     }
 
-    RwkvModel::new(
-        config,
-        embed_tokens,
-        blocks,
-        final_norm_weight,
-        final_norm_bias,
-        lm_head_weight,
-    )
+    RwkvModel::new(config, embed_tokens, blocks, final_norm_weight, final_norm_bias, lm_head_weight)
 }
 
 #[test]
