@@ -23,7 +23,7 @@ synapse-data = { path = "crates/synapse-data" }
 synapse-graph = { path = "crates/synapse-graph" }
 synapse-train = { path = "crates/synapse-train" }
 synapse-core = { path = "crates/synapse-core" }
-synapse-inference = { path = "crates/synapse-inference" }
+synapse-inference = { path = "crates/synapse-inference", features = ["diffusion"] }
 synapse-sys = { path = "crates/synapse-sys" }
 rand = "0.8"
 rand_distr = "0.4"
@@ -147,6 +147,10 @@ path = "tests/integration/rwkv_validation.rs"
 [[test]]
 name = "hybrid_validation"
 path = "tests/integration/hybrid_validation.rs"
+
+[[test]]
+name = "diffusion_validation"
+path = "tests/integration/diffusion_validation.rs"
 
 [[example]]
 name = "qwen3_chat"
