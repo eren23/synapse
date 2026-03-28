@@ -152,6 +152,10 @@ path = "tests/integration/hybrid_validation.rs"
 name = "diffusion_validation"
 path = "tests/integration/diffusion_validation.rs"
 
+[[test]]
+name = "reference_correctness"
+path = "tests/integration/reference_correctness.rs"
+
 [[example]]
 name = "qwen3_chat"
 path = "examples/qwen3_chat.rs"
