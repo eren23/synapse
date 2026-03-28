@@ -8,9 +8,8 @@
 use std::cell::RefCell;
 
 use crate::config::ModelConfig;
-use crate::kv_cache::KVCache;
 use crate::model::causal_lm::ModelOutput;
-use crate::model::traits::Model;
+use crate::model::traits::{Model, ModelState};
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
 use crate::ssm::deltanet_state::DeltaNetLayerState;
@@ -282,12 +281,12 @@ impl Model for HybridModel {
         self.prefill(token_ids)
     }
 
-    fn forward_prefill(&self, token_ids: &[u32], _cache: &mut KVCache) -> ModelOutput {
+    fn forward_prefill(&self, token_ids: &[u32], _state: &mut ModelState) -> ModelOutput {
         self.reset_state();
         self.prefill(token_ids)
     }
 
-    fn forward_one(&self, token: u32, _cache: &mut KVCache) -> ModelOutput {
+    fn forward_one(&self, token: u32, _state: &mut ModelState) -> ModelOutput {
         self.decode_one(token)
     }
 

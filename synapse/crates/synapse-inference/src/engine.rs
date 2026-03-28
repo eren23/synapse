@@ -332,6 +332,22 @@ impl InferenceEngine {
         Ok(cache)
     }
 
+    /// Create a model state sized for this model's architecture.
+    ///
+    /// For transformer models this wraps a KV cache.
+    pub fn create_state(
+        &self,
+        max_seq_len: usize,
+    ) -> Result<crate::model::ModelState, Box<dyn std::error::Error>> {
+        let cache = KVCache::new(
+            self.config.architecture.num_layers,
+            max_seq_len,
+            self.config.attention.num_kv_heads(),
+            self.config.attention.head_dim(),
+        )?;
+        Ok(crate::model::ModelState::KvCache(cache))
+    }
+
     /// Quantize the model to INT8. Call after loading weights.
     pub fn quantize(&mut self) {
         self.quantized_model = Some(quantize_model(&self.model));
@@ -435,9 +451,9 @@ impl InferenceEngine {
     ) -> Result<GenerationOutput, Box<dyn std::error::Error>> {
         let prompt_tokens = self.encode(prompt)?;
         let max_seq = prompt_tokens.len() + config.max_new_tokens;
-        let mut cache = self.create_kv_cache(max_seq)?;
+        let mut state = self.create_state(max_seq)?;
         let pipeline = self.generation_pipeline();
-        let mut output = pipeline.generate(&prompt_tokens, config, Some(&mut cache));
+        let mut output = pipeline.generate(&prompt_tokens, config, Some(&mut state));
         let generated = &output.token_ids[output.num_prompt_tokens..];
         output.text = self.decode(generated)?;
         Ok(output)

@@ -1,15 +1,14 @@
 //! MambaModel: a full Mamba language model implementing the `Model` trait.
 //!
-//! Uses internal `RecurrentState` (not KV cache). The `Model` trait requires
-//! `&mut KVCache` params but MambaModel ignores them and uses its own state
-//! via `RefCell<RecurrentState>`.
+//! Uses internal `RecurrentState` (not KV cache). The `Model` trait takes
+//! `&mut ModelState` params but MambaModel ignores them (passes `Recurrent`
+//! variant) and uses its own state via `RefCell<RecurrentState>`.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::kv_cache::KVCache;
 use crate::model::causal_lm::ModelOutput;
-use crate::model::traits::Model;
+use crate::model::traits::{Model, ModelState};
 use crate::config::ModelConfig;
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
@@ -153,12 +152,12 @@ impl Model for MambaModel {
         self.prefill(token_ids)
     }
 
-    fn forward_prefill(&self, token_ids: &[u32], _cache: &mut KVCache) -> ModelOutput {
+    fn forward_prefill(&self, token_ids: &[u32], _state: &mut ModelState) -> ModelOutput {
         self.reset_state();
         self.prefill(token_ids)
     }
 
-    fn forward_one(&self, token: u32, _cache: &mut KVCache) -> ModelOutput {
+    fn forward_one(&self, token: u32, _state: &mut ModelState) -> ModelOutput {
         self.decode_one(token)
     }
 

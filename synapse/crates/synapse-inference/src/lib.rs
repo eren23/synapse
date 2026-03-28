@@ -33,7 +33,7 @@ pub mod prelude {
         RepetitionPenalty, Sampler, StopChecker, StopCondition, TemperatureSampler, TopKSampler,
         TopPSampler,
     };
-    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput};
+    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput, ModelState};
     pub use crate::model_adapter::{
         ModelAdapter, ModelAdapterKind, ReasoningMarkers, ThinkingMode,
     };

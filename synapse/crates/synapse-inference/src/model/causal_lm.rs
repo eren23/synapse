@@ -541,7 +541,8 @@ impl super::traits::Model for CausalLM {
         CausalLM::forward(self, token_ids)
     }
 
-    fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
+    fn forward_prefill(&self, token_ids: &[u32], state: &mut super::traits::ModelState) -> ModelOutput {
+        let cache = state.as_kv_cache();
         CausalLM::forward_prefill(self, token_ids, cache)
     }
 
@@ -549,17 +550,20 @@ impl super::traits::Model for CausalLM {
     fn forward_prefill_gpu(
         &self,
         token_ids: &[u32],
-        cache: &mut KVCache,
+        state: &mut super::traits::ModelState,
         backend: &crate::metal::ComputeBackend,
     ) -> ModelOutput {
+        let cache = state.as_kv_cache();
         CausalLM::forward_prefill_with_backend(self, token_ids, cache, backend)
     }
 
-    fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
+    fn forward_one(&self, token: u32, state: &mut super::traits::ModelState) -> ModelOutput {
+        let cache = state.as_kv_cache();
         CausalLM::forward_one(self, token, cache)
     }
 
-    fn forward_one_draft(&self, token: u32, cache: &mut KVCache, n_layers: usize) -> ModelOutput {
+    fn forward_one_draft(&self, token: u32, state: &mut super::traits::ModelState, n_layers: usize) -> ModelOutput {
+        let cache = state.as_kv_cache();
         CausalLM::forward_one_draft(self, token, cache, n_layers)
     }
 
@@ -567,9 +571,10 @@ impl super::traits::Model for CausalLM {
     fn forward_one_gpu(
         &self,
         token: u32,
-        cache: &mut KVCache,
+        state: &mut super::traits::ModelState,
         backend: &crate::metal::ComputeBackend,
     ) -> ModelOutput {
+        let cache = state.as_kv_cache();
         CausalLM::forward_one_with_backend(self, token, cache, backend)
     }
 

@@ -726,11 +726,13 @@ impl crate::model::traits::Model for QuantizedCausalLM {
         QuantizedCausalLM::forward(self, token_ids)
     }
 
-    fn forward_prefill(&self, token_ids: &[u32], cache: &mut KVCache) -> ModelOutput {
+    fn forward_prefill(&self, token_ids: &[u32], state: &mut crate::model::traits::ModelState) -> ModelOutput {
+        let cache = state.as_kv_cache();
         QuantizedCausalLM::forward_prefill(self, token_ids, cache)
     }
 
-    fn forward_one(&self, token: u32, cache: &mut KVCache) -> ModelOutput {
+    fn forward_one(&self, token: u32, state: &mut crate::model::traits::ModelState) -> ModelOutput {
+        let cache = state.as_kv_cache();
         QuantizedCausalLM::forward_one(self, token, cache)
     }
 
