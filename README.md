@@ -1,29 +1,43 @@
 # Synapse
 
-**Edge-native inference stack built from scratch in Rust + Zig + Metal.**
+<!-- status:root-positioning:start -->
+Edge-native inference stack for local ML across native and browser targets.
 
-Modular local inference engine with Zig SIMD kernels, Metal GPU acceleration, a pure-Rust WASM runtime for browser delivery, and an ESP32-P4 target for microcontroller inference. One codebase, three deployment targets.
+- Native builds use Rust orchestration with Zig SIMD kernels and optional Metal acceleration.
+- Browser builds use a pure-Rust WASM runtime for portability and client-side demos.
+- Public benchmark rows are measured on Apple Silicon and synced from status/benchmark_matrix.json.
+<!-- status:root-positioning:end -->
 
 ## Benchmarks
 
-| Model | Quantization | Prefill (tok/s) | Decode (tok/s) |
-|-------|-------------|-----------------|----------------|
-| Qwen3-0.6B | f32 | 11 | 7.3 |
-| Qwen3-0.6B | INT8 | 23 | **27.3** |
-| LLaMA 3.2-1B | f32 | 1 | 2.1 |
-| LLaMA 3.2-1B | INT8 | 8 | 9.7 |
+<!-- status:root-benchmark:start -->
+| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |
+|--------|---------------|--------|-----------------|----------------|-------|
+| Qwen3 | f32 CPU | hello | 11 | 7.3 | Runtime backend=cpu_simd; prompt=hello |
+| Qwen3 | INT8 CPU | hello | 23 | 27.3 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | f32 CPU | hello | 1 | 2.1 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | INT8 CPU | hello | 8 | 9.7 | Runtime backend=cpu_simd; prompt=hello |
+| Reference | llama.cpp Q4_K_M | reference_only | 5518 | 173 | Reference only, not a parity claim |
+<!-- status:root-benchmark:end -->
 
 > Measured end-to-end on Apple Silicon. Full matrix in [`synapse/status/benchmark_matrix.md`](synapse/status/benchmark_matrix.md).
 
 ## Deployment Targets
 
-| Target | Backend | Quantization | Use Case |
-|--------|---------|-------------|----------|
-| **Desktop** | Zig SIMD (NEON/AVX2) + Metal GPU | f32, f16, INT8, Q4 | Development, serving |
-| **Browser** | Pure Rust (WASM) | f32, INT8, Q4, Wanda | Embeddable widget, client-side demos |
-| **ESP32-P4** | Pure Rust (RISC-V) | INT8, Q4 | Edge inference via WiFi HTTP |
+<!-- status:root-profiles:start -->
+| Runtime Profile | Support | Targets | Backends | Quantization |
+|-----------------|---------|---------|----------|--------------|
+| Native Performance | Stable | aarch64-apple-darwin, x86_64-unknown-linux-gnu | cpu_simd, metal | f32, f16, int8, q4_0, q4_k, q6_k, q8_0 |
+| ARM Compact | Beta | aarch64-unknown-linux-musl, aarch64-unknown-linux-gnu | cpu_simd | f32, int8, q4_0, q4_k |
+| WASM Portable | Stable | wasm32-unknown-unknown | pure_rust_wasm | f32 |
+<!-- status:root-profiles:end -->
 
-WASM budget: 491 KB (133 KB brotli).
+<!-- status:root-artifacts:start -->
+| Artifact | Current | Budget | Status |
+|----------|---------|--------|--------|
+| WASM core | ~519 KB | ~160 KB | over |
+| WASM JS wrapper | ~43 KB | ~32 KB | over |
+<!-- status:root-artifacts:end -->
 
 ## Supported Models
 

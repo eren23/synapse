@@ -77,6 +77,6 @@ python3 scripts/sync_public_status.py --check
 <!-- status:docs-performance-artifacts:start -->
 | Artifact | Current | Budget | Status |
 |----------|---------|--------|--------|
-| WASM core | ~158 KB | ~160 KB | ok |
-| WASM JS wrapper | ~20 KB | ~32 KB | ok |
+| WASM core | ~519 KB | ~160 KB | over |
+| WASM JS wrapper | ~43 KB | ~32 KB | over |
 <!-- status:docs-performance-artifacts:end -->
