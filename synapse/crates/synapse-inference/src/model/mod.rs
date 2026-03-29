@@ -14,7 +14,7 @@ pub use clip::{parse_clip_config, parse_clip_config_json, CLIPConfig, CLIPModel}
 pub use decoder_layer::DecoderLayer;
 pub use jepa::{JEPAConfig, JEPAModel};
 pub use lewm::{AdaLNTransformerLayer, LeWMConfig, LeWorldModel};
-pub use traits::Model;
+pub use traits::{Model, ModelState};
 pub use vit::{
     parse_vit_config, parse_vit_config_json, parse_vit_labels, parse_vit_labels_json, ViTConfig,
     ViTModel, ViTOutput,

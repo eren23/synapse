@@ -13,7 +13,7 @@ use synapse_inference::config::position::RoPEScaling;
 use synapse_inference::config::*;
 use synapse_inference::kv_cache::KVCache;
 use synapse_inference::model::{CausalLM, ModelBuilder};
-use synapse_inference::quantization::quantize_model;
+use synapse_inference::quantization::{quantize_model, quantize_model_ternary};
 use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
 // ── Shared test constants ──────────────────────────────────────────────
@@ -353,6 +353,40 @@ fn test_qwen3_quantized_forward_produces_finite_logits() {
     );
 }
 
+#[test]
+fn test_qwen3_ternary_forward_produces_finite_logits() {
+    let cfg = qwen3_config();
+    let model = build_model(&cfg);
+    let ternary = quantize_model_ternary(&model);
+    let output = ternary.forward(&[1, 2, 3]);
+    assert_eq!(output.shape, [1, 3, VOCAB_SIZE]);
+    assert_eq!(output.logits.len(), 3 * VOCAB_SIZE);
+    assert!(
+        output.logits.iter().all(|v| v.is_finite()),
+        "Qwen3 ternary forward produced non-finite logits"
+    );
+}
+
+#[test]
+fn test_qwen3_ternary_cached_decode() {
+    let cfg = qwen3_config();
+    let model = build_model(&cfg);
+    let ternary = quantize_model_ternary(&model);
+    let mut cache = make_cache(&cfg);
+    let prefill_out = ternary.forward_prefill(&[1, 2, 3], &mut cache);
+    assert_eq!(prefill_out.shape, [1, 1, VOCAB_SIZE]);
+    assert!(
+        prefill_out.logits.iter().all(|v| v.is_finite()),
+        "Qwen3 ternary prefill produced non-finite logits"
+    );
+    let decode_out = ternary.forward_one(4, &mut cache);
+    assert_eq!(decode_out.shape, [1, 1, VOCAB_SIZE]);
+    assert!(
+        decode_out.logits.iter().all(|v| v.is_finite()),
+        "Qwen3 ternary forward_one produced non-finite logits"
+    );
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // LLaMA
 // ════════════════════════════════════════════════════════════════════════
@@ -407,6 +441,19 @@ fn test_llama_quantized_forward_produces_finite_logits() {
     );
 }
 
+#[test]
+fn test_llama_ternary_forward_produces_finite_logits() {
+    let cfg = llama_config();
+    let model = build_model(&cfg);
+    let ternary = quantize_model_ternary(&model);
+    let output = ternary.forward(&[1, 2, 3]);
+    assert_eq!(output.shape, [1, 3, VOCAB_SIZE]);
+    assert!(
+        output.logits.iter().all(|v| v.is_finite()),
+        "LLaMA ternary forward produced non-finite logits"
+    );
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // Mistral
 // ════════════════════════════════════════════════════════════════════════
@@ -458,6 +505,33 @@ fn test_mistral_quantized_forward_produces_finite_logits() {
     assert!(
         output.logits.iter().all(|v| v.is_finite()),
         "Mistral quantized forward produced non-finite logits"
+    );
+}
+
+#[test]
+fn test_mistral_ternary_forward_produces_finite_logits() {
+    let cfg = mistral_config();
+    let model = build_model(&cfg);
+    let ternary = quantize_model_ternary(&model);
+    let output = ternary.forward(&[1, 2, 3]);
+    assert_eq!(output.shape, [1, 3, VOCAB_SIZE]);
+    assert!(
+        output.logits.iter().all(|v| v.is_finite()),
+        "Mistral ternary forward produced non-finite logits"
+    );
+}
+
+#[test]
+fn test_ternary_memory_compression_vs_int8() {
+    let cfg = qwen3_config();
+    let model = build_model(&cfg);
+    let quantized = quantize_model(&model);
+    let ternary = quantize_model_ternary(&model);
+    let int8_mem = quantized.layers[0].w_q.memory_bytes();
+    let ternary_mem = ternary.layers[0].w_q.memory_bytes();
+    assert!(
+        ternary_mem < int8_mem,
+        "Ternary ({ternary_mem} bytes) should use less memory than INT8 ({int8_mem} bytes)"
     );
 }
 

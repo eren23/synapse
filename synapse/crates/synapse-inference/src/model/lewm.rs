@@ -950,7 +950,9 @@ impl LeWorldModel {
     }
 
     fn set_projection_weight_on(head: &mut ProjectionHead, rest: &str, tensor: &RawTensor) -> bool {
-        // Parse "N.weight" or "N.bias"
+        // Parse "N.weight", "N.bias", or "net.N.weight", "net.N.bias"
+        // Handle both "0.weight" and "net.0.weight" checkpoint naming
+        let rest = rest.strip_prefix("net.").unwrap_or(rest);
         let parts: Vec<&str> = rest.splitn(2, '.').collect();
         if parts.len() != 2 {
             return false;
@@ -961,9 +963,15 @@ impl LeWorldModel {
         };
         let field = parts[1];
 
-        // Map from checkpoint sequential index to our layer index.
-        // Projector layers are at indices 0, 2, 4 in checkpoint (with GELU at 1, 3).
-        let our_idx = layer_idx / 2;
+        // Checkpoint sequential: net.0=Linear, net.1=BatchNorm, net.2=GELU, net.3=Linear
+        // We only store the Linear layers. Skip BN (index 1) and GELU (index 2).
+        // Map: 0→layers[0], 3→layers[1], (4→layers[2] if exists)
+        let our_idx = match layer_idx {
+            0 => 0,
+            3 => 1,
+            4 => 2, // third linear if present
+            _ => return false, // skip BN (1), GELU (2), etc.
+        };
         if our_idx >= head.layers.len() {
             return false;
         }

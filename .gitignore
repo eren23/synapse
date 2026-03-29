@@ -44,7 +44,13 @@ synapse/docs/book/
 # AI assistant project notes (local / optional)
 **/CLAUDE.md
 
+# Internal planning docs
+docs/superpowers/
+
 # Attocode local index, cache, embeddings (not the repo config file)
 .attocode/index/
 .attocode/cache/
 .attocode/vectors/
+
+#playwright
+.playwright-mcp/

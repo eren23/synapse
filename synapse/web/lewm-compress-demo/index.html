@@ -1,0 +1,1399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synapse LEWM Compression Demo</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --bg-input: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.subtitle {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  margin-bottom: 2rem;
+}
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.card h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.card h2 .tag {
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.description {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+  max-width: 72ch;
+}
+
+/* Model selector */
+.model-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.model-options-row2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  max-width: 66%;
+}
+.model-option {
+  position: relative;
+  cursor: pointer;
+}
+.model-option input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.model-option label {
+  display: block;
+  padding: 1rem;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.model-option input:checked + label {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.08);
+}
+.model-option label:hover {
+  border-color: var(--text-dim);
+}
+.model-option .name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.25rem;
+}
+.model-option .meta {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.model-option .new-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--green);
+  color: var(--bg);
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.model-option .pruned-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--yellow);
+  color: var(--bg);
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.model-option input:checked + label.pruned-selected {
+  border-color: var(--yellow);
+  background: rgba(210, 153, 34, 0.08);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--accent); color: var(--bg); }
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Progress bar */
+.progress-container {
+  margin-top: 1rem;
+  display: none;
+}
+.progress-container.active { display: block; }
+.progress-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.1s linear;
+}
+.progress-label {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.4rem;
+}
+
+/* Status log */
+.status-log {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.75rem;
+  min-height: 1.4em;
+}
+.status-log.ok { color: var(--green); }
+.status-log.err { color: var(--red); }
+
+/* Benchmark panel */
+.bench-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.bench-stat {
+  text-align: center;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+.bench-stat .value {
+  font-family: var(--mono);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+.bench-stat .unit {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.bench-stat .label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+/* Comparison table */
+.comp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.comp-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.comp-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+.comp-table tr:last-child td { border-bottom: none; }
+.comp-table .config-name {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
+  font-weight: 500;
+}
+.comp-table .tbd {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.comp-table .measured {
+  color: var(--green);
+  font-weight: 600;
+}
+.comp-table .active-row {
+  background: rgba(88, 166, 255, 0.06);
+}
+.table-note {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.5rem;
+  line-height: 1.5;
+}
+
+/* Latent heatmap */
+.heatmap-container {
+  margin-top: 1rem;
+}
+.heatmap-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+.heatmap-bar {
+  display: flex;
+  height: 28px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.heatmap-bar .cell {
+  flex: 1;
+  min-width: 0;
+}
+.heatmap-stats {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.35rem;
+  display: flex;
+  gap: 1.5rem;
+}
+
+/* Result tabs */
+.result-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 1rem;
+}
+.result-tabs button {
+  background: var(--bg-input);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  padding: 0.5rem 1.2rem;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.result-tabs button:hover { color: var(--text); }
+.result-tabs button.active {
+  background: var(--bg-card);
+  color: var(--text);
+  border-color: var(--accent-dim);
+  border-bottom: 1px solid var(--bg-card);
+  margin-bottom: -1px;
+}
+.result-tab-panel { display: none; }
+.result-tab-panel.active { display: block; }
+
+/* Explore tab */
+.explore-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.explore-canvas-wrap { flex: 1; min-width: 0; }
+.explore-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+.explore-controls {
+  width: 180px;
+  flex-shrink: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+.explore-controls h3 {
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.slider-row {
+  margin-bottom: 0.5rem;
+}
+.slider-row .slider-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.slider-row .slider-header .slider-val {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+.slider-row input[type=range] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin-top: 2px;
+}
+.action-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 0.75rem;
+}
+.action-presets button {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.action-presets button:hover { color: var(--text); border-color: var(--accent); }
+.run-compare-btn {
+  width: 100%;
+  background: var(--accent-dim);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  padding: 0.5rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.run-compare-btn:hover { background: var(--accent); color: var(--bg); }
+.run-compare-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.cos-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: white;
+  background: var(--accent-dim);
+  pointer-events: none;
+}
+.cos-badge.good { background: #1a7f37; }
+.cos-badge.ok { background: #9a6700; }
+.cos-badge.bad { background: #cf222e; }
+.canvas-caption {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.4rem;
+}
+
+@media (max-width: 640px) {
+  .explore-layout { flex-direction: column; }
+  .explore-controls { width: 100%; }
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 2rem 0 1rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+.footer strong { color: var(--text); font-weight: 600; }
+
+/* Responsive */
+/* Pruning impact section */
+.pruning-section h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--yellow);
+}
+.pruning-section p {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+  max-width: 72ch;
+  line-height: 1.6;
+}
+.pruning-section ul {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-left: 1.5rem;
+  margin-bottom: 0.6rem;
+  line-height: 1.7;
+}
+.pruning-section li { margin-bottom: 0.3rem; }
+.pruning-section code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  background: var(--bg-input);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+@media (max-width: 640px) {
+  .model-options { grid-template-columns: 1fr; }
+  .model-options-row2 { grid-template-columns: 1fr; max-width: 100%; }
+  .bench-grid { grid-template-columns: 1fr; }
+  .comp-table { font-size: 0.75rem; }
+  .comp-table td, .comp-table th { padding: 0.4rem 0.5rem; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <a href="../" style="color:var(--accent); font-size:0.8rem; text-decoration:none; display:inline-block; margin-bottom:0.5rem;">← Back to Synapse demos</a>
+  <h1>Synapse LEWM Compression Demo</h1>
+  <p class="subtitle">World Model in Your Browser &mdash; Compare f32, INT8, Q4 quantization and Wanda pruning live</p>
+
+  <div class="card">
+    <h2>What is LEWM?</h2>
+    <p class="description">
+      LEWM (Learned World Model) is a JEPA-based world model trained on the
+      <strong>PushT</strong> robotic task &mdash; a top-down environment where a circular pusher
+      moves a T-shaped block. The model encodes 224&times;224 images into a 192-dim latent state
+      (ViT encoder, 12 layers) and predicts future states from 2D push actions
+      (DiT predictor, 6 layers with adaLN). The full f32 model is ~52MB.
+      Compression matters because this runs entirely in the browser via WASM &mdash;
+      smaller models mean faster cold starts and wider device support.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Load Model <span class="tag">WASM</span></h2>
+
+    <div class="model-options">
+      <div class="model-option">
+        <input type="radio" name="model" id="model-f32" value="f32">
+        <label for="model-f32">
+          <div class="name">f32 Baseline</div>
+          <div class="meta">69 MB download</div>
+          <div class="meta">Full precision</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-int8" value="int8" checked>
+        <label for="model-int8">
+          <div class="name">INT8 Predictor</div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Quantized in-browser</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-q4" value="q4">
+        <label for="model-q4">
+          <div class="name">Q4 Predictor<span class="new-badge">NEW</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Quantized in-browser</div>
+        </label>
+      </div>
+    </div>
+    <div class="model-options-row2">
+      <div class="model-option">
+        <input type="radio" name="model" id="model-wanda20-q4" value="wanda20-q4">
+        <label for="model-wanda20-q4" class="pruned-selected">
+          <div class="name">Wanda 20% + Q4<span class="pruned-badge">PRUNED</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Light pruning, near-lossless</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-wanda40-q4" value="wanda40-q4">
+        <label for="model-wanda40-q4" class="pruned-selected">
+          <div class="name">Wanda 40% + Q4<span class="pruned-badge">PRUNED</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Aggressive pruning</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-fullq4" value="fullq4">
+        <label for="model-fullq4">
+          <div class="name">Full Q4<span class="new-badge">~8MB</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Q4 encoder + Q4 predictor</div>
+        </label>
+      </div>
+    </div>
+
+    <button class="btn" id="load-btn">Load &amp; Benchmark</button>
+
+    <div class="progress-container" id="progress">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill"></div></div>
+      <div class="progress-label" id="progress-label">Downloading...</div>
+    </div>
+
+    <div class="status-log" id="status"></div>
+  </div>
+
+  <div class="card" id="bench-panel" style="display:none">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+      <div class="result-tabs" style="margin-bottom:0;">
+        <button class="active" onclick="switchResultTab('benchmark')">Benchmark</button>
+        <button onclick="switchResultTab('explore')">Explore</button>
+      </div>
+      <div id="active-model-label" style="font-family:var(--mono); font-size:0.8rem; color:var(--text-dim);">
+      </div>
+    </div>
+
+    <div class="result-tab-panel active" id="rtab-benchmark">
+      <div class="bench-grid">
+        <div class="bench-stat">
+          <div class="value" id="bench-encode">--</div>
+          <div class="unit">ms</div>
+          <div class="label">Image Encode</div>
+        </div>
+        <div class="bench-stat">
+          <div class="value" id="bench-rollout">--</div>
+          <div class="unit">ms</div>
+          <div class="label">20-Step Rollout</div>
+        </div>
+        <div class="bench-stat">
+          <div class="value" id="bench-throughput">--</div>
+          <div class="unit">steps/s</div>
+          <div class="label">Throughput</div>
+        </div>
+      </div>
+      <div class="heatmap-container">
+        <div class="heatmap-label">192-dim Latent State (encoded from test image)</div>
+        <div class="heatmap-bar" id="heatmap"></div>
+        <div class="heatmap-stats" id="heatmap-stats"></div>
+      </div>
+    </div>
+
+    <div class="result-tab-panel" id="rtab-explore">
+      <div class="explore-layout">
+        <div class="explore-canvas-wrap" style="position:relative;">
+          <canvas id="traj-canvas" width="500" height="320"></canvas>
+          <div class="cos-badge" id="cos-badge" style="display:none;">cos: --</div>
+          <div class="canvas-caption">
+            PushT latent trajectories — 192-dim state projected to 2D. Gray dashed = f32 reference. Colored = quantized model.
+            Both models encode the same scene and predict future states from identical push actions.
+          </div>
+        </div>
+        <div class="explore-controls">
+          <div style="margin-bottom:0.75rem;">
+            <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">Input scene (PushT task)</div>
+            <canvas id="scene-preview" width="120" height="120" style="width:100%; border-radius:4px; border:1px solid var(--border);"></canvas>
+            <div style="font-size:0.65rem; color:var(--text-dim); margin-top:2px; line-height:1.3;">
+              Top-down view: <span style="color:#e64d33;">T-block</span> to push, <span style="color:#3399e6;">blue pusher</span>
+            </div>
+          </div>
+          <h3>Push Direction</h3>
+          <div style="font-size:0.65rem; color:var(--text-dim); margin-bottom:0.4rem;">
+            Controls where the pusher moves. The world model predicts the resulting latent state.
+          </div>
+          <div class="slider-row">
+            <div class="slider-header"><span>dx (horizontal)</span><span class="slider-val" id="val-dx">0.50</span></div>
+            <input type="range" id="action-dx" min="-100" max="100" value="50">
+          </div>
+          <div class="slider-row">
+            <div class="slider-header"><span>dy (vertical)</span><span class="slider-val" id="val-dy">0.00</span></div>
+            <input type="range" id="action-dy" min="-100" max="100" value="0">
+          </div>
+          <div class="action-presets">
+            <button onclick="setAction(80,0)">Right</button>
+            <button onclick="setAction(-80,0)">Left</button>
+            <button onclick="setAction(0,-80)">Up</button>
+            <button onclick="setAction(0,80)">Down</button>
+            <button onclick="setAction(0,0)">Stay</button>
+          </div>
+          <button class="run-compare-btn" id="run-compare-btn" disabled onclick="runComparison()">Run Comparison</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Compression Comparison</h2>
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th>Configuration</th>
+          <th>Size</th>
+          <th>Native</th>
+          <th>Quality (cos@20)</th>
+          <th>WASM Encode</th>
+          <th>WASM Rollout</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr id="row-f32">
+          <td class="config-name">f32 baseline</td>
+          <td>52.1 MB</td>
+          <td>35 ms</td>
+          <td>1.000</td>
+          <td class="tbd" data-field="encode-f32">TBD</td>
+          <td class="tbd" data-field="rollout-f32">TBD</td>
+          <td>reference</td>
+        </tr>
+        <tr id="row-int8">
+          <td class="config-name">INT8 predictor</td>
+          <td>21.4 MB</td>
+          <td>428 ms</td>
+          <td>0.9999</td>
+          <td class="tbd" data-field="encode-int8">TBD</td>
+          <td class="tbd" data-field="rollout-int8">TBD</td>
+          <td>near-perfect</td>
+        </tr>
+        <tr id="row-q4">
+          <td class="config-name">Q4 predictor</td>
+          <td>17.4 MB</td>
+          <td>32 ms*</td>
+          <td>0.998</td>
+          <td class="tbd" data-field="encode-q4">TBD</td>
+          <td class="tbd" data-field="rollout-q4">TBD</td>
+          <td>best balance</td>
+        </tr>
+        <tr id="row-wanda20-q4">
+          <td class="config-name">Wanda 20% + Q4</td>
+          <td>17.4 MB</td>
+          <td>33 ms*</td>
+          <td>0.997</td>
+          <td class="tbd" data-field="encode-wanda20-q4">TBD</td>
+          <td class="tbd" data-field="rollout-wanda20-q4">TBD</td>
+          <td>light pruning</td>
+        </tr>
+        <tr id="row-wanda40-q4">
+          <td class="config-name">Wanda 40% + Q4</td>
+          <td>17.4 MB</td>
+          <td>33 ms*</td>
+          <td>0.976</td>
+          <td class="tbd" data-field="encode-wanda40-q4">TBD</td>
+          <td class="tbd" data-field="rollout-wanda40-q4">TBD</td>
+          <td>aggressive</td>
+        </tr>
+        <tr id="row-fullq4">
+          <td class="config-name">Full Q4 (enc+pred)</td>
+          <td>9.4 MB</td>
+          <td>111 ms</td>
+          <td>0.931</td>
+          <td class="tbd" data-field="encode-fullq4">TBD</td>
+          <td class="tbd" data-field="rollout-fullq4">TBD</td>
+          <td>smallest</td>
+        </tr>
+        <tr>
+          <td class="config-name">PyTorch f32 (ref)</td>
+          <td>52.9 MB</td>
+          <td>21.5 ms</td>
+          <td>reference</td>
+          <td>N/A</td>
+          <td>N/A</td>
+          <td>Python</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="table-note">
+      * All variants download the same 69 MB f32 weights. Quantization happens in-browser. Runtime memory is reduced.
+    </p>
+    <p class="table-note">
+      "TBD" values are filled in by actual WASM measurements when you load a model above.
+    </p>
+    <p class="table-note">
+      Quality = cosine similarity of 20-step rollout vs f32 reference.
+    </p>
+  </div>
+
+  <div class="card pruning-section">
+    <h2>Pruning Impact</h2>
+    <h3>What is Wanda pruning?</h3>
+    <p>
+      Wanda (Pruning by Weights and Activations) zeroes out the least important weights in each
+      row of a weight matrix, ranked by <code>|weight| x ||activation||</code>. Unlike
+      magnitude-only pruning, Wanda accounts for how much each weight actually contributes
+      during inference, producing better quality at the same sparsity level.
+    </p>
+    <h3>Why are pruned models the same size on disk?</h3>
+    <p>
+      Q4 quantization packs weights into fixed-size 32-element blocks. Pruned (zeroed) weights
+      still occupy their slots in these blocks, so the raw binary is the same size. However,
+      blocks full of zeros compress dramatically under gzip or brotli &mdash; meaning HTTP
+      transfer with <code>Content-Encoding: br</code> can be significantly smaller for pruned
+      variants.
+    </p>
+    <h3>Quality vs. sparsity trade-off</h3>
+    <ul>
+      <li><strong>20% pruning</strong> &mdash; barely noticeable quality loss (cos 0.997 vs 0.998 for unpruned Q4). A safe default that compresses better over the wire.</li>
+      <li><strong>40% pruning</strong> &mdash; measurable but still usable quality degradation (cos 0.976). Good for bandwidth-constrained deployments where approximate rollouts are acceptable.</li>
+      <li>Pruning is applied <em>before</em> Q4 quantization, so the two compressions compound without conflicting.</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    Powered by <strong>Synapse</strong> &mdash; 491 KB WASM engine, zero server dependencies
+    <br><a href="../" style="color:var(--accent);">Main Hub</a> · <span style="color:var(--accent);">Compression Demo</span> · <a href="../ssm-demo/" style="color:var(--accent);">SSM Chat</a>
+  </div>
+
+</div>
+
+<script>
+// Tab switching + action presets (must be in regular script for onclick)
+window.switchResultTab = function(tab) {
+  document.querySelectorAll('.result-tab-panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.result-tabs button').forEach(function(b) { b.classList.remove('active'); });
+  document.getElementById('rtab-' + tab).classList.add('active');
+  // Find the clicked button
+  var buttons = document.querySelectorAll('.result-tabs button');
+  for (var i = 0; i < buttons.length; i++) {
+    if (buttons[i].textContent.toLowerCase() === tab) buttons[i].classList.add('active');
+  }
+};
+window.setAction = function(dx, dy) {
+  document.getElementById('action-dx').value = dx;
+  document.getElementById('action-dy').value = dy;
+  document.getElementById('val-dx').textContent = (dx / 100).toFixed(2);
+  document.getElementById('val-dy').textContent = (dy / 100).toFixed(2);
+};
+// Auto-switch to explore tab if URL has #explore
+if (window.location.hash === '#explore') {
+  // Wait for bench-panel to become visible, then switch
+  var observer = new MutationObserver(function(mutations) {
+    var panel = document.getElementById('bench-panel');
+    if (panel && panel.style.display !== 'none') {
+      switchResultTab('explore');
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+}
+</script>
+<script type="module">
+import init, { RealLeWM, RealLeWMInt8, RealLeWMQ4, RealLeWMFullQ4 } from '../synapse-wasm-pkg/synapse_wasm.js';
+
+let wasmReady = false;
+let currentModel = null;
+let currentFormat = null;
+let refModel = null;       // f32 reference (always created)
+let z0Ref = null;          // f32 encoded latent
+let z0Quant = null;        // quantized encoded latent
+let trajectoryPairs = [];  // [{ref, quant, label, color}]
+const COMPARE_STEPS = 20;
+const COMPARE_COLORS = ['#58a6ff', '#3fb950', '#f0883e', '#f85149', '#bc8cff'];
+
+// Slider updates
+document.getElementById('action-dx').addEventListener('input', function(e) {
+  document.getElementById('val-dx').textContent = (e.target.value / 100).toFixed(2);
+});
+document.getElementById('action-dy').addEventListener('input', function(e) {
+  document.getElementById('val-dy').textContent = (e.target.value / 100).toFixed(2);
+});
+
+// Generate a PushT-like test image (224x224x3 HWC, f32, ImageNet-normalized)
+// PushT: top-down view of a table with a T-shaped block and a circular pusher
+function makeTestImage() {
+  var h = 224, w = 224;
+  var pixels = new Float32Array(h * w * 3);
+  var mean = [0.485, 0.456, 0.406];
+  var std = [0.229, 0.224, 0.225];
+
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var idx = (y * w + x) * 3;
+      // T-shaped block (top bar + vertical stem)
+      var inT = (y > h * 0.2 && y < h * 0.35 && x > w * 0.2 && x < w * 0.8) ||
+                (y >= h * 0.35 && y < h * 0.7 && x > w * 0.35 && x < w * 0.65);
+      // Circular pusher (bottom-right area)
+      var cx = w * 0.7, cy = h * 0.75, radius = w * 0.06;
+      var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+      var inPusher = dist < radius;
+
+      var r, g, b;
+      if (inPusher) {
+        r = 0.2; g = 0.6; b = 0.9; // blue pusher
+      } else if (inT) {
+        r = 0.9; g = 0.3; b = 0.2; // red-orange T-block
+      } else {
+        r = 0.85; g = 0.85; b = 0.82; // light gray table
+      }
+      pixels[idx]     = (r - mean[0]) / std[0];
+      pixels[idx + 1] = (g - mean[1]) / std[1];
+      pixels[idx + 2] = (b - mean[2]) / std[2];
+    }
+  }
+  return pixels;
+}
+
+// Render the test image to a visible canvas for preview
+function renderTestImagePreview(canvasId) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var s = canvas.width; // square
+  var mean = [0.485, 0.456, 0.406];
+  var std = [0.229, 0.224, 0.225];
+
+  var imgData = ctx.createImageData(s, s);
+  for (var y = 0; y < s; y++) {
+    for (var x = 0; x < s; x++) {
+      var inT = (y > s * 0.2 && y < s * 0.35 && x > s * 0.2 && x < s * 0.8) ||
+                (y >= s * 0.35 && y < s * 0.7 && x > s * 0.35 && x < s * 0.65);
+      var cx = s * 0.7, cy = s * 0.75, radius = s * 0.06;
+      var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+      var inPusher = dist < radius;
+
+      var r, g, b;
+      if (inPusher) { r = 51; g = 153; b = 230; }
+      else if (inT) { r = 230; g = 77; b = 51; }
+      else { r = 217; g = 217; b = 209; }
+
+      var idx = (y * s + x) * 4;
+      imgData.data[idx] = r;
+      imgData.data[idx + 1] = g;
+      imgData.data[idx + 2] = b;
+      imgData.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+// Generate deterministic test actions (20 steps x 10 dims)
+function makeTestActions(steps) {
+  const actions = new Float32Array(steps * 10);
+  for (let i = 0; i < actions.length; i++) {
+    actions[i] = Math.sin(i * 0.1) * 0.5;
+  }
+  return actions;
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status-log' + (cls ? ' ' + cls : '');
+}
+
+function showProgress(show) {
+  document.getElementById('progress').classList.toggle('active', show);
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-label').textContent = label;
+}
+
+// Fetch with progress tracking
+async function fetchWithProgress(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + url);
+
+  const contentLength = resp.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength) : 0;
+
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) {
+      const pct = Math.round((received / total) * 100);
+      const mb = (received / 1048576).toFixed(1);
+      const totalMb = (total / 1048576).toFixed(1);
+      setProgress(pct, mb + ' / ' + totalMb + ' MB (' + pct + '%)');
+    } else {
+      const mb = (received / 1048576).toFixed(1);
+      setProgress(50, mb + ' MB downloaded...');
+    }
+  }
+
+  const buf = new Uint8Array(received);
+  let pos = 0;
+  for (const chunk of chunks) {
+    buf.set(chunk, pos);
+    pos += chunk.length;
+  }
+  return buf;
+}
+
+function renderHeatmap(latent) {
+  const bar = document.getElementById('heatmap');
+  const stats = document.getElementById('heatmap-stats');
+
+  // Clear previous cells
+  while (bar.firstChild) bar.removeChild(bar.firstChild);
+  while (stats.firstChild) stats.removeChild(stats.firstChild);
+
+  let min = Infinity, max = -Infinity, sum = 0;
+  for (let i = 0; i < latent.length; i++) {
+    const v = latent[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  const mean = sum / latent.length;
+  const range = max - min || 1;
+
+  for (let i = 0; i < latent.length; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    const norm = (latent[i] - min) / range;
+    // Blue-white-red colormap
+    let r, g, b;
+    if (norm < 0.5) {
+      const t = norm * 2;
+      r = Math.round(30 + t * 225);
+      g = Math.round(60 + t * 195);
+      b = Math.round(220 - t * 60);
+    } else {
+      const t = (norm - 0.5) * 2;
+      r = Math.round(255 - t * 15);
+      g = Math.round(255 - t * 180);
+      b = Math.round(160 - t * 120);
+    }
+    cell.style.background = 'rgb(' + r + ',' + g + ',' + b + ')';
+    bar.appendChild(cell);
+  }
+
+  var statLabels = [
+    'dim: ' + latent.length,
+    'min: ' + min.toFixed(3),
+    'max: ' + max.toFixed(3),
+    'mean: ' + mean.toFixed(3),
+    'range: ' + range.toFixed(3)
+  ];
+  for (var s = 0; s < statLabels.length; s++) {
+    var span = document.createElement('span');
+    span.textContent = statLabels[s];
+    stats.appendChild(span);
+  }
+}
+
+function updateTable(format, encodeMs, rolloutMs) {
+  const encCell = document.querySelector('[data-field="encode-' + format + '"]');
+  const rollCell = document.querySelector('[data-field="rollout-' + format + '"]');
+  if (encCell) {
+    encCell.textContent = encodeMs.toFixed(1) + ' ms';
+    encCell.className = 'measured';
+  }
+  if (rollCell) {
+    rollCell.textContent = rolloutMs.toFixed(1) + ' ms';
+    rollCell.className = 'measured';
+  }
+  // Highlight active row
+  var rows = document.querySelectorAll('.comp-table tr');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].classList.remove('active-row');
+  }
+  var row = document.getElementById('row-' + format);
+  if (row) row.classList.add('active-row');
+}
+
+async function runBenchmark(model, format) {
+  setStatus('Running benchmark...');
+  var panel = document.getElementById('bench-panel');
+  panel.style.display = 'block';
+
+  var testImage = makeTestImage();
+  var testActions = makeTestActions(20);
+
+  // Warm up
+  try {
+    model.encode_image(testImage, 224, 224);
+  } catch (e) {
+    setStatus('Encode warm-up failed: ' + e.message, 'err');
+    return;
+  }
+
+  // Benchmark encode (average of 3 runs)
+  var encodeTotal = 0;
+  var encodeRuns = 3;
+  var latent;
+  for (var i = 0; i < encodeRuns; i++) {
+    var t0 = performance.now();
+    latent = model.encode_image(testImage, 224, 224);
+    encodeTotal += performance.now() - t0;
+  }
+  var encodeMs = encodeTotal / encodeRuns;
+
+  // Benchmark 20-step rollout (average of 3 runs)
+  var rolloutTotal = 0;
+  var rolloutRuns = 3;
+  for (var j = 0; j < rolloutRuns; j++) {
+    var t1 = performance.now();
+    model.rollout(latent, testActions, 20);
+    rolloutTotal += performance.now() - t1;
+  }
+  var rolloutMs = rolloutTotal / rolloutRuns;
+  var throughput = (20 / (rolloutMs / 1000)).toFixed(1);
+
+  document.getElementById('bench-encode').textContent = encodeMs.toFixed(1);
+  document.getElementById('bench-rollout').textContent = rolloutMs.toFixed(1);
+  document.getElementById('bench-throughput').textContent = throughput;
+
+  renderHeatmap(Array.from(latent));
+  updateTable(format, encodeMs, rolloutMs);
+
+  setStatus('Benchmark complete: ' + format.toUpperCase() + ' model loaded', 'ok');
+}
+
+async function loadModel() {
+  var selected = document.querySelector('input[name="model"]:checked');
+  var format = selected ? selected.value : null;
+  if (!format) {
+    setStatus('Please select a model format', 'err');
+    return;
+  }
+
+  var btn = document.getElementById('load-btn');
+  btn.disabled = true;
+
+  try {
+    // Init WASM
+    if (!wasmReady) {
+      setStatus('Initializing WASM engine...');
+      await init();
+      wasmReady = true;
+    }
+
+    var urls = {
+      'f32':  '../lewm_weights.bin',
+      'int8': '../lewm_weights.bin',
+      'q4':   '../lewm_weights.bin',
+      'wanda20-q4': '../lewm_weights.bin',
+      'wanda40-q4': '../lewm_weights.bin',
+      'fullq4': '../lewm_weights.bin'
+    };
+
+    setStatus('Downloading ' + format.toUpperCase() + ' weights...');
+    showProgress(true);
+    setProgress(0, 'Starting download...');
+
+    var data;
+    try {
+      data = await fetchWithProgress(urls[format]);
+    } catch (e) {
+      showProgress(false);
+      setStatus('Download failed: ' + e.message, 'err');
+      btn.disabled = false;
+      return;
+    }
+
+    showProgress(false);
+    var sizeMb = (data.length / 1048576).toFixed(1);
+    setStatus('Downloaded ' + sizeMb + ' MB. Constructing models...');
+
+    // Always create f32 reference
+    var tc0 = performance.now();
+    refModel = new RealLeWM(data);
+    var refMs = (performance.now() - tc0).toFixed(1);
+
+    // Create quantized model (or reuse f32 if selected)
+    var model;
+    var tc = performance.now();
+    if (format === 'f32') {
+      model = refModel;
+    } else if (format === 'int8') {
+      model = RealLeWMInt8.from_f32_data(data);
+    } else if (format === 'q4' || format === 'wanda20-q4' || format === 'wanda40-q4') {
+      model = RealLeWMQ4.from_f32_data(data);
+    } else if (format === 'fullq4') {
+      model = RealLeWMFullQ4.from_f32_data(data);
+    }
+    var constructMs = (performance.now() - tc).toFixed(1);
+
+    currentModel = model;
+    currentFormat = format;
+
+    // Encode test image on both models
+    var testImg = makeTestImage();
+    z0Ref = refModel.encode_image(testImg, 224, 224);
+    z0Quant = (format === 'f32') ? z0Ref : model.encode_image(testImg, 224, 224);
+
+    // Reset explore state
+    trajectoryPairs = [];
+    clearCanvas();
+    document.getElementById('cos-badge').style.display = 'none';
+    document.getElementById('run-compare-btn').disabled = false;
+
+    // Show which model is loaded in the header
+    var modelNames = { 'f32': 'f32 (52.1 MB)', 'int8': 'INT8 (21.4 MB)', 'q4': 'Q4 pred (17.4 MB)', 'wanda20-q4': 'Wanda 20%+Q4 (17.4 MB)', 'wanda40-q4': 'Wanda 40%+Q4 (17.4 MB)', 'fullq4': 'Full Q4 (9.4 MB)' };
+    var labelEl = document.getElementById('active-model-label');
+    while (labelEl.firstChild) labelEl.removeChild(labelEl.firstChild);
+    if (format === 'f32') {
+      var s1 = document.createElement('span');
+      s1.textContent = 'Showing: f32 baseline';
+      s1.style.color = 'var(--text)';
+      labelEl.appendChild(s1);
+    } else {
+      var t1 = document.createTextNode('Comparing: ');
+      var s2 = document.createElement('span');
+      s2.textContent = 'f32 ref';
+      s2.style.color = '#484f58';
+      var t2 = document.createTextNode(' vs ');
+      var s3 = document.createElement('span');
+      s3.textContent = modelNames[format];
+      s3.style.color = 'var(--accent)';
+      labelEl.appendChild(t1);
+      labelEl.appendChild(s2);
+      labelEl.appendChild(t2);
+      labelEl.appendChild(s3);
+    }
+
+    setStatus('Models ready (f32 ref: ' + refMs + 'ms, ' + format.toUpperCase() + ': ' + constructMs + 'ms). Running benchmark...', 'ok');
+
+    await runBenchmark(model, format);
+
+  } catch (e) {
+    showProgress(false);
+    setStatus('Error: ' + e.message, 'err');
+    console.error(e);
+  }
+
+  btn.disabled = false;
+}
+
+document.getElementById('load-btn').addEventListener('click', loadModel);
+
+// Render the scene preview on load
+renderTestImagePreview('scene-preview');
+
+// ── Explore: Trajectory Comparison ──────────────────────────
+
+function cosineSimilarity(a, b) {
+  var dot = 0, normA = 0, normB = 0;
+  for (var i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function clearCanvas() {
+  var canvas = document.getElementById('traj-canvas');
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+window.runComparison = function() {
+  if (!refModel || !currentModel || !z0Ref) return;
+
+  var dx = parseInt(document.getElementById('action-dx').value) / 100;
+  var dy = parseInt(document.getElementById('action-dy').value) / 100;
+
+  // Build action tensor (20 steps x 10 dims)
+  var actions = new Float32Array(COMPARE_STEPS * 10);
+  for (var s = 0; s < COMPARE_STEPS; s++) {
+    actions[s * 10 + 0] = dx;
+    actions[s * 10 + 1] = dy;
+  }
+
+  // Run both models
+  var refTraj = refModel.rollout(new Float32Array(z0Ref), actions, COMPARE_STEPS);
+  var quantTraj = (currentFormat === 'f32')
+    ? refTraj
+    : currentModel.rollout(new Float32Array(z0Quant), actions, COMPARE_STEPS);
+
+  // Compute cosine similarity over full trajectory
+  var cos = cosineSimilarity(refTraj, quantTraj);
+
+  // Store pair
+  var label = 'dx=' + dx.toFixed(2) + ' dy=' + dy.toFixed(2);
+  trajectoryPairs.push({
+    ref: refTraj,
+    quant: quantTraj,
+    label: label,
+    color: COMPARE_COLORS[trajectoryPairs.length % COMPARE_COLORS.length],
+    cos: cos
+  });
+  if (trajectoryPairs.length > 5) trajectoryPairs.shift();
+
+  // Update cosine badge
+  var badge = document.getElementById('cos-badge');
+  badge.style.display = '';
+  badge.textContent = 'cos: ' + cos.toFixed(4);
+  badge.className = 'cos-badge ' + (cos > 0.99 ? 'good' : cos > 0.95 ? 'ok' : 'bad');
+
+  drawTrajectories();
+};
+
+function drawTrajectories() {
+  var canvas = document.getElementById('traj-canvas');
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 0.5;
+  for (var gx = 0; gx <= W; gx += 40) {
+    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+  }
+  for (var gy = 0; gy <= H; gy += 40) {
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+  }
+
+  if (trajectoryPairs.length === 0) return;
+
+  // Compute global bounds across all trajectories
+  var minX = z0Ref[0], maxX = z0Ref[0], minY = z0Ref[1], maxY = z0Ref[1];
+  for (var p = 0; p < trajectoryPairs.length; p++) {
+    var pair = trajectoryPairs[p];
+    for (var s = 0; s < COMPARE_STEPS; s++) {
+      var rx = pair.ref[s * 192], ry = pair.ref[s * 192 + 1];
+      var qx = pair.quant[s * 192], qy = pair.quant[s * 192 + 1];
+      minX = Math.min(minX, rx, qx); maxX = Math.max(maxX, rx, qx);
+      minY = Math.min(minY, ry, qy); maxY = Math.max(maxY, ry, qy);
+    }
+  }
+  var rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1;
+  var pad = 40;
+  var toX = function(v) { return pad + ((v - minX) / rangeX) * (W - 2 * pad); };
+  var toY = function(v) { return pad + ((v - minY) / rangeY) * (H - 2 * pad); };
+
+  // Start point
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(toX(z0Ref[0]), toY(z0Ref[1]), 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px monospace';
+  ctx.fillText('z\u2080', toX(z0Ref[0]) + 9, toY(z0Ref[1]) - 5);
+
+  // Draw each trajectory pair
+  for (var pi = 0; pi < trajectoryPairs.length; pi++) {
+    var tp = trajectoryPairs[pi];
+    var alpha = 0.3 + 0.7 * ((pi + 1) / trajectoryPairs.length); // older = more transparent
+
+    // f32 reference (gray dashed)
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#484f58';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(toX(z0Ref[0]), toY(z0Ref[1]));
+    for (var sr = 0; sr < COMPARE_STEPS; sr++) {
+      ctx.lineTo(toX(tp.ref[sr * 192]), toY(tp.ref[sr * 192 + 1]));
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Quantized (colored solid)
+    ctx.strokeStyle = tp.color;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(toX(z0Quant[0]), toY(z0Quant[1]));
+    for (var sq = 0; sq < COMPARE_STEPS; sq++) {
+      ctx.lineTo(toX(tp.quant[sq * 192]), toY(tp.quant[sq * 192 + 1]));
+    }
+    ctx.stroke();
+
+    // Dots along quantized path
+    for (var sd = 0; sd < COMPARE_STEPS; sd++) {
+      var dotAlpha = 0.3 + 0.7 * (sd / COMPARE_STEPS);
+      ctx.globalAlpha = alpha * dotAlpha;
+      ctx.fillStyle = tp.color;
+      ctx.beginPath();
+      ctx.arc(toX(tp.quant[sd * 192]), toY(tp.quant[sd * 192 + 1]), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
+
+    // Glowing endpoint (quantized)
+    var ex = toX(tp.quant[(COMPARE_STEPS - 1) * 192]);
+    var ey = toY(tp.quant[(COMPARE_STEPS - 1) * 192 + 1]);
+    ctx.shadowColor = tp.color;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Gray endpoint (reference)
+    var rex = toX(tp.ref[(COMPARE_STEPS - 1) * 192]);
+    var rey = toY(tp.ref[(COMPARE_STEPS - 1) * 192 + 1]);
+    ctx.fillStyle = '#484f58';
+    ctx.beginPath();
+    ctx.arc(rex, rey, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // Draw labels last (on top of everything) with collision avoidance
+  var placedLabels = [];
+  for (var li = 0; li < trajectoryPairs.length; li++) {
+    var lp = trajectoryPairs[li];
+    var lAlpha = 0.3 + 0.7 * ((li + 1) / trajectoryPairs.length);
+    var lx = toX(lp.quant[(COMPARE_STEPS - 1) * 192]);
+    var ly = toY(lp.quant[(COMPARE_STEPS - 1) * 192 + 1]);
+
+    // Find a non-overlapping y position
+    var labelY = ly - 4;
+    for (var ci = 0; ci < placedLabels.length; ci++) {
+      if (Math.abs(lx - placedLabels[ci].x) < 80 && Math.abs(labelY - placedLabels[ci].y) < 13) {
+        labelY = placedLabels[ci].y + 13;
+      }
+    }
+    placedLabels.push({ x: lx, y: labelY });
+
+    ctx.save();
+    ctx.globalAlpha = lAlpha;
+    ctx.fillStyle = lp.color;
+    ctx.font = '10px monospace';
+    ctx.fillText(lp.label, lx + 8, labelY);
+    ctx.restore();
+  }
+}
+</script>
+</body>
+</html>

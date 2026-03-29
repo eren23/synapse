@@ -1,10 +1,24 @@
-use std::time::Instant;
 
+#[cfg(target_arch = "wasm32")]
+use std::time::Duration;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
-use crate::kv_cache::KVCache;
-use crate::model::traits::Model;
+// WASM doesn't support std::time::Instant. Use a shim that returns zero durations.
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+#[derive(Clone, Copy)]
+struct Instant;
+
+#[cfg(target_arch = "wasm32")]
+impl Instant {
+    fn now() -> Self { Instant }
+    fn elapsed(&self) -> Duration { Duration::ZERO }
+}
+
+use crate::model::traits::{Model, ModelState};
 
 use super::output::GenerationOutput;
 use super::sampler::{CombinedSampler, GreedySampler, Sampler};
@@ -122,14 +136,14 @@ impl<'a> GenerationPipeline<'a> {
 
     /// Run generation given prompt token IDs.
     ///
-    /// When `cache` is `Some`, uses KV-cache for O(n) decode: prefill once,
+    /// When `state` is `Some`, uses stateful decode for O(n) decode: prefill once,
     /// then decode one token at a time via `forward_one`. When `None`, falls
     /// back to full-recompute O(n²) path.
     pub fn generate(
         &self,
         prompt_tokens: &[u32],
         mut config: GenerationConfig,
-        cache: Option<&mut KVCache>,
+        state: Option<&mut ModelState>,
     ) -> GenerationOutput {
         let start = Instant::now();
         let num_prompt_tokens = prompt_tokens.len();
@@ -150,20 +164,20 @@ impl<'a> GenerationPipeline<'a> {
             None => StdRng::from_entropy(),
         };
 
-        match cache {
-            Some(cache) if config.speculative_k > 0 => self.generate_speculative(
+        match state {
+            Some(state) if config.speculative_k > 0 => self.generate_speculative(
                 prompt_tokens,
                 &mut config,
-                cache,
+                state,
                 &stop_checker,
                 &mut rng,
                 num_prompt_tokens,
                 start,
             ),
-            Some(cache) => self.generate_cached(
+            Some(state) => self.generate_cached(
                 prompt_tokens,
                 &mut config,
-                cache,
+                state,
                 &stop_checker,
                 &mut rng,
                 num_prompt_tokens,
@@ -184,7 +198,7 @@ impl<'a> GenerationPipeline<'a> {
         &self,
         prompt_tokens: &[u32],
         config: &mut GenerationConfig,
-        cache: &mut KVCache,
+        state: &mut ModelState,
         stop_checker: &StopChecker,
         rng: &mut StdRng,
         num_prompt_tokens: usize,
@@ -193,17 +207,17 @@ impl<'a> GenerationPipeline<'a> {
         let mut all_tokens: Vec<u32> = prompt_tokens.to_vec();
         let mut generated_tokens: Vec<u32> = Vec::new();
 
-        // ── Prefill (populate KV-cache for all prompt tokens) ────────
+        // ── Prefill (populate state for all prompt tokens) ────────
         let prefill_output = {
             #[cfg(feature = "metal")]
             if let Some(backend) = self.backend {
                 self.model
-                    .forward_prefill_gpu(prompt_tokens, cache, backend)
+                    .forward_prefill_gpu(prompt_tokens, state, backend)
             } else {
-                self.model.forward_prefill(prompt_tokens, cache)
+                self.model.forward_prefill(prompt_tokens, state)
             }
             #[cfg(not(feature = "metal"))]
-            self.model.forward_prefill(prompt_tokens, cache)
+            self.model.forward_prefill(prompt_tokens, state)
         };
         let prefill_elapsed = start.elapsed();
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
@@ -216,7 +230,7 @@ impl<'a> GenerationPipeline<'a> {
             cb(first_token);
         }
 
-        // ── Decode loop (single-token forward with cache) ────────────
+        // ── Decode loop (single-token forward with state) ────────────
         while !stop_checker.should_stop(
             *generated_tokens.last().unwrap(),
             &generated_tokens,
@@ -232,12 +246,12 @@ impl<'a> GenerationPipeline<'a> {
                         gr.metal_backend,
                     )
                 } else if let Some(backend) = self.backend {
-                    self.model.forward_one_gpu(last_token, cache, backend)
+                    self.model.forward_one_gpu(last_token, state, backend)
                 } else {
-                    self.model.forward_one(last_token, cache)
+                    self.model.forward_one(last_token, state)
                 }
                 #[cfg(not(feature = "metal"))]
-                self.model.forward_one(last_token, cache)
+                self.model.forward_one(last_token, state)
             };
 
             logits_buf.clear();
@@ -268,7 +282,7 @@ impl<'a> GenerationPipeline<'a> {
         &self,
         prompt_tokens: &[u32],
         config: &mut GenerationConfig,
-        cache: &mut KVCache,
+        state: &mut ModelState,
         stop_checker: &StopChecker,
         rng: &mut StdRng,
         num_prompt_tokens: usize,
@@ -285,7 +299,7 @@ impl<'a> GenerationPipeline<'a> {
         };
 
         // Prefill
-        let prefill_output = self.model.forward_prefill(prompt_tokens, cache);
+        let prefill_output = self.model.forward_prefill(prompt_tokens, state);
         let prefill_elapsed = start.elapsed();
         let mut logits_buf: Vec<f32> = prefill_output.logits.clone();
 
@@ -302,13 +316,13 @@ impl<'a> GenerationPipeline<'a> {
             &generated_tokens,
             generated_tokens.len(),
         ) {
-            let save_pos = cache.current_len().unwrap_or(0);
+            let save_pos = state.as_kv_cache().current_len().unwrap_or(0);
 
             // Draft phase: generate K candidates with fewer layers
             let mut draft_tokens = Vec::with_capacity(k);
             let mut last = *generated_tokens.last().unwrap();
             for _ in 0..k {
-                let draft_out = self.model.forward_one_draft(last, cache, n_draft);
+                let draft_out = self.model.forward_one_draft(last, state, n_draft);
                 logits_buf.clear();
                 logits_buf.extend_from_slice(&draft_out.logits);
                 let tok = self.sample_token(&mut logits_buf, &generated_tokens, config, rng);
@@ -317,14 +331,14 @@ impl<'a> GenerationPipeline<'a> {
             }
 
             // Roll back cache to before draft
-            cache.truncate_to(save_pos).expect("cache truncate failed");
+            state.as_kv_cache().truncate_to(save_pos).expect("cache truncate failed");
 
             // Verify phase: run full model on [last_accepted, draft_0, ..., draft_K-1]
             // as a single batched prefill pass. This populates the cache for all
             // positions and returns logits at each position.
             let mut verify_tokens = vec![*generated_tokens.last().unwrap()];
             verify_tokens.extend_from_slice(&draft_tokens);
-            let _verify_out = self.model.forward_prefill(&verify_tokens, cache);
+            let _verify_out = self.model.forward_prefill(&verify_tokens, state);
 
             // verify_out.logits has shape [1, K+1, vocab] but forward_prefill
             // only returns the LAST position's logits. We need per-position logits.
@@ -357,7 +371,7 @@ impl<'a> GenerationPipeline<'a> {
             {
                 let bonus_out = self
                     .model
-                    .forward_one(*generated_tokens.last().unwrap(), cache);
+                    .forward_one(*generated_tokens.last().unwrap(), state);
                 logits_buf.clear();
                 logits_buf.extend_from_slice(&bonus_out.logits);
                 let bonus = self.sample_token(&mut logits_buf, &generated_tokens, config, rng);
@@ -767,14 +781,18 @@ mod tests {
 
     // ── KV-cache integration tests ──────────────────────────────────
 
-    fn make_cache(cfg: &ModelConfig, max_seq: usize) -> KVCache {
-        KVCache::new(
+    fn make_cache(cfg: &ModelConfig, max_seq: usize) -> crate::kv_cache::KVCache {
+        crate::kv_cache::KVCache::new(
             cfg.architecture.num_layers,
             max_seq,
             cfg.attention.num_kv_heads(),
             cfg.attention.head_dim(),
         )
         .unwrap()
+    }
+
+    fn make_state(cfg: &ModelConfig, max_seq: usize) -> ModelState {
+        ModelState::KvCache(make_cache(cfg, max_seq))
     }
 
     /// Generate 20 tokens with KV-cache: output token IDs IDENTICAL to
@@ -795,13 +813,13 @@ mod tests {
         let uncached_output = pipeline.generate(&prompt, config_uncached, None);
 
         // Cached path
-        let mut cache = make_cache(&cfg, prompt.len() + 20);
+        let mut state = make_state(&cfg, prompt.len() + 20);
         let config_cached = GenerationConfig {
             max_new_tokens: 20,
             seed: Some(0),
             ..Default::default()
         };
-        let cached_output = pipeline.generate(&prompt, config_cached, Some(&mut cache));
+        let cached_output = pipeline.generate(&prompt, config_cached, Some(&mut state));
 
         assert_eq!(
             cached_output.token_ids, uncached_output.token_ids,
@@ -838,24 +856,24 @@ mod tests {
         let prompt = vec![1u32, 2, 3];
 
         // First, generate without EOS to find out what token the model produces
-        let mut cache_ref = make_cache(&cfg, prompt.len() + 5);
+        let mut state_ref = make_state(&cfg, prompt.len() + 5);
         let config_ref = GenerationConfig {
             max_new_tokens: 5,
             seed: Some(0),
             ..Default::default()
         };
-        let ref_output = pipeline.generate(&prompt, config_ref, Some(&mut cache_ref));
+        let ref_output = pipeline.generate(&prompt, config_ref, Some(&mut state_ref));
         let first_generated = ref_output.token_ids[prompt.len()];
 
         // Now generate with that token as EOS — should stop after 1 token
-        let mut cache = make_cache(&cfg, prompt.len() + 100);
+        let mut state = make_state(&cfg, prompt.len() + 100);
         let config = GenerationConfig {
             max_new_tokens: 100,
             eos_token_id: Some(first_generated),
             seed: Some(0),
             ..Default::default()
         };
-        let output = pipeline.generate(&prompt, config, Some(&mut cache));
+        let output = pipeline.generate(&prompt, config, Some(&mut state));
 
         assert_eq!(
             output.num_generated_tokens, 1,
@@ -893,14 +911,14 @@ mod tests {
         let uncached_elapsed = start_uncached.elapsed();
 
         // Cached timing
-        let mut cache = make_cache(&cfg, prompt.len() + 64);
+        let mut state = make_state(&cfg, prompt.len() + 64);
         let start_cached = Instant::now();
         let config_cached = GenerationConfig {
             max_new_tokens: 64,
             seed: Some(0),
             ..Default::default()
         };
-        let _ = pipeline.generate(&prompt, config_cached, Some(&mut cache));
+        let _ = pipeline.generate(&prompt, config_cached, Some(&mut state));
         let cached_elapsed = start_cached.elapsed();
 
         let speedup = uncached_elapsed.as_secs_f64() / cached_elapsed.as_secs_f64();

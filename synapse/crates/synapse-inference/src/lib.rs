@@ -11,8 +11,10 @@ pub mod metal;
 pub mod model;
 pub mod model_adapter;
 pub mod ops;
+pub mod pruning;
 pub mod quantization;
 pub mod registry;
+pub mod ssm;
 pub mod tokenizer;
 pub mod weight_loading;
 
@@ -32,7 +34,7 @@ pub mod prelude {
         RepetitionPenalty, Sampler, StopChecker, StopCondition, TemperatureSampler, TopKSampler,
         TopPSampler,
     };
-    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput};
+    pub use crate::model::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput, ModelState};
     pub use crate::model_adapter::{
         ModelAdapter, ModelAdapterKind, ReasoningMarkers, ThinkingMode,
     };

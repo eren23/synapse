@@ -441,4 +441,60 @@ extern "C" {
 
     pub fn syn_kvcache_reset(cache: *mut syn_kvcache_t) -> syn_status_t;
     pub fn syn_kvcache_truncate(cache: *mut syn_kvcache_t, new_len: usize) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // Selective Scan (Mamba SSM kernel)
+    // ------------------------------------------------------------------
+    pub fn syn_selective_scan_step(
+        x: *const f32,
+        delta: *const f32,
+        a_log: *const f32,
+        b: *const f32,
+        c: *const f32,
+        d_skip: *const f32,
+        state: *mut f32,
+        y: *mut f32,
+        d_inner: usize,
+        d_state: usize,
+    ) -> syn_status_t;
+
+    pub fn syn_selective_scan_seq(
+        xs: *const f32,
+        deltas: *const f32,
+        a_log: *const f32,
+        bs: *const f32,
+        cs: *const f32,
+        d_skip: *const f32,
+        state: *mut f32,
+        ys: *mut f32,
+        seq_len: usize,
+        d_inner: usize,
+        d_state: usize,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // WKV7 (RWKV-7 recurrence kernel)
+    // ------------------------------------------------------------------
+    pub fn syn_wkv7_step(
+        r: *const f32,
+        k: *const f32,
+        v: *const f32,
+        w: *const f32,
+        a: *const f32,
+        state: *mut f32,
+        out: *mut f32,
+        head_size: usize,
+    ) -> syn_status_t;
+
+    pub fn syn_wkv7_seq(
+        r: *const f32,
+        k: *const f32,
+        v: *const f32,
+        w: *const f32,
+        a: *const f32,
+        state: *mut f32,
+        out: *mut f32,
+        seq_len: usize,
+        head_size: usize,
+    ) -> syn_status_t;
 }

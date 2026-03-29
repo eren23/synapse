@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synapse SSM Demo — Mamba in the Browser</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #e0e0e0; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #fff; }
+  .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 2rem; }
+  .badge { display: inline-block; background: #1a3a2a; color: #4ade80; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; margin-left: 0.5rem; }
+  .container { width: 100%; max-width: 640px; }
+  .status { background: #111; border: 1px solid #333; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; font-size: 0.85rem; }
+  .status .label { color: #888; }
+  .status .value { color: #4ade80; font-weight: 600; }
+  .status.error .value { color: #f87171; }
+  #output { background: #111; border: 1px solid #333; border-radius: 8px; padding: 1rem; min-height: 200px; max-height: 400px; overflow-y: auto; font-family: 'JetBrains Mono', 'SF Mono', monospace; font-size: 0.9rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word; margin-bottom: 1rem; }
+  #output .prompt { color: #60a5fa; }
+  #output .generated { color: #e0e0e0; }
+  .input-row { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }
+  input[type=text] { flex: 1; background: #1a1a1a; border: 1px solid #333; color: #e0e0e0; padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.9rem; outline: none; }
+  input[type=text]:focus { border-color: #4ade80; }
+  button { background: #166534; color: #fff; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font-size: 0.9rem; cursor: pointer; font-weight: 600; }
+  button:hover { background: #15803d; }
+  button:disabled { background: #333; color: #666; cursor: not-allowed; }
+  .controls { display: flex; gap: 1rem; align-items: center; font-size: 0.8rem; color: #888; margin-bottom: 1rem; }
+  .controls label { display: flex; align-items: center; gap: 0.3rem; }
+  .controls input[type=range] { width: 80px; }
+  .stats { font-size: 0.75rem; color: #666; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+  <a href="../" style="color:#60a5fa; font-size:0.8rem; text-decoration:none;">← Back to Synapse demos</a>
+  <h1>Synapse SSM Demo <span class="badge">WASM</span></h1>
+  <p class="subtitle">Mamba-130M running entirely in your browser — no server, no GPU</p>
+
+  <div class="container">
+    <div id="status-box" class="status">
+      <span class="label">Status:</span> <span id="status" class="value">Loading WASM module...</span>
+      <div id="progress-bar" style="display:none; margin-top:0.5rem; background:#222; border-radius:4px; height:6px; overflow:hidden;">
+        <div id="progress-fill" style="width:0%; height:100%; background:#4ade80; border-radius:4px; transition:width 0.2s;"></div>
+      </div>
+    </div>
+
+    <div id="output"><span class="prompt" id="prompt-display"></span><span class="generated" id="gen-display"></span></div>
+
+    <div class="input-row">
+      <input type="text" id="prompt-input" placeholder="Enter a prompt..." value="The meaning of life is" disabled>
+      <button id="gen-btn" onclick="generate()" disabled>Generate</button>
+    </div>
+
+    <div class="controls">
+      <label>Tokens: <input type="range" id="max-tokens" min="10" max="100" value="30"> <span id="max-tokens-val">30</span></label>
+      <label>Temp: <input type="range" id="temperature" min="0" max="100" value="70" step="5"> <span id="temp-val">0.70</span></label>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div style="text-align:center; padding:1.5rem 0 0.5rem; color:#666; font-size:0.75rem;">
+      Powered by <strong style="color:#e0e0e0;">Synapse</strong> — 491 KB WASM engine
+      <br><a href="../" style="color:#60a5fa;">Main Hub</a> · <a href="../lewm-compress-demo/" style="color:#60a5fa;">Compression Demo</a> · <span style="color:#4ade80;">SSM Chat</span>
+    </div>
+  </div>
+
+<script type="module">
+import init, { WasmMamba } from '../synapse-wasm-pkg/synapse_wasm.js';
+
+let model = null;
+
+const statusEl = document.getElementById('status');
+const statusBox = document.getElementById('status-box');
+const progressBar = document.getElementById('progress-bar');
+const progressFill = document.getElementById('progress-fill');
+const promptInput = document.getElementById('prompt-input');
+const genBtn = document.getElementById('gen-btn');
+const promptDisplay = document.getElementById('prompt-display');
+const genDisplay = document.getElementById('gen-display');
+const statsEl = document.getElementById('stats');
+
+document.getElementById('max-tokens').oninput = e => document.getElementById('max-tokens-val').textContent = e.target.value;
+document.getElementById('temperature').oninput = e => document.getElementById('temp-val').textContent = (e.target.value / 100).toFixed(2);
+
+function setStatus(msg, isError = false) {
+  statusEl.textContent = msg;
+  statusBox.className = isError ? 'status error' : 'status';
+}
+
+function setProgress(pct) {
+  if (pct < 0) {
+    progressBar.style.display = 'none';
+    progressFill.style.width = '0%';
+  } else {
+    progressBar.style.display = 'block';
+    progressFill.style.width = Math.min(pct, 100) + '%';
+  }
+}
+
+async function fetchWithProgress(url, statusEl) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + url);
+  const contentLength = resp.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength) : 0;
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) {
+      const pct = Math.round((received / total) * 100);
+      const mb = (received / 1048576).toFixed(1);
+      const totalMb = (total / 1048576).toFixed(1);
+      statusEl.textContent = `Downloading: ${mb} / ${totalMb} MB (${pct}%)`;
+      setProgress(pct);
+    } else {
+      statusEl.textContent = `Downloading: ${(received / 1048576).toFixed(1)} MB...`;
+    }
+  }
+  const buf = new Uint8Array(received);
+  let pos = 0;
+  for (const chunk of chunks) { buf.set(chunk, pos); pos += chunk.length; }
+  return buf;
+}
+
+async function loadModel() {
+  try {
+    setStatus('Initializing WASM...');
+    await init();
+
+    setStatus('Loading config...');
+    const configResp = await fetch('config.json');
+    if (!configResp.ok) throw new Error('config.json not found');
+    const configText = await configResp.text();
+
+    setStatus('Downloading weights...');
+    setProgress(0);
+    const weightsBytes = await fetchWithProgress('model.safetensors', statusEl);
+    setProgress(-1);
+    const sizeMB = (weightsBytes.length / 1e6).toFixed(1);
+
+    setStatus(`Building model from ${sizeMB}MB weights...`);
+    model = WasmMamba.create(configText, weightsBytes);
+
+    // Load tokenizer into WASM (BPE runs in Rust, not JS)
+    setStatus('Downloading tokenizer...');
+    setProgress(0);
+    const tokBytes = await fetchWithProgress('tokenizer.json', statusEl);
+    setProgress(-1);
+    model.load_tokenizer(tokBytes);
+
+    setStatus(`Ready! Mamba-130M (${model.num_layers()} layers, d=${model.d_model()}, ${sizeMB}MB)`);
+    promptInput.disabled = false;
+    genBtn.disabled = false;
+    promptInput.focus();
+  } catch (e) {
+    setProgress(-1);
+    setStatus(`Error: ${e.message}`, true);
+    console.error(e);
+  }
+}
+
+window.generate = function() {
+  if (!model) return;
+  const prompt = promptInput.value;
+  const maxTokens = parseInt(document.getElementById('max-tokens').value);
+  const temperature = parseInt(document.getElementById('temperature').value) / 100;
+  const seed = Math.floor(Math.random() * 2147483647);
+
+  genBtn.disabled = true;
+  promptDisplay.textContent = prompt;
+  genDisplay.textContent = '';
+  statsEl.textContent = 'Generating...';
+
+  setTimeout(() => {
+    try {
+      const t0 = performance.now();
+      // Tokenization + generation + decoding all in WASM
+      const genText = model.generate_text(prompt, maxTokens, temperature, seed);
+      const elapsed = (performance.now() - t0) / 1000;
+
+      // Count tokens (approximate from output length)
+      const tokCount = maxTokens; // generate always produces max_tokens
+      const tokPerSec = tokCount / elapsed;
+
+      genDisplay.textContent = genText;
+      statsEl.textContent = `${tokCount} tokens in ${elapsed.toFixed(2)}s (${tokPerSec.toFixed(1)} tok/s)`;
+    } catch (e) {
+      genDisplay.textContent = `Error: ${e.message}`;
+      console.error(e);
+    }
+    genBtn.disabled = false;
+  }, 50);
+};
+
+promptInput.addEventListener('keydown', e => { if (e.key === 'Enter') window.generate(); });
+loadModel();
+</script>
+</body>
+</html>

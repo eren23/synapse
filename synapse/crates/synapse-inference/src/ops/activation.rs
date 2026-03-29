@@ -2,6 +2,16 @@ pub(crate) fn silu(x: f32) -> f32 {
     x / (1.0 + (-x).exp())
 }
 
+#[inline]
+pub(crate) fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
+
+#[inline]
+pub(crate) fn softplus(x: f32) -> f32 {
+    if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
+}
+
 pub(crate) fn gelu(x: f32) -> f32 {
     0.5 * x * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
 }

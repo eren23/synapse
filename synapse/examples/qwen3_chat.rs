@@ -144,6 +144,8 @@ fn demo_engine() -> InferenceEngine {
     InferenceEngine {
         model,
         quantized_model: None,
+        ternary_model: None,
+        ssm_model: None,
         config: cfg,
         model_adapter_kind: ModelAdapterKind::Qwen3,
         tokenizer: None,
@@ -542,7 +544,7 @@ fn run_pretrained_chat(
         let pipeline = engine.generation_pipeline();
 
         let max_seq = prepared.prompt_tokens.len() + max_new_tokens;
-        let mut cache = engine.create_kv_cache(max_seq)?;
+        let mut state = engine.create_state(max_seq)?;
 
         let in_think = Rc::new(Cell::new(false));
         let think_shown = Rc::new(Cell::new(false));
@@ -600,7 +602,7 @@ fn run_pretrained_chat(
             ..Default::default()
         };
 
-        let output = pipeline.generate(&prepared.prompt_tokens, config, Some(&mut cache));
+        let output = pipeline.generate(&prepared.prompt_tokens, config, Some(&mut state));
         println!();
         let mode_str = if engine.is_quantized() { "INT8" } else { "f32" };
         println!(

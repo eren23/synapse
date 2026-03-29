@@ -164,19 +164,20 @@ fn kvcache_decode_5x_speedup_at_64_tokens() {
     let recompute_elapsed = start.elapsed();
 
     // KV-cache timing
-    let mut cache = KVCache::new(
+    let cache = KVCache::new(
         cfg.architecture.num_layers,
         prompt.len() + 64,
         cfg.attention.num_kv_heads(),
         cfg.attention.head_dim(),
     )
     .unwrap();
+    let mut state = synapse_inference::model::ModelState::KvCache(cache);
     let config_cached = GenerationConfig {
         max_new_tokens: 64,
         ..Default::default()
     };
     let start = Instant::now();
-    let _ = pipeline.generate(&prompt, config_cached, Some(&mut cache));
+    let _ = pipeline.generate(&prompt, config_cached, Some(&mut state));
     let cached_elapsed = start.elapsed();
 
     let speedup = recompute_elapsed.as_secs_f64() / cached_elapsed.as_secs_f64();

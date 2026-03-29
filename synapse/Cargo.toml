@@ -8,8 +8,9 @@ version = "0.1.0"
 edition = "2021"
 description = "A modular LLM inference engine with Zig SIMD kernels and Metal GPU acceleration"
 license = "MIT"
-keywords = ["llm", "inference", "quantization", "transformer", "simd"]
-categories = ["science", "algorithms"]
+keywords = ["llm", "inference", "wasm", "quantization", "edge-ai"]
+categories = ["science", "wasm"]
+repository = "https://github.com/eren23/synapse"
 
 [features]
 metal = ["synapse-inference/metal"]
@@ -22,10 +23,13 @@ synapse-data = { path = "crates/synapse-data" }
 synapse-graph = { path = "crates/synapse-graph" }
 synapse-train = { path = "crates/synapse-train" }
 synapse-core = { path = "crates/synapse-core" }
-synapse-inference = { path = "crates/synapse-inference" }
+synapse-inference = { path = "crates/synapse-inference", features = ["diffusion"] }
 synapse-sys = { path = "crates/synapse-sys" }
 rand = "0.8"
 rand_distr = "0.4"
+
+[dev-dependencies]
+serde_json = "1"
 
 [[example]]
 name = "xor"
@@ -135,6 +139,50 @@ path = "tests/integration/multi_model_validation.rs"
 name = "kvcache_speedup"
 path = "tests/benchmarks/kvcache_speedup.rs"
 
+[[test]]
+name = "mamba_validation"
+path = "tests/integration/mamba_validation.rs"
+
+[[test]]
+name = "rwkv_validation"
+path = "tests/integration/rwkv_validation.rs"
+
+[[test]]
+name = "hybrid_validation"
+path = "tests/integration/hybrid_validation.rs"
+
+[[test]]
+name = "diffusion_validation"
+path = "tests/integration/diffusion_validation.rs"
+
+[[test]]
+name = "reference_correctness"
+path = "tests/integration/reference_correctness.rs"
+
+[[test]]
+name = "mamba_hf_validation"
+path = "tests/integration/mamba_hf_validation.rs"
+
+[[test]]
+name = "rwkv_hf_validation"
+path = "tests/integration/rwkv_hf_validation.rs"
+
+[[example]]
+name = "export_mamba_int8"
+path = "examples/export_mamba_int8.rs"
+
+[[example]]
+name = "lewm_compress"
+path = "examples/lewm_compress.rs"
+
+[[example]]
+name = "model_surgeon"
+path = "examples/model_surgeon.rs"
+
+[[example]]
+name = "mamba_generate"
+path = "examples/mamba_generate.rs"
+
 [[example]]
 name = "qwen3_chat"
 path = "examples/qwen3_chat.rs"
@@ -162,3 +210,7 @@ path = "examples/lewm_demo.rs"
 [[example]]
 name = "geometric_attention_demo"
 path = "examples/geometric_attention_demo.rs"
+
+[[example]]
+name = "export_lewm_q4"
+path = "examples/export_lewm_q4.rs"

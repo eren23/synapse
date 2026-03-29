@@ -221,7 +221,7 @@ fn main() {
     // ── KV-cache decode benchmark (f32) ─────────────────────────────
     println!("\n── KV-Cache Decode Benchmark (f32) ──────────");
     let cache_num_tokens = 20;
-    let mut cache = KVCache::new(
+    let cache = KVCache::new(
         cfg.architecture.num_layers,
         prompt.len() + cache_num_tokens,
         cfg.attention.num_kv_heads(),
@@ -229,13 +229,14 @@ fn main() {
     )
     .expect("Failed to create KV-cache");
     let kv_mem = cache.expected_allocation_bytes();
+    let mut state = synapse_inference::model::ModelState::KvCache(cache);
 
     let config = GenerationConfig {
         max_new_tokens: cache_num_tokens,
         ..Default::default()
     };
     let start = Instant::now();
-    let output = pipeline.generate(&prompt, config, Some(&mut cache));
+    let output = pipeline.generate(&prompt, config, Some(&mut state));
     let elapsed = start.elapsed();
     let cached_tps = output.num_generated_tokens as f64 / elapsed.as_secs_f64();
     let speedup = cached_tps / tps;

@@ -118,6 +118,9 @@ impl WeightMapper {
             "vit" => Ok(Self::vit()),
             "clip" => Ok(Self::clip()),
             "dinov2" => Ok(Self::dinov2()),
+            "mamba" | "mamba2" => Err(WeightError::InvalidFormat(
+                "Mamba uses direct weight loading, not WeightMapper. Use MambaModel::from_weights().".into(),
+            )),
             _ => Err(WeightError::InvalidFormat(format!(
                 "Unsupported model type: {model_type}"
             ))),
@@ -1089,6 +1092,21 @@ mod tests {
         assert!(
             matches!(result, Err(WeightError::InvalidFormat(ref msg)) if msg.contains("gpt2")),
             "Expected InvalidFormat error for unsupported model type, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn from_model_type_rejects_mamba_with_guidance() {
+        let result = WeightMapper::from_model_type("mamba");
+        assert!(
+            matches!(result, Err(WeightError::InvalidFormat(ref msg)) if msg.contains("MambaModel::from_weights")),
+            "Expected guidance message for mamba, got: {result:?}"
+        );
+
+        let result2 = WeightMapper::from_model_type("mamba2");
+        assert!(
+            matches!(result2, Err(WeightError::InvalidFormat(ref msg)) if msg.contains("MambaModel::from_weights")),
+            "Expected guidance message for mamba2, got: {result2:?}"
         );
     }
 

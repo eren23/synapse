@@ -1,0 +1,17 @@
+{
+  "d_model": 768,
+  "n_layer": 24,
+  "vocab_size": 50280,
+  "ssm_cfg": {},
+  "rms_norm": true,
+  "residual_in_fp32": true,
+  "fused_add_norm": true,
+  "pad_vocab_size_multiple": 8,
+  "hidden_size": 768,
+  "num_hidden_layers": 24,
+  "model_type": "mamba",
+  "dt_rank": 48,
+  "state_size": 16,
+  "conv_kernel": 4,
+  "expand": 2
+}
