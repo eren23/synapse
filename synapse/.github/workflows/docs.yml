@@ -3,7 +3,7 @@ name: Deploy Synapse Pages
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'web/**', 'synapse-wasm/**', 'crates/synapse-inference/**']
+    paths: ['synapse/docs/**', 'synapse/web/**', 'synapse/synapse-wasm/**', 'synapse/crates/synapse-inference/**']
   workflow_dispatch:
 
 permissions:
