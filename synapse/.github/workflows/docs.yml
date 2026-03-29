@@ -1,9 +1,9 @@
-name: Deploy docs & web demos to GitHub Pages
+name: Deploy Synapse Pages
 
 on:
   push:
     branches: [main]
-    paths: ['docs/**', 'web/**', 'synapse-wasm/pkg/**']
+    paths: ['docs/**', 'web/**', 'synapse-wasm/**', 'crates/synapse-inference/**']
   workflow_dispatch:
 
 permissions:
@@ -19,9 +19,24 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM package
+        run: wasm-pack build --target web --release --out-dir pkg
+        working-directory: synapse-wasm
 
       - name: Install mdBook
         run: |
@@ -29,13 +44,16 @@ jobs:
           curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz | tar xz -C "$HOME/bin"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Check public status sync
+      - name: Sync public status
         run: python3 scripts/sync_public_status.py --check
 
-      - name: Build book
+      - name: Build docs
         run: mdbook build docs/
 
-      - name: Assemble site
+      - name: Restore weight files from git history
+        run: git lfs pull --include="web/**/*.bin" 2>/dev/null || true
+
+      - name: Assemble Pages site
         run: |
           mkdir -p _site
           cp -r docs/book/* _site/
