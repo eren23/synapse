@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6
@@ -46,6 +48,11 @@ jobs:
       - name: Build docs
         working-directory: synapse
         run: mdbook build docs/
+
+      - name: Restore weight files from git history
+        run: |
+          git show f00068a:synapse/web/lewm_weights.bin > synapse/web/lewm_weights.bin
+          git show f00068a:synapse/web/neo_unify_weights.bin > synapse/web/neo_unify_weights.bin
 
       - name: Assemble Pages site
         run: |
