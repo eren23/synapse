@@ -420,6 +420,7 @@ impl RealLeWM {
         let mut h = x.to_vec();
 
         for (i, (ref w, ref b)) in layers.iter().enumerate() {
+            if w.is_empty() { continue; }
             let in_dim = h.len();
             let out_dim = w.len() / in_dim;
             let mut out = matmul_t(&h, w, 1, in_dim, out_dim);
@@ -3540,6 +3541,7 @@ impl RealLeWMFullQ4 {
     /// Load pre-quantized LQ40 binary (INT8 encoder + Q4 predictor).
     /// Format: [4B "LQ40"][4B config_len][JSON config][sequential weight data]
     pub fn from_lq40_data(data: &[u8]) -> Result<RealLeWMFullQ4, JsError> {
+        console_error_panic_hook::set_once();
         if data.len() < 8 { return Err(JsError::new("LQ40 data too short")); }
         if &data[0..4] != b"LQ40" { return Err(JsError::new("Not LQ40 format")); }
 
