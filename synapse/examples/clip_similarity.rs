@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use synapse_inference::model::{parse_clip_config, CLIPModel};
+use synapse_inference::models::{parse_clip_config, CLIPModel};
 use synapse_inference::weight_loading::{load_safetensors, WeightMapper};
 
 fn parse_args() -> PathBuf {

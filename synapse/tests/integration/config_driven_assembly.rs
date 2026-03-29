@@ -4,7 +4,7 @@
 use std::time::Instant;
 
 use synapse_inference::config::*;
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 
 const QWEN3_JSON: &str = include_str!("../../configs/qwen3_0.6b.json");
 const LLAMA_JSON: &str = include_str!("../../configs/llama3.2_1b.json");

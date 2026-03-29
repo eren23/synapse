@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use synapse_inference::engine::InferenceEngine;
 use synapse_inference::generation::{GenerationConfig, TemperatureSampler};
-use synapse_inference::model::{Model, ModelState};
+use synapse_inference::models::{Model, ModelState};
 use synapse_inference::tokenizer::Tokenizer;
 
 fn main() {

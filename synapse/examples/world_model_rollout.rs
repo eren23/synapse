@@ -6,8 +6,8 @@
 //! Usage: cargo run --example world_model_rollout --release
 
 use std::time::Instant;
-use synapse_inference::model::vit::ViTConfig;
-use synapse_inference::model::{RealtimeRollout, WorldModel, WorldModelConfig};
+use synapse_inference::models::vision::vit::ViTConfig;
+use synapse_inference::models::{RealtimeRollout, WorldModel, WorldModelConfig};
 
 fn main() {
     // Small dynamics model for real-time inference

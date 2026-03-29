@@ -2092,10 +2092,10 @@ impl NeoUnify {
 // SSM Models (Mamba / RWKV) — the moat: runs in browser, llama.cpp can't
 // ════════════════════════════════════════════════════════════════════
 
-use synapse_inference::ssm::{MambaConfig, MambaModel};
+use synapse_inference::models::{MambaConfig, MambaModel};
 use synapse_inference::quantization::QuantizedMambaModel;
 use synapse_inference::weight_loading::{parse_safetensors, RawTensor};
-use synapse_inference::model::Model;
+use synapse_inference::models::Model;
 use synapse_inference::tokenizer::Tokenizer;
 
 /// Mamba language model running in WASM.
@@ -2188,7 +2188,7 @@ impl WasmMamba {
     /// Returns the generated token IDs (excluding prompt).
     pub fn generate(&self, prompt_tokens: &[u32], max_tokens: u32, temperature: f32, seed: u32) -> Result<Vec<u32>, JsError> {
         use synapse_inference::generation::{GenerationConfig, GenerationPipeline, TemperatureSampler, Sampler};
-        use synapse_inference::model::ModelState;
+        use synapse_inference::models::ModelState;
 
         self.model.reset_state();
 
@@ -2257,7 +2257,7 @@ impl WasmMambaInt8 {
 
     pub fn generate(&self, prompt_tokens: &[u32], max_tokens: u32, temperature: f32, seed: u32) -> Result<Vec<u32>, JsError> {
         use synapse_inference::generation::{GenerationConfig, GenerationPipeline, TemperatureSampler, Sampler};
-        use synapse_inference::model::ModelState;
+        use synapse_inference::models::ModelState;
 
         self.model.reset_state();
         let pipeline = GenerationPipeline::new(&self.model);

@@ -1502,7 +1502,7 @@ fn lewm_metal_predict_matches_cpu() {
         None => return,
     };
 
-    use crate::model::lewm::{LeWMConfig, LeWorldModel};
+    use crate::models::vision::lewm::{LeWMConfig, LeWorldModel};
     use crate::weight_loading::AlignedBuffer;
 
     // Deterministic pseudo-random weight generator

@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use synapse_inference::engine::InferenceEngine;
-use synapse_inference::model::Model;
+use synapse_inference::models::Model;
 
 /// Cosine similarity between two vectors.
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {

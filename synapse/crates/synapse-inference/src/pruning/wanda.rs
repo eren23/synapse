@@ -107,7 +107,7 @@ impl WandaPruner {
     /// Returns total number of pruned weights.
     pub fn prune_mamba(
         &self,
-        blocks: &mut [crate::ssm::mamba_block::MambaBlock],
+        blocks: &mut [crate::models::ssm::mamba::block::MambaBlock],
     ) -> usize {
         let mut total = 0;
 
@@ -146,9 +146,9 @@ impl WandaPruner {
     /// then uses those for Wanda scoring.
     pub fn prune_mamba_calibrated(
         &self,
-        config: &crate::ssm::config::MambaConfig,
+        config: &crate::models::ssm::mamba::config::MambaConfig,
         embed_tokens: &[f32],
-        blocks: &mut [crate::ssm::mamba_block::MambaBlock],
+        blocks: &mut [crate::models::ssm::mamba::block::MambaBlock],
         calibration_tokens: &[u32],
     ) -> usize {
         let d_model = config.d_model;
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_wanda_prune_mamba_synthetic() {
-        use crate::ssm::mamba_block::MambaBlock;
+        use crate::models::ssm::mamba::block::MambaBlock;
 
         let d_model = 8;
         let d_inner = 16;

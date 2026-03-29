@@ -3,12 +3,12 @@
 //! Based on ShortGPT/Block Influence Score: layers where cos(input, output) ≈ 1.0
 //! are near-identity transforms and can be removed with minimal quality loss.
 
-use crate::ssm::mamba_block::MambaBlock;
-use crate::ssm::mamba_model::MambaModel;
-use crate::ssm::rwkv_block::RwkvBlock;
-use crate::ssm::rwkv_model::RwkvModel;
+use crate::models::ssm::mamba::block::MambaBlock;
+use crate::models::ssm::mamba::model::MambaModel;
+use crate::models::ssm::rwkv::block::RwkvBlock;
+use crate::models::ssm::rwkv::model::RwkvModel;
 use super::sensitivity::{SensitivityAnalyzer, cosine_similarity};
-use crate::model::traits::Model;
+use crate::models::traits::Model;
 
 /// Result of a layer removal operation.
 #[derive(Debug)]
@@ -326,7 +326,7 @@ pub(crate) fn clone_rwkv_block(b: &RwkvBlock) -> RwkvBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssm::config::MambaConfig;
+    use crate::models::ssm::mamba::config::MambaConfig;
 
     fn make_test_mamba_model(num_layers: usize) -> (MambaModel, MambaConfig) {
         let d_model = 16;

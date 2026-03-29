@@ -6,8 +6,8 @@
 
 use ::metal::{Buffer, Device, MTLResourceOptions};
 
-use crate::model::causal_lm::CausalLM;
-use crate::model::decoder_layer::DecoderLayer;
+use crate::models::lm::causal_lm::CausalLM;
+use crate::models::lm::decoder_layer::DecoderLayer;
 
 /// Pre-uploaded weight buffers for one decoder layer.
 pub struct MetalLayerWeights {

@@ -172,7 +172,7 @@ fn memory_usage_analytical_matches_actual() {
     let analytical = compute_f32_memory_bytes(&cfg);
 
     // Build model with actual weights and measure
-    let mut model = synapse_inference::model::ModelBuilder::from_config(&cfg);
+    let mut model = synapse_inference::models::ModelBuilder::from_config(&cfg);
 
     // Fill weights
     let h = cfg.architecture.hidden_size;

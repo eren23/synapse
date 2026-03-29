@@ -6,15 +6,15 @@
 //! - RWKV-7 Q4 language model (text generation)
 
 use std::time::Instant;
-use synapse_inference::model::lewm::{LeWMConfig, LeWorldModel};
-use synapse_inference::model::traits::{Model, ModelState};
+use synapse_inference::models::vision::lewm::{LeWMConfig, LeWorldModel};
+use synapse_inference::models::traits::{Model, ModelState};
 use synapse_inference::quantization::{Q4MambaModel, Q4RwkvModel};
-use synapse_inference::ssm::config::MambaConfig;
-use synapse_inference::ssm::mamba_block::MambaBlock;
-use synapse_inference::ssm::mamba_model::MambaModel;
-use synapse_inference::ssm::rwkv_block::RwkvBlock;
-use synapse_inference::ssm::rwkv_config::RwkvConfig;
-use synapse_inference::ssm::rwkv_model::RwkvModel;
+use synapse_inference::models::ssm::mamba::config::MambaConfig;
+use synapse_inference::models::ssm::mamba::block::MambaBlock;
+use synapse_inference::models::ssm::mamba::model::MambaModel;
+use synapse_inference::models::ssm::rwkv::block::RwkvBlock;
+use synapse_inference::models::ssm::rwkv::config::RwkvConfig;
+use synapse_inference::models::ssm::rwkv::model::RwkvModel;
 
 // ---------------------------------------------------------------------------
 // Result and info types

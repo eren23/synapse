@@ -16,7 +16,7 @@ use synapse_inference::chat_template::ChatMessage;
 use synapse_inference::config::*;
 use synapse_inference::engine::InferenceEngine;
 use synapse_inference::generation::{CombinedSampler, GenerationConfig, GenerationPipeline};
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::model_adapter::ModelAdapterKind;
 use synapse_inference::model_adapter::ThinkingMode;
 use synapse_inference::weight_loading::{RawTensor, WeightMapper};

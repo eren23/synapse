@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use synapse_inference::config::*;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::quantization::quantize_model;
 use synapse_inference::weight_loading::AlignedBuffer;
 
@@ -51,7 +51,7 @@ fn gen_weights(len: usize, seed: u32) -> Vec<f32> {
         .collect()
 }
 
-fn fill_model_weights(model: &mut synapse_inference::model::CausalLM) {
+fn fill_model_weights(model: &mut synapse_inference::models::CausalLM) {
     let cfg = &model.config;
     let h = cfg.architecture.hidden_size;
     let vocab = cfg.architecture.vocab_size;

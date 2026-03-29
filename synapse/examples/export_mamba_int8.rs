@@ -37,9 +37,9 @@ fn main() {
     let mamba = engine.ssm_model.as_ref().expect("Not an SSM model");
 
     // Downcast to MambaModel
-    let mamba_model: &synapse_inference::ssm::MambaModel = unsafe {
+    let mamba_model: &synapse_inference::models::MambaModel = unsafe {
         // The ssm_model is Box<dyn Model>, and we know it's MambaModel
-        &*(mamba.as_ref() as *const dyn synapse_inference::model::Model as *const synapse_inference::ssm::MambaModel)
+        &*(mamba.as_ref() as *const dyn synapse_inference::models::Model as *const synapse_inference::models::MambaModel)
     };
 
     eprintln!("Quantizing to INT8...");

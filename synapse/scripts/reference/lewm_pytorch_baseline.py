@@ -17,8 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from safetensors.torch import load_file
 
-CHECKPOINT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/lewm-pusht/pusht/lejepa_weights.safetensors"
-
 
 # ── Minimal LeWM reimplementation (enough for inference benchmark) ──
 

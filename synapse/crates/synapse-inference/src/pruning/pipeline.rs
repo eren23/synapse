@@ -3,8 +3,8 @@
 //! Combines sensitivity analysis, layer removal, Wanda weight pruning,
 //! and SSM-aware channel pruning into a single configurable pipeline.
 
-use crate::model::traits::Model;
-use crate::ssm::mamba_model::MambaModel;
+use crate::models::traits::Model;
+use crate::models::ssm::mamba::model::MambaModel;
 use super::layer_removal::LayerRemover;
 use super::sensitivity::cosine_similarity;
 use super::wanda::WandaPruner;
@@ -219,8 +219,8 @@ fn count_mamba_params(model: &MambaModel) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ssm::config::MambaConfig;
-    use crate::ssm::mamba_block::MambaBlock;
+    use crate::models::ssm::mamba::config::MambaConfig;
+    use crate::models::ssm::mamba::block::MambaBlock;
 
     fn make_test_model() -> MambaModel {
         let d_model = 16;

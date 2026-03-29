@@ -7,7 +7,7 @@
 use ::metal::{Buffer, Device, MTLResourceOptions};
 
 use super::device::MetalBackend;
-use crate::model::lewm::{AdaLNTransformerLayer, LeWMConfig, LeWorldModel};
+use crate::models::vision::lewm::{AdaLNTransformerLayer, LeWMConfig, LeWorldModel};
 
 // ── GPU weight buffers ──────────────────────────────────────────────
 

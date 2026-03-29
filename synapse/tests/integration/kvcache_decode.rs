@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use synapse_inference::config::*;
 use synapse_inference::kv_cache::KVCache;
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
 fn test_config() -> ModelConfig {
@@ -125,7 +125,7 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     w
 }
 
-fn build_model(cfg: &ModelConfig) -> synapse_inference::model::CausalLM {
+fn build_model(cfg: &ModelConfig) -> synapse_inference::models::CausalLM {
     let mut model = ModelBuilder::from_config(cfg);
     let weights = generate_fake_hf_weights(cfg);
     let mapper = WeightMapper::qwen3();
@@ -159,7 +159,7 @@ fn argmax(logits: &[f32]) -> u32 {
 
 /// Generate tokens via KV-cache path: forward_prefill + forward_one loop.
 fn generate_cached(
-    model: &synapse_inference::model::CausalLM,
+    model: &synapse_inference::models::CausalLM,
     prompt: &[u32],
     num_tokens: usize,
     cache: &mut KVCache,
@@ -177,7 +177,7 @@ fn generate_cached(
 
 /// Generate tokens via full-recompute path: forward on all tokens each step.
 fn generate_recompute(
-    model: &synapse_inference::model::CausalLM,
+    model: &synapse_inference::models::CausalLM,
     prompt: &[u32],
     num_tokens: usize,
 ) -> Vec<u32> {

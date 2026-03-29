@@ -12,7 +12,7 @@ use std::time::Instant;
 use synapse_inference::config::*;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
 use synapse_inference::kv_cache::KVCache;
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::quantization::{f32_model_memory_bytes, quantize_model};
 use synapse_inference::weight_loading::AlignedBuffer;
 
@@ -33,7 +33,7 @@ fn ones_aligned(len: usize) -> AlignedBuffer {
     AlignedBuffer::from_vec(vec![1.0f32; len])
 }
 
-fn fill_model_weights(model: &mut synapse_inference::model::CausalLM) {
+fn fill_model_weights(model: &mut synapse_inference::models::CausalLM) {
     let cfg = &model.config;
     let h = cfg.architecture.hidden_size;
     let vocab = cfg.architecture.vocab_size;
@@ -229,7 +229,7 @@ fn main() {
     )
     .expect("Failed to create KV-cache");
     let kv_mem = cache.expected_allocation_bytes();
-    let mut state = synapse_inference::model::ModelState::KvCache(cache);
+    let mut state = synapse_inference::models::ModelState::KvCache(cache);
 
     let config = GenerationConfig {
         max_new_tokens: cache_num_tokens,
