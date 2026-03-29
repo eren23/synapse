@@ -54,3 +54,7 @@ docs/superpowers/
 
 #playwright
 .playwright-mcp/
+
+#fpga example vectors
+synapse/fpga/sim/*.json
+synapse/fpga/sim/*.npy
