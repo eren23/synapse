@@ -11,6 +11,7 @@ use crate::model::causal_lm::ModelOutput;
 use crate::model::traits::{Model, ModelState};
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
+use crate::ops::activation::{silu, softplus};
 use crate::quantization::QuantizedLinear;
 use crate::ssm::config::MambaConfig;
 use crate::ssm::mamba_model::MambaModel;
@@ -35,16 +36,6 @@ pub struct QuantizedMambaBlock {
     pub a_log: Vec<f32>,           // [d_inner, d_state] — f32
     pub d_param: Vec<f32>,         // [d_inner] — f32
     pub out_proj: QuantizedLinear,  // [d_model, d_inner] — INT8
-}
-
-#[inline]
-fn softplus(x: f32) -> f32 {
-    if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
-}
-
-#[inline]
-fn silu(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
 }
 
 impl QuantizedMambaBlock {

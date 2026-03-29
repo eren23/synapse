@@ -372,7 +372,7 @@ pub fn quantize_lewm(model: &LeWorldModel) -> QuantizedLeWM {
 /// Clone a ViT encoder by re-creating it from its config and copying all weights.
 ///
 /// This is needed because `ViTModel` does not implement `Clone`.
-fn clone_vit_encoder(src: &ViTModel) -> ViTModel {
+pub(crate) fn clone_vit_encoder(src: &ViTModel) -> ViTModel {
     use crate::weight_loading::AlignedBuffer;
 
     let mut dst = ViTModel::from_config(&src.config);
@@ -418,7 +418,7 @@ fn clone_vit_encoder(src: &ViTModel) -> ViTModel {
 }
 
 /// Clone a projection head by copying all layer weights.
-fn clone_projection_head(src: &ProjectionHead) -> ProjectionHead {
+pub(crate) fn clone_projection_head(src: &ProjectionHead) -> ProjectionHead {
     use crate::weight_loading::AlignedBuffer;
 
     let layers = src

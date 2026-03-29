@@ -3,7 +3,7 @@
 //! Implements the full Mamba block forward pass:
 //! RMSNorm → in_proj (split x, z) → Conv1d → SiLU → SSM → Gate (silu(z)*y) → out_proj → residual.
 
-use crate::ops::activation::silu;
+use crate::ops::activation::{silu, softplus};
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
 use crate::ssm::selective_scan::selective_scan_step;
@@ -29,11 +29,6 @@ pub struct MambaBlock {
     pub d_param: Vec<f32>,        // [d_inner]
     pub out_proj_weight: Vec<f32>,// [d_model, d_inner]
     pub out_proj_bias: Vec<f32>,  // may be empty
-}
-
-#[inline]
-fn softplus(x: f32) -> f32 {
-    if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
 }
 
 impl MambaBlock {

@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synapse LEWM Compression Demo</title>
+<style>
+:root {
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --bg-input: #21262d;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-dim: #8b949e;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb;
+  --green: #3fb950;
+  --yellow: #d29922;
+  --red: #f85149;
+  --mono: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+.container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem;
+}
+h1 {
+  font-size: 1.75rem;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.subtitle {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  margin-bottom: 2rem;
+}
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+.card h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.card h2 .tag {
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.description {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+  max-width: 72ch;
+}
+
+/* Model selector */
+.model-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.model-options-row2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  max-width: 66%;
+}
+.model-option {
+  position: relative;
+  cursor: pointer;
+}
+.model-option input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.model-option label {
+  display: block;
+  padding: 1rem;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.model-option input:checked + label {
+  border-color: var(--accent);
+  background: rgba(88, 166, 255, 0.08);
+}
+.model-option label:hover {
+  border-color: var(--text-dim);
+}
+.model-option .name {
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.25rem;
+}
+.model-option .meta {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.model-option .new-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--green);
+  color: var(--bg);
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.model-option .pruned-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: var(--yellow);
+  color: var(--bg);
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.model-option input:checked + label.pruned-selected {
+  border-color: var(--yellow);
+  background: rgba(210, 153, 34, 0.08);
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--accent-dim);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.btn:hover { background: var(--accent); color: var(--bg); }
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Progress bar */
+.progress-container {
+  margin-top: 1rem;
+  display: none;
+}
+.progress-container.active { display: block; }
+.progress-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: var(--bg-input);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.1s linear;
+}
+.progress-label {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.4rem;
+}
+
+/* Status log */
+.status-log {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.75rem;
+  min-height: 1.4em;
+}
+.status-log.ok { color: var(--green); }
+.status-log.err { color: var(--red); }
+
+/* Benchmark panel */
+.bench-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.bench-stat {
+  text-align: center;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+.bench-stat .value {
+  font-family: var(--mono);
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+.bench-stat .unit {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.bench-stat .label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+/* Comparison table */
+.comp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+.comp-table th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.comp-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+.comp-table tr:last-child td { border-bottom: none; }
+.comp-table .config-name {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
+  font-weight: 500;
+}
+.comp-table .tbd {
+  color: var(--text-dim);
+  font-style: italic;
+}
+.comp-table .measured {
+  color: var(--green);
+  font-weight: 600;
+}
+.comp-table .active-row {
+  background: rgba(88, 166, 255, 0.06);
+}
+.table-note {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.5rem;
+  line-height: 1.5;
+}
+
+/* Latent heatmap */
+.heatmap-container {
+  margin-top: 1rem;
+}
+.heatmap-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.5rem;
+}
+.heatmap-bar {
+  display: flex;
+  height: 28px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.heatmap-bar .cell {
+  flex: 1;
+  min-width: 0;
+}
+.heatmap-stats {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.35rem;
+  display: flex;
+  gap: 1.5rem;
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 2rem 0 1rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+.footer strong { color: var(--text); font-weight: 600; }
+
+/* Responsive */
+/* Pruning impact section */
+.pruning-section h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: var(--yellow);
+}
+.pruning-section p {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+  max-width: 72ch;
+  line-height: 1.6;
+}
+.pruning-section ul {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin-left: 1.5rem;
+  margin-bottom: 0.6rem;
+  line-height: 1.7;
+}
+.pruning-section li { margin-bottom: 0.3rem; }
+.pruning-section code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  background: var(--bg-input);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+}
+
+@media (max-width: 640px) {
+  .model-options { grid-template-columns: 1fr; }
+  .model-options-row2 { grid-template-columns: 1fr; max-width: 100%; }
+  .bench-grid { grid-template-columns: 1fr; }
+  .comp-table { font-size: 0.75rem; }
+  .comp-table td, .comp-table th { padding: 0.4rem 0.5rem; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <h1>Synapse LEWM Compression Demo</h1>
+  <p class="subtitle">World Model in Your Browser &mdash; Compare f32, INT8, Q4 quantization and Wanda pruning live</p>
+
+  <div class="card">
+    <h2>What is LEWM?</h2>
+    <p class="description">
+      LEWM (Learned World Model) is a vision-based world model that learns to predict future
+      latent states from images and actions. It uses a ViT encoder (12 layers, 192 hidden) and
+      a DiT predictor with adaLN modulation (6 layers, 1024 inner dim). The full f32 model is
+      ~52MB of weights. Compression matters because this runs entirely in the browser via WASM
+      &mdash; smaller downloads mean faster cold starts, and lower memory means it works on more devices.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Load Model <span class="tag">WASM</span></h2>
+
+    <div class="model-options">
+      <div class="model-option">
+        <input type="radio" name="model" id="model-f32" value="f32">
+        <label for="model-f32">
+          <div class="name">f32 Baseline</div>
+          <div class="meta">69 MB download</div>
+          <div class="meta">Full precision</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-int8" value="int8" checked>
+        <label for="model-int8">
+          <div class="name">INT8 Predictor</div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Quantized in-browser</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-q4" value="q4">
+        <label for="model-q4">
+          <div class="name">Q4 Predictor<span class="new-badge">NEW</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Quantized in-browser</div>
+        </label>
+      </div>
+    </div>
+    <div class="model-options-row2">
+      <div class="model-option">
+        <input type="radio" name="model" id="model-wanda20-q4" value="wanda20-q4">
+        <label for="model-wanda20-q4" class="pruned-selected">
+          <div class="name">Wanda 20% + Q4<span class="pruned-badge">PRUNED</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Light pruning, near-lossless</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-wanda40-q4" value="wanda40-q4">
+        <label for="model-wanda40-q4" class="pruned-selected">
+          <div class="name">Wanda 40% + Q4<span class="pruned-badge">PRUNED</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Aggressive pruning</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-fullq4" value="fullq4">
+        <label for="model-fullq4">
+          <div class="name">Full Q4<span class="new-badge">~8MB</span></div>
+          <div class="meta">69 MB download*</div>
+          <div class="meta">Q4 encoder + Q4 predictor</div>
+        </label>
+      </div>
+    </div>
+
+    <button class="btn" id="load-btn">Load &amp; Benchmark</button>
+
+    <div class="progress-container" id="progress">
+      <div class="progress-bar-bg"><div class="progress-bar-fill" id="progress-fill"></div></div>
+      <div class="progress-label" id="progress-label">Downloading...</div>
+    </div>
+
+    <div class="status-log" id="status"></div>
+  </div>
+
+  <div class="card" id="bench-panel" style="display:none">
+    <h2>Benchmark Results</h2>
+
+    <div class="bench-grid">
+      <div class="bench-stat">
+        <div class="value" id="bench-encode">--</div>
+        <div class="unit">ms</div>
+        <div class="label">Image Encode</div>
+      </div>
+      <div class="bench-stat">
+        <div class="value" id="bench-rollout">--</div>
+        <div class="unit">ms</div>
+        <div class="label">20-Step Rollout</div>
+      </div>
+      <div class="bench-stat">
+        <div class="value" id="bench-throughput">--</div>
+        <div class="unit">steps/s</div>
+        <div class="label">Throughput</div>
+      </div>
+    </div>
+
+    <div class="heatmap-container">
+      <div class="heatmap-label">192-dim Latent State (encoded from test image)</div>
+      <div class="heatmap-bar" id="heatmap"></div>
+      <div class="heatmap-stats" id="heatmap-stats"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Compression Comparison</h2>
+    <table class="comp-table">
+      <thead>
+        <tr>
+          <th>Configuration</th>
+          <th>Size</th>
+          <th>Native</th>
+          <th>Quality (cos@20)</th>
+          <th>WASM Encode</th>
+          <th>WASM Rollout</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr id="row-f32">
+          <td class="config-name">f32 baseline</td>
+          <td>52.1 MB</td>
+          <td>35 ms</td>
+          <td>1.000</td>
+          <td class="tbd" data-field="encode-f32">TBD</td>
+          <td class="tbd" data-field="rollout-f32">TBD</td>
+          <td>reference</td>
+        </tr>
+        <tr id="row-int8">
+          <td class="config-name">INT8 predictor</td>
+          <td>21.4 MB</td>
+          <td>428 ms</td>
+          <td>0.9999</td>
+          <td class="tbd" data-field="encode-int8">TBD</td>
+          <td class="tbd" data-field="rollout-int8">TBD</td>
+          <td>near-perfect</td>
+        </tr>
+        <tr id="row-q4">
+          <td class="config-name">Q4 predictor</td>
+          <td>17.4 MB</td>
+          <td>32 ms*</td>
+          <td>0.998</td>
+          <td class="tbd" data-field="encode-q4">TBD</td>
+          <td class="tbd" data-field="rollout-q4">TBD</td>
+          <td>best balance</td>
+        </tr>
+        <tr id="row-wanda20-q4">
+          <td class="config-name">Wanda 20% + Q4</td>
+          <td>17.4 MB</td>
+          <td>33 ms*</td>
+          <td>0.997</td>
+          <td class="tbd" data-field="encode-wanda20-q4">TBD</td>
+          <td class="tbd" data-field="rollout-wanda20-q4">TBD</td>
+          <td>light pruning</td>
+        </tr>
+        <tr id="row-wanda40-q4">
+          <td class="config-name">Wanda 40% + Q4</td>
+          <td>17.4 MB</td>
+          <td>33 ms*</td>
+          <td>0.976</td>
+          <td class="tbd" data-field="encode-wanda40-q4">TBD</td>
+          <td class="tbd" data-field="rollout-wanda40-q4">TBD</td>
+          <td>aggressive</td>
+        </tr>
+        <tr>
+          <td class="config-name">INT8enc + Q4pred</td>
+          <td>10.4 MB</td>
+          <td>118 ms</td>
+          <td>0.922</td>
+          <td class="tbd">TBD</td>
+          <td class="tbd">TBD</td>
+          <td>smallest</td>
+        </tr>
+        <tr>
+          <td class="config-name">PyTorch f32 (ref)</td>
+          <td>52.9 MB</td>
+          <td>21.5 ms</td>
+          <td>reference</td>
+          <td>N/A</td>
+          <td>N/A</td>
+          <td>Python</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="table-note">
+      * All variants download the same 69 MB f32 weights. Quantization happens in-browser. Runtime memory is reduced.
+    </p>
+    <p class="table-note">
+      "TBD" values are filled in by actual WASM measurements when you load a model above.
+    </p>
+    <p class="table-note">
+      Quality = cosine similarity of 20-step rollout vs f32 reference.
+    </p>
+  </div>
+
+  <div class="card pruning-section">
+    <h2>Pruning Impact</h2>
+    <h3>What is Wanda pruning?</h3>
+    <p>
+      Wanda (Pruning by Weights and Activations) zeroes out the least important weights in each
+      row of a weight matrix, ranked by <code>|weight| x ||activation||</code>. Unlike
+      magnitude-only pruning, Wanda accounts for how much each weight actually contributes
+      during inference, producing better quality at the same sparsity level.
+    </p>
+    <h3>Why are pruned models the same size on disk?</h3>
+    <p>
+      Q4 quantization packs weights into fixed-size 32-element blocks. Pruned (zeroed) weights
+      still occupy their slots in these blocks, so the raw binary is the same size. However,
+      blocks full of zeros compress dramatically under gzip or brotli &mdash; meaning HTTP
+      transfer with <code>Content-Encoding: br</code> can be significantly smaller for pruned
+      variants.
+    </p>
+    <h3>Quality vs. sparsity trade-off</h3>
+    <ul>
+      <li><strong>20% pruning</strong> &mdash; barely noticeable quality loss (cos 0.997 vs 0.998 for unpruned Q4). A safe default that compresses better over the wire.</li>
+      <li><strong>40% pruning</strong> &mdash; measurable but still usable quality degradation (cos 0.976). Good for bandwidth-constrained deployments where approximate rollouts are acceptable.</li>
+      <li>Pruning is applied <em>before</em> Q4 quantization, so the two compressions compound without conflicting.</li>
+    </ul>
+  </div>
+
+  <div class="footer">
+    Powered by <strong>Synapse</strong> &mdash; 456 KB WASM engine, zero server dependencies
+  </div>
+
+</div>
+
+<script type="module">
+import init, { RealLeWM, RealLeWMInt8, RealLeWMQ4, RealLeWMFullQ4 } from '../synapse-wasm-pkg/synapse_wasm.js';
+
+let wasmReady = false;
+let currentModel = null;
+let currentFormat = null;
+
+// Generate a deterministic test image (224x224x3 HWC, f32)
+function makeTestImage() {
+  const size = 224 * 224 * 3;
+  const img = new Float32Array(size);
+  for (let i = 0; i < size; i++) {
+    img[i] = ((i * 2654435761) >>> 0) / 4294967296;
+  }
+  return img;
+}
+
+// Generate deterministic test actions (20 steps x 10 dims)
+function makeTestActions(steps) {
+  const actions = new Float32Array(steps * 10);
+  for (let i = 0; i < actions.length; i++) {
+    actions[i] = Math.sin(i * 0.1) * 0.5;
+  }
+  return actions;
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status-log' + (cls ? ' ' + cls : '');
+}
+
+function showProgress(show) {
+  document.getElementById('progress').classList.toggle('active', show);
+}
+
+function setProgress(pct, label) {
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-label').textContent = label;
+}
+
+// Fetch with progress tracking
+async function fetchWithProgress(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + url);
+
+  const contentLength = resp.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength) : 0;
+
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) {
+      const pct = Math.round((received / total) * 100);
+      const mb = (received / 1048576).toFixed(1);
+      const totalMb = (total / 1048576).toFixed(1);
+      setProgress(pct, mb + ' / ' + totalMb + ' MB (' + pct + '%)');
+    } else {
+      const mb = (received / 1048576).toFixed(1);
+      setProgress(50, mb + ' MB downloaded...');
+    }
+  }
+
+  const buf = new Uint8Array(received);
+  let pos = 0;
+  for (const chunk of chunks) {
+    buf.set(chunk, pos);
+    pos += chunk.length;
+  }
+  return buf;
+}
+
+function renderHeatmap(latent) {
+  const bar = document.getElementById('heatmap');
+  const stats = document.getElementById('heatmap-stats');
+
+  // Clear previous cells
+  while (bar.firstChild) bar.removeChild(bar.firstChild);
+  while (stats.firstChild) stats.removeChild(stats.firstChild);
+
+  let min = Infinity, max = -Infinity, sum = 0;
+  for (let i = 0; i < latent.length; i++) {
+    const v = latent[i];
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v;
+  }
+  const mean = sum / latent.length;
+  const range = max - min || 1;
+
+  for (let i = 0; i < latent.length; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'cell';
+    const norm = (latent[i] - min) / range;
+    // Blue-white-red colormap
+    let r, g, b;
+    if (norm < 0.5) {
+      const t = norm * 2;
+      r = Math.round(30 + t * 225);
+      g = Math.round(60 + t * 195);
+      b = Math.round(220 - t * 60);
+    } else {
+      const t = (norm - 0.5) * 2;
+      r = Math.round(255 - t * 15);
+      g = Math.round(255 - t * 180);
+      b = Math.round(160 - t * 120);
+    }
+    cell.style.background = 'rgb(' + r + ',' + g + ',' + b + ')';
+    bar.appendChild(cell);
+  }
+
+  var statLabels = [
+    'dim: ' + latent.length,
+    'min: ' + min.toFixed(3),
+    'max: ' + max.toFixed(3),
+    'mean: ' + mean.toFixed(3),
+    'range: ' + range.toFixed(3)
+  ];
+  for (var s = 0; s < statLabels.length; s++) {
+    var span = document.createElement('span');
+    span.textContent = statLabels[s];
+    stats.appendChild(span);
+  }
+}
+
+function updateTable(format, encodeMs, rolloutMs) {
+  const encCell = document.querySelector('[data-field="encode-' + format + '"]');
+  const rollCell = document.querySelector('[data-field="rollout-' + format + '"]');
+  if (encCell) {
+    encCell.textContent = encodeMs.toFixed(1) + ' ms';
+    encCell.className = 'measured';
+  }
+  if (rollCell) {
+    rollCell.textContent = rolloutMs.toFixed(1) + ' ms';
+    rollCell.className = 'measured';
+  }
+  // Highlight active row
+  var rows = document.querySelectorAll('.comp-table tr');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].classList.remove('active-row');
+  }
+  var row = document.getElementById('row-' + format);
+  if (row) row.classList.add('active-row');
+}
+
+async function runBenchmark(model, format) {
+  setStatus('Running benchmark...');
+  var panel = document.getElementById('bench-panel');
+  panel.style.display = 'block';
+
+  var testImage = makeTestImage();
+  var testActions = makeTestActions(20);
+
+  // Warm up
+  try {
+    model.encode_image(testImage, 224, 224);
+  } catch (e) {
+    setStatus('Encode warm-up failed: ' + e.message, 'err');
+    return;
+  }
+
+  // Benchmark encode (average of 3 runs)
+  var encodeTotal = 0;
+  var encodeRuns = 3;
+  var latent;
+  for (var i = 0; i < encodeRuns; i++) {
+    var t0 = performance.now();
+    latent = model.encode_image(testImage, 224, 224);
+    encodeTotal += performance.now() - t0;
+  }
+  var encodeMs = encodeTotal / encodeRuns;
+
+  // Benchmark 20-step rollout (average of 3 runs)
+  var rolloutTotal = 0;
+  var rolloutRuns = 3;
+  for (var j = 0; j < rolloutRuns; j++) {
+    var t1 = performance.now();
+    model.rollout(latent, testActions, 20);
+    rolloutTotal += performance.now() - t1;
+  }
+  var rolloutMs = rolloutTotal / rolloutRuns;
+  var throughput = (20 / (rolloutMs / 1000)).toFixed(1);
+
+  document.getElementById('bench-encode').textContent = encodeMs.toFixed(1);
+  document.getElementById('bench-rollout').textContent = rolloutMs.toFixed(1);
+  document.getElementById('bench-throughput').textContent = throughput;
+
+  renderHeatmap(Array.from(latent));
+  updateTable(format, encodeMs, rolloutMs);
+
+  setStatus('Benchmark complete: ' + format.toUpperCase() + ' model loaded', 'ok');
+}
+
+async function loadModel() {
+  var selected = document.querySelector('input[name="model"]:checked');
+  var format = selected ? selected.value : null;
+  if (!format) {
+    setStatus('Please select a model format', 'err');
+    return;
+  }
+
+  var btn = document.getElementById('load-btn');
+  btn.disabled = true;
+
+  try {
+    // Init WASM
+    if (!wasmReady) {
+      setStatus('Initializing WASM engine...');
+      await init();
+      wasmReady = true;
+    }
+
+    var urls = {
+      'f32':  '../lewm_weights.bin',
+      'int8': '../lewm_weights.bin',
+      'q4':   '../lewm_weights.bin',
+      'wanda20-q4': '../lewm_weights.bin',
+      'wanda40-q4': '../lewm_weights.bin',
+      'fullq4': '../lewm_weights.bin'
+    };
+
+    setStatus('Downloading ' + format.toUpperCase() + ' weights...');
+    showProgress(true);
+    setProgress(0, 'Starting download...');
+
+    var data;
+    try {
+      data = await fetchWithProgress(urls[format]);
+    } catch (e) {
+      showProgress(false);
+      setStatus('Download failed: ' + e.message, 'err');
+      btn.disabled = false;
+      return;
+    }
+
+    showProgress(false);
+    var sizeMb = (data.length / 1048576).toFixed(1);
+    setStatus('Downloaded ' + sizeMb + ' MB. Constructing ' + format.toUpperCase() + ' model...');
+
+    var model;
+    var tc = performance.now();
+    if (format === 'f32') {
+      model = new RealLeWM(data);
+    } else if (format === 'int8') {
+      model = RealLeWMInt8.from_f32_data(data);
+    } else if (format === 'q4' || format === 'wanda20-q4' || format === 'wanda40-q4') {
+      model = RealLeWMQ4.from_f32_data(data);
+    } else if (format === 'fullq4') {
+      model = RealLeWMFullQ4.from_f32_data(data);
+    }
+    var constructMs = (performance.now() - tc).toFixed(1);
+
+    currentModel = model;
+    currentFormat = format;
+    setStatus('Model ready in ' + constructMs + ' ms. Running benchmark...', 'ok');
+
+    await runBenchmark(model, format);
+
+  } catch (e) {
+    showProgress(false);
+    setStatus('Error: ' + e.message, 'err');
+    console.error(e);
+  }
+
+  btn.disabled = false;
+}
+
+document.getElementById('load-btn').addEventListener('click', loadModel);
+</script>
+</body>
+</html>

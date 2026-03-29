@@ -63,13 +63,115 @@
 <!-- status:web-subtitle:end -->
 
         <div class="tabs">
-            <button class="active-tab" onclick="switchTab('lewm')">World Model</button>
+            <button class="active-tab" onclick="switchTab('compress')">Compression</button>
+            <button onclick="switchTab('lewm')">World Model</button>
             <button onclick="switchTab('vit')">ViT Encoder</button>
             <button onclick="switchTab('diffusion')">Diffusion</button>
         </div>
 
+        <!-- ═══════════════ TAB 0: Compression Showcase ═══════════════ -->
+        <div class="tab-panel active" id="tab-compress">
+            <div class="card">
+                <h2>LEWM Compression — First-Ever JEPA Quantization</h2>
+                <p style="font-size:12px; color:#aaa; margin-bottom:12px;">
+                    No published work on JEPA quantization exists. These are the first measured results,
+                    running live in your browser via a <strong>491KB WASM engine</strong>.
+                </p>
+                <table style="width:100%; border-collapse:collapse; font-size:12px; font-family:monospace;">
+                    <thead>
+                        <tr style="border-bottom:2px solid #444; text-align:left;">
+                            <th style="padding:6px;">Config</th>
+                            <th style="padding:6px;">Size</th>
+                            <th style="padding:6px;">Native (20-step)</th>
+                            <th style="padding:6px;">Quality (cos@20)</th>
+                            <th style="padding:6px;">Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom:1px solid #333;">
+                            <td style="padding:5px;">f32 baseline</td>
+                            <td style="padding:5px;">52.1 MB</td>
+                            <td style="padding:5px;">35 ms</td>
+                            <td style="padding:5px; color:#3fb950;">1.000000</td>
+                            <td style="padding:5px; color:#888;">reference</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333;">
+                            <td style="padding:5px;">INT8 predictor</td>
+                            <td style="padding:5px;">21.4 MB</td>
+                            <td style="padding:5px;">428 ms</td>
+                            <td style="padding:5px; color:#3fb950;">0.999955</td>
+                            <td style="padding:5px; color:#888;">near-perfect</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333; background:#1a2332;">
+                            <td style="padding:5px;"><strong>Q4 cached</strong></td>
+                            <td style="padding:5px;"><strong>17.4 MB</strong></td>
+                            <td style="padding:5px; color:#58a6ff;"><strong>32 ms</strong></td>
+                            <td style="padding:5px; color:#3fb950;"><strong>0.998352</strong></td>
+                            <td style="padding:5px; color:#58a6ff;">best balance ★</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333;">
+                            <td style="padding:5px;">Wanda 20% + Q4</td>
+                            <td style="padding:5px;">17.4 MB</td>
+                            <td style="padding:5px;">33 ms</td>
+                            <td style="padding:5px; color:#3fb950;">0.997343</td>
+                            <td style="padding:5px; color:#d29922;">light pruning</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333;">
+                            <td style="padding:5px;">Wanda 40% + Q4</td>
+                            <td style="padding:5px;">17.4 MB</td>
+                            <td style="padding:5px;">33 ms</td>
+                            <td style="padding:5px; color:#3fb950;">0.975519</td>
+                            <td style="padding:5px; color:#d29922;">aggressive pruning</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333; background:#1a2332;">
+                            <td style="padding:5px;"><strong>INT8enc + Q4pred</strong></td>
+                            <td style="padding:5px;"><strong>10.4 MB</strong></td>
+                            <td style="padding:5px;">118 ms</td>
+                            <td style="padding:5px; color:#d29922;">0.922016</td>
+                            <td style="padding:5px; color:#58a6ff;">smallest usable ★</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333;">
+                            <td style="padding:5px; color:#888;">Ternary + RMSNorm</td>
+                            <td style="padding:5px; color:#888;">17.2 MB</td>
+                            <td style="padding:5px; color:#888;">622 ms</td>
+                            <td style="padding:5px; color:#f85149;">0.858836</td>
+                            <td style="padding:5px; color:#888;">needs QAT</td>
+                        </tr>
+                        <tr style="border-bottom:1px solid #333; color:#666;">
+                            <td style="padding:5px;">PyTorch f32 (ref)</td>
+                            <td style="padding:5px;">52.9 MB</td>
+                            <td style="padding:5px;">21.5 ms</td>
+                            <td style="padding:5px;">reference</td>
+                            <td style="padding:5px;">Python, CPU only</td>
+                        </tr>
+                        <tr style="color:#666;">
+                            <td style="padding:5px;">DINO-WM (PyTorch)</td>
+                            <td style="padding:5px;">160+ MB</td>
+                            <td style="padding:5px;">47,000 ms</td>
+                            <td style="padding:5px;">best 3D</td>
+                            <td style="padding:5px;">1,469× slower</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p style="font-size:10px; color:#666; margin-top:8px;">
+                    All Synapse results measured on Apple Silicon (release build). Quality = cosine similarity of 20-step rollout vs f32 reference.
+                    Pruning uses Wanda (magnitude × activation norms). "Cached" = dequantize once, reuse f32 for compute.
+                </p>
+            </div>
+            <div class="card">
+                <p style="font-size:12px; color:#aaa;">
+                    <strong>Try it live →</strong>
+                    <a href="lewm-compress-demo/" style="color:#58a6ff;">Open full interactive compression demo</a>
+                    to load Q4 / pruned weights and benchmark in your browser.
+                </p>
+                <p style="font-size:11px; color:#666; margin-top:6px;">
+                    WASM engine: 491 KB (133 KB brotli) · Loads LeWM, Mamba, RWKV from one binary · Zero server dependencies
+                </p>
+            </div>
+        </div>
+
         <!-- ═══════════════ TAB 1: LeWM Latent Playground ═══════════════ -->
-        <div class="tab-panel active" id="tab-lewm">
+        <div class="tab-panel" id="tab-lewm">
             <div class="card">
                 <h2>LeWorldModel — Latent Dynamics</h2>
                 <p style="font-size:11px; color:#888; margin-bottom:10px;">

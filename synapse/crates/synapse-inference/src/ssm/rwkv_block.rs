@@ -7,6 +7,7 @@
 //! - WKV7 recurrence with feedback term
 //! - Squared ReLU FFN with single token shift
 
+use crate::ops::activation::sigmoid;
 use crate::ops::matmul::matmul_t;
 use crate::ssm::rwkv_state::RwkvLayerState;
 
@@ -78,11 +79,6 @@ pub struct RwkvBlock {
 
     pub ffn_key_weight: Vec<f32>,     // [intermediate, h]
     pub ffn_value_weight: Vec<f32>,   // [h, intermediate]
-}
-
-#[inline]
-fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + (-x).exp())
 }
 
 #[inline]

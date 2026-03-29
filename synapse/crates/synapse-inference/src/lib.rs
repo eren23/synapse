@@ -11,6 +11,7 @@ pub mod metal;
 pub mod model;
 pub mod model_adapter;
 pub mod ops;
+pub mod pruning;
 pub mod quantization;
 pub mod registry;
 pub mod ssm;

@@ -172,6 +172,14 @@ name = "export_mamba_int8"
 path = "examples/export_mamba_int8.rs"
 
 [[example]]
+name = "lewm_compress"
+path = "examples/lewm_compress.rs"
+
+[[example]]
+name = "model_surgeon"
+path = "examples/model_surgeon.rs"
+
+[[example]]
 name = "mamba_generate"
 path = "examples/mamba_generate.rs"
 
@@ -202,3 +210,7 @@ path = "examples/lewm_demo.rs"
 [[example]]
 name = "geometric_attention_demo"
 path = "examples/geometric_attention_demo.rs"
+
+[[example]]
+name = "export_lewm_q4"
+path = "examples/export_lewm_q4.rs"

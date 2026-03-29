@@ -16,10 +16,11 @@ getrandom = { version = "0.2", features = ["js"] }
 console_error_panic_hook = "0.1"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = false
+wasm-opt = ['-Oz']
 
 [profile.release]
 opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+panic = "abort"

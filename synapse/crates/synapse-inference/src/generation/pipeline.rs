@@ -1,5 +1,6 @@
-use std::time::Duration;
 
+#[cfg(target_arch = "wasm32")]
+use std::time::Duration;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 

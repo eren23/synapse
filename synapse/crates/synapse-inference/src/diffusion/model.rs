@@ -6,6 +6,7 @@
 use crate::diffusion::config::DiffusionLLMConfig;
 use crate::diffusion::schedule::{unmask_by_confidence, tokens_per_step, MaskSchedule};
 use crate::ops::matmul::matmul_t;
+use crate::ops::activation::silu;
 use crate::ops::pure_rust_ops::rmsnorm;
 
 /// Softmax in-place over the first `n` elements.
@@ -21,11 +22,6 @@ fn softmax(x: &mut [f32], n: usize) {
             x[i] /= sum;
         }
     }
-}
-
-/// SiLU activation: x * sigmoid(x).
-fn silu(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
 }
 
 /// A bidirectional decoder layer (no causal mask).

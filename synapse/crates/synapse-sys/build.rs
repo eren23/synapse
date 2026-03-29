@@ -19,6 +19,10 @@ fn main() {
     // Re-run this build script when any Zig source file changes.
     println!("cargo:rerun-if-changed={}", zig_src_dir.display());
 
+    // Re-run when build profile changes (debug vs release) so we rebuild
+    // the Zig library with the correct optimization level.
+    println!("cargo:rerun-if-env-changed=PROFILE");
+
     // Also watch the build.zig file itself.
     println!(
         "cargo:rerun-if-changed={}",
@@ -26,20 +30,35 @@ fn main() {
     );
 
     // Auto-build Zig if the library doesn't exist or sources changed.
+    //
+    // IMPORTANT: Debug and Release builds use different Zig optimization levels
+    // (Debug vs ReleaseFast) but output to the same libsynapse_zig.a file.
+    // We track which profile last built the library via a stamp file so that
+    // a profile switch always triggers a rebuild. Without this, a debug build
+    // can overwrite the library with unoptimized code, and a subsequent release
+    // build will skip rebuilding because the library is newer than sources —
+    // silently linking Debug Zig into a Release binary (causing ~12x INT8 regression).
+    let profile = if env::var("PROFILE").unwrap_or_default() == "release" {
+        "ReleaseFast"
+    } else {
+        "Debug"
+    };
+
     let lib_path = zig_lib_dir.join("libsynapse_zig.a");
-    let needs_build = !lib_path.exists() || {
+    let stamp_path = zig_lib_dir.join(".zig_profile_stamp");
+    let profile_changed = match std::fs::read_to_string(&stamp_path) {
+        Ok(contents) => contents.trim() != profile,
+        Err(_) => true, // No stamp file → force rebuild
+    };
+
+    let needs_build = !lib_path.exists() || profile_changed || {
         // Check if any .zig source is newer than the library
         let lib_mtime = std::fs::metadata(&lib_path).and_then(|m| m.modified()).ok();
         lib_mtime.is_none() || walkdir_any_newer(&zig_src_dir, lib_mtime.unwrap())
     };
 
     if needs_build {
-        eprintln!("synapse-sys: rebuilding Zig library...");
-        let profile = if env::var("PROFILE").unwrap_or_default() == "release" {
-            "ReleaseFast"
-        } else {
-            "Debug"
-        };
+        eprintln!("synapse-sys: rebuilding Zig library ({profile})...");
 
         let status = Command::new("zig")
             .arg("build")
@@ -56,6 +75,10 @@ fn main() {
         if !status.success() {
             panic!("Zig build failed with status: {status}");
         }
+
+        // Record which profile built this library
+        let _ = std::fs::create_dir_all(&zig_lib_dir);
+        std::fs::write(&stamp_path, profile).expect("failed to write .zig_profile_stamp");
     }
 
     let zig_lib_dir = zig_lib_dir
