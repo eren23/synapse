@@ -23,7 +23,7 @@ use synapse_inference::ops::pure_rust_ops::{
 const STATUS_MANIFEST_JSON: &str = include_str!("../../status/public_status.json");
 
 const HIDDEN: usize = 192;
-const ENCODER_LAYERS: usize = 12;
+const ENCODER_LAYERS: usize = 6;
 const ENCODER_HEADS: usize = 3;
 const ENCODER_INTER: usize = 768;
 const PREDICTOR_LAYERS: usize = 6;
@@ -2469,6 +2469,93 @@ impl Q4AdaLNWasm {
     }
 }
 
+// ── LQ40 binary reader helpers ────────────────────────────────────
+
+fn lq40_read_u32(data: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+}
+
+/// Read a length-prefixed f32 vector from sequential binary data.
+fn lq40_read_f32_vec(data: &[u8], off: &mut usize) -> Vec<f32> {
+    let len = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let base = *off + i * 4;
+        v.push(f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]));
+    }
+    *off += len * 4;
+    v
+}
+
+/// Read an INT8 QuantizedLinear and dequantize to f32.
+/// Format: [u32 out][u32 in][u32 len_w][i8 weights...][u32 len_s][f32 scales...]
+fn lq40_read_int8_dequant(data: &[u8], off: &mut usize) -> (Vec<f32>, usize, usize) {
+    let out_features = lq40_read_u32(data, *off) as usize; *off += 4;
+    let in_features = lq40_read_u32(data, *off) as usize; *off += 4;
+    let len_w = lq40_read_u32(data, *off) as usize; *off += 4;
+    let weights_start = *off;
+    *off += len_w;
+    let len_s = lq40_read_u32(data, *off) as usize; *off += 4;
+    let scales_start = *off;
+    *off += len_s * 4;
+
+    let mut f32_weights = vec![0.0f32; out_features * in_features];
+    for row in 0..out_features {
+        let s_base = scales_start + row * 4;
+        let scale = f32::from_le_bytes([data[s_base], data[s_base + 1], data[s_base + 2], data[s_base + 3]]);
+        for col in 0..in_features {
+            f32_weights[row * in_features + col] = (data[weights_start + row * in_features + col] as i8) as f32 * scale;
+        }
+    }
+    (f32_weights, out_features, in_features)
+}
+
+/// Read a Q4 adaLN predictor layer from LQ40 sequential format.
+fn lq40_read_q4_adaln(data: &[u8], off: &mut usize) -> Result<Q4AdaLNWasm, JsError> {
+    let (adaln_linear, n1) = Q4LinearWasm::from_bytes(&data[*off..], 0, 0)
+        .map_err(|e| JsError::new(&e))?;
+    *off += n1;
+    let adaln_b = lq40_read_f32_vec(data, off);
+    let (to_qkv, n2) = Q4LinearWasm::from_bytes(&data[*off..], 0, 0)
+        .map_err(|e| JsError::new(&e))?;
+    *off += n2;
+    let (attn_out, n3) = Q4LinearWasm::from_bytes(&data[*off..], 0, 0)
+        .map_err(|e| JsError::new(&e))?;
+    *off += n3;
+    let attn_out_b = lq40_read_f32_vec(data, off);
+    let attn_norm_w = lq40_read_f32_vec(data, off);
+    let attn_norm_b = lq40_read_f32_vec(data, off);
+    let mlp_norm_w = lq40_read_f32_vec(data, off);
+    let mlp_norm_b = lq40_read_f32_vec(data, off);
+    let (mlp_up, n4) = Q4LinearWasm::from_bytes(&data[*off..], 0, 0)
+        .map_err(|e| JsError::new(&e))?;
+    *off += n4;
+    let mlp_up_b = lq40_read_f32_vec(data, off);
+    let (mlp_down, n5) = Q4LinearWasm::from_bytes(&data[*off..], 0, 0)
+        .map_err(|e| JsError::new(&e))?;
+    *off += n5;
+    let mlp_down_b = lq40_read_f32_vec(data, off);
+
+    Ok(Q4AdaLNWasm {
+        adaln_linear, to_qkv, attn_out, mlp_up, mlp_down,
+        adaln_b, attn_out_b, attn_norm_w, attn_norm_b,
+        mlp_norm_w, mlp_norm_b, mlp_up_b, mlp_down_b,
+    })
+}
+
+/// Read a projection head: [u32 num_layers] then (weight, bias) pairs.
+fn lq40_read_projection(data: &[u8], off: &mut usize) -> Vec<(Vec<f32>, Vec<f32>)> {
+    let n = lq40_read_u32(data, *off) as usize; *off += 4;
+    let mut layers = Vec::with_capacity(n);
+    for _ in 0..n {
+        let w = lq40_read_f32_vec(data, off);
+        let b = lq40_read_f32_vec(data, off);
+        layers.push((w, b));
+    }
+    layers
+}
+
 // ── Q4 Quantized adaLN Layer ──────────────────────────────────────
 
 struct Q4AdaLNWasm {
@@ -2941,19 +3028,99 @@ impl RealLeWMQ4 {
         })
     }
 
-    /// Encode a 224x224x3 image (HWC, flat f32 array) to a latent state [192].
-    /// Same as RealLeWM -- encoder is f32.
+    /// Load pre-quantized LQ40 binary (f32 encoder + Q4 predictor).
+    /// Works for q4-pred, wanda20-q4, wanda40-q4 modes.
+    pub fn from_lq40_data(data: &[u8]) -> Result<RealLeWMQ4, JsError> {
+        if data.len() < 8 { return Err(JsError::new("LQ40 data too short")); }
+        if &data[0..4] != b"LQ40" { return Err(JsError::new("Not LQ40 format")); }
+
+        let config_len = lq40_read_u32(data, 4) as usize;
+        let config: serde_json::Value = serde_json::from_slice(&data[8..8 + config_len])
+            .map_err(|e| JsError::new(&format!("LQ40 config parse error: {}", e)))?;
+        let enc_layers_n = config["encoder_layers"].as_u64().unwrap_or(ENCODER_LAYERS as u64) as usize;
+        let pred_layers_n = config["predictor_layers"].as_u64().unwrap_or(PREDICTOR_LAYERS as u64) as usize;
+        let mut off = 8 + config_len;
+
+        // --- f32 encoder ---
+        let encoder_patch_proj = lq40_read_f32_vec(data, &mut off);
+        let encoder_patch_proj_bias = lq40_read_f32_vec(data, &mut off);
+        let encoder_cls_token = lq40_read_f32_vec(data, &mut off);
+        let encoder_pos_embed = lq40_read_f32_vec(data, &mut off);
+
+        let mut encoder_layers = Vec::with_capacity(enc_layers_n);
+        for _ in 0..enc_layers_n {
+            let norm1_w = lq40_read_f32_vec(data, &mut off);
+            let norm1_b = lq40_read_f32_vec(data, &mut off);
+            let q_w = lq40_read_f32_vec(data, &mut off);
+            let q_b = lq40_read_f32_vec(data, &mut off);
+            let k_w = lq40_read_f32_vec(data, &mut off);
+            let k_b = lq40_read_f32_vec(data, &mut off);
+            let v_w = lq40_read_f32_vec(data, &mut off);
+            let v_b = lq40_read_f32_vec(data, &mut off);
+            let o_w = lq40_read_f32_vec(data, &mut off);
+            let o_b = lq40_read_f32_vec(data, &mut off);
+            let norm2_w = lq40_read_f32_vec(data, &mut off);
+            let norm2_b = lq40_read_f32_vec(data, &mut off);
+            let ffn_up_w = lq40_read_f32_vec(data, &mut off);
+            let ffn_up_b = lq40_read_f32_vec(data, &mut off);
+            let ffn_down_w = lq40_read_f32_vec(data, &mut off);
+            let ffn_down_b = lq40_read_f32_vec(data, &mut off);
+            encoder_layers.push(ViTLayerWeights {
+                q_w, q_b, k_w, k_b, v_w, v_b, o_w, o_b,
+                ffn_up_w, ffn_up_b, ffn_down_w, ffn_down_b,
+                norm1_w, norm1_b, norm2_w, norm2_b,
+            });
+        }
+
+        let encoder_norm_w = lq40_read_f32_vec(data, &mut off);
+        let encoder_norm_b = lq40_read_f32_vec(data, &mut off);
+
+        // --- Q4 predictor ---
+        let predictor_pos_embed = lq40_read_f32_vec(data, &mut off);
+
+        let mut predictor_layers = Vec::with_capacity(pred_layers_n);
+        for _ in 0..pred_layers_n {
+            let layer = lq40_read_q4_adaln(data, &mut off)?;
+            predictor_layers.push(layer);
+        }
+
+        let predictor_norm_w = lq40_read_f32_vec(data, &mut off);
+        let predictor_norm_b = lq40_read_f32_vec(data, &mut off);
+
+        // --- f32 action encoder ---
+        let action_conv_w = lq40_read_f32_vec(data, &mut off);
+        let action_conv_b = lq40_read_f32_vec(data, &mut off);
+        let action_mlp1_w = lq40_read_f32_vec(data, &mut off);
+        let action_mlp1_b = lq40_read_f32_vec(data, &mut off);
+        let action_mlp2_w = lq40_read_f32_vec(data, &mut off);
+        let action_mlp2_b = lq40_read_f32_vec(data, &mut off);
+
+        // --- Projectors ---
+        let projector_layers = lq40_read_projection(data, &mut off);
+        let pred_proj_layers = lq40_read_projection(data, &mut off);
+
+        Ok(RealLeWMQ4 {
+            encoder_patch_proj, encoder_patch_proj_bias, encoder_cls_token, encoder_pos_embed,
+            encoder_layers, encoder_norm_w, encoder_norm_b,
+            predictor_pos_embed, predictor_layers, predictor_norm_w, predictor_norm_b,
+            action_conv_w, action_conv_b, action_mlp1_w, action_mlp1_b, action_mlp2_w, action_mlp2_b,
+            projector_layers,
+            projector_bn_weight: vec![], projector_bn_bias: vec![],
+            projector_bn_mean: vec![], projector_bn_var: vec![],
+            pred_proj_layers,
+            pred_proj_bn_weight: vec![], pred_proj_bn_bias: vec![],
+            pred_proj_bn_mean: vec![], pred_proj_bn_var: vec![],
+        })
+    }
+
     pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
         self.encode_image_inner(pixels, height, width)
     }
 
-    /// Predict next latent state using Q4 quantized predictor layers.
     pub fn predict_next(&self, state: &[f32], action: &[f32]) -> Vec<f32> {
         self.predict_next_inner(state, action)
     }
 
-    /// Multi-step rollout using Q4 quantized predictor layers.
-    /// Returns flattened array [num_steps * 192].
     pub fn rollout(&self, state: &[f32], actions: &[f32], num_steps: usize) -> Vec<f32> {
         let mut states = Vec::with_capacity(num_steps * LATENT_DIM);
         let mut current = state.to_vec();
@@ -2965,12 +3132,10 @@ impl RealLeWMQ4 {
         states
     }
 
-    /// Returns the latent dimension (192).
     pub fn latent_dim(&self) -> usize {
         LATENT_DIM
     }
 
-    /// Returns the action dimension (10).
     pub fn action_dim(&self) -> usize {
         ACTION_DIM
     }
@@ -3369,6 +3534,93 @@ impl RealLeWMFullQ4 {
             action_conv_w, action_conv_b, action_mlp1_w, action_mlp1_b, action_mlp2_w, action_mlp2_b,
             projector_layers, projector_bn_weight, projector_bn_bias, projector_bn_mean, projector_bn_var,
             pred_proj_layers, pred_proj_bn_weight, pred_proj_bn_bias, pred_proj_bn_mean, pred_proj_bn_var,
+        })
+    }
+
+    /// Load pre-quantized LQ40 binary (INT8 encoder + Q4 predictor).
+    /// Format: [4B "LQ40"][4B config_len][JSON config][sequential weight data]
+    pub fn from_lq40_data(data: &[u8]) -> Result<RealLeWMFullQ4, JsError> {
+        if data.len() < 8 { return Err(JsError::new("LQ40 data too short")); }
+        if &data[0..4] != b"LQ40" { return Err(JsError::new("Not LQ40 format")); }
+
+        let config_len = lq40_read_u32(data, 4) as usize;
+        let config: serde_json::Value = serde_json::from_slice(&data[8..8 + config_len])
+            .map_err(|e| JsError::new(&format!("LQ40 config parse error: {}", e)))?;
+        let enc_layers_n = config["encoder_layers"].as_u64().unwrap_or(ENCODER_LAYERS as u64) as usize;
+        let pred_layers_n = config["predictor_layers"].as_u64().unwrap_or(PREDICTOR_LAYERS as u64) as usize;
+        let mut off = 8 + config_len;
+
+        // --- INT8 encoder: dequantize to f32, then Q4-quantize ---
+        let encoder_patch_proj = lq40_read_f32_vec(data, &mut off);
+        let encoder_patch_proj_bias = lq40_read_f32_vec(data, &mut off);
+        let encoder_cls_token = lq40_read_f32_vec(data, &mut off);
+        let encoder_pos_embed = lq40_read_f32_vec(data, &mut off);
+
+        let mut encoder_layers = Vec::with_capacity(enc_layers_n);
+        for _ in 0..enc_layers_n {
+            let norm1_w = lq40_read_f32_vec(data, &mut off);
+            let norm1_b = lq40_read_f32_vec(data, &mut off);
+            let (q_w, _, _) = lq40_read_int8_dequant(data, &mut off);
+            let q_b = lq40_read_f32_vec(data, &mut off);
+            let (k_w, _, _) = lq40_read_int8_dequant(data, &mut off);
+            let k_b = lq40_read_f32_vec(data, &mut off);
+            let (v_w, _, _) = lq40_read_int8_dequant(data, &mut off);
+            let v_b = lq40_read_f32_vec(data, &mut off);
+            let (o_w, _, _) = lq40_read_int8_dequant(data, &mut off);
+            let o_b = lq40_read_f32_vec(data, &mut off);
+            let norm2_w = lq40_read_f32_vec(data, &mut off);
+            let norm2_b = lq40_read_f32_vec(data, &mut off);
+            let (ffn_up_w, _, _) = lq40_read_int8_dequant(data, &mut off);
+            let ffn_up_b = lq40_read_f32_vec(data, &mut off);
+            let (ffn_down_w, _, _) = lq40_read_int8_dequant(data, &mut off);
+            let ffn_down_b = lq40_read_f32_vec(data, &mut off);
+
+            let f32_layer = ViTLayerWeights {
+                q_w, q_b, k_w, k_b, v_w, v_b, o_w, o_b,
+                ffn_up_w, ffn_up_b, ffn_down_w, ffn_down_b,
+                norm1_w, norm1_b, norm2_w, norm2_b,
+            };
+            encoder_layers.push(Q4ViTLayerWeights::from_f32(&f32_layer));
+        }
+
+        let encoder_norm_w = lq40_read_f32_vec(data, &mut off);
+        let encoder_norm_b = lq40_read_f32_vec(data, &mut off);
+
+        // --- Q4 predictor: read directly ---
+        let predictor_pos_embed = lq40_read_f32_vec(data, &mut off);
+
+        let mut predictor_layers = Vec::with_capacity(pred_layers_n);
+        for _ in 0..pred_layers_n {
+            let layer = lq40_read_q4_adaln(data, &mut off)?;
+            predictor_layers.push(layer);
+        }
+
+        let predictor_norm_w = lq40_read_f32_vec(data, &mut off);
+        let predictor_norm_b = lq40_read_f32_vec(data, &mut off);
+
+        // --- f32 action encoder ---
+        let action_conv_w = lq40_read_f32_vec(data, &mut off);
+        let action_conv_b = lq40_read_f32_vec(data, &mut off);
+        let action_mlp1_w = lq40_read_f32_vec(data, &mut off);
+        let action_mlp1_b = lq40_read_f32_vec(data, &mut off);
+        let action_mlp2_w = lq40_read_f32_vec(data, &mut off);
+        let action_mlp2_b = lq40_read_f32_vec(data, &mut off);
+
+        // --- Projectors ---
+        let projector_layers = lq40_read_projection(data, &mut off);
+        let pred_proj_layers = lq40_read_projection(data, &mut off);
+
+        Ok(RealLeWMFullQ4 {
+            encoder_patch_proj, encoder_patch_proj_bias, encoder_cls_token, encoder_pos_embed,
+            encoder_layers, encoder_norm_w, encoder_norm_b,
+            predictor_pos_embed, predictor_layers, predictor_norm_w, predictor_norm_b,
+            action_conv_w, action_conv_b, action_mlp1_w, action_mlp1_b, action_mlp2_w, action_mlp2_b,
+            projector_layers,
+            projector_bn_weight: vec![], projector_bn_bias: vec![],
+            projector_bn_mean: vec![], projector_bn_var: vec![],
+            pred_proj_layers,
+            pred_proj_bn_weight: vec![], pred_proj_bn_bias: vec![],
+            pred_proj_bn_mean: vec![], pred_proj_bn_var: vec![],
         })
     }
 

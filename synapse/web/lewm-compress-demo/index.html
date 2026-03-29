@@ -519,27 +519,27 @@ h1 {
 
     <div class="model-options">
       <div class="model-option">
-        <input type="radio" name="model" id="model-f32" value="f32">
+        <input type="radio" name="model" id="model-f32" value="f32" disabled>
         <label for="model-f32">
           <div class="name">f32 Baseline</div>
-          <div class="meta">69 MB download</div>
+          <div class="meta">Requires checkpoint</div>
           <div class="meta">Full precision</div>
         </label>
       </div>
       <div class="model-option">
-        <input type="radio" name="model" id="model-int8" value="int8" checked>
+        <input type="radio" name="model" id="model-int8" value="int8" disabled>
         <label for="model-int8">
           <div class="name">INT8 Predictor</div>
-          <div class="meta">69 MB download*</div>
+          <div class="meta">Requires checkpoint</div>
           <div class="meta">Quantized in-browser</div>
         </label>
       </div>
       <div class="model-option">
-        <input type="radio" name="model" id="model-q4" value="q4">
+        <input type="radio" name="model" id="model-q4" value="q4" checked>
         <label for="model-q4">
           <div class="name">Q4 Predictor<span class="new-badge">NEW</span></div>
-          <div class="meta">69 MB download*</div>
-          <div class="meta">Quantized in-browser</div>
+          <div class="meta">23 MB download</div>
+          <div class="meta">f32 encoder + Q4 predictor</div>
         </label>
       </div>
     </div>
@@ -548,7 +548,7 @@ h1 {
         <input type="radio" name="model" id="model-wanda20-q4" value="wanda20-q4">
         <label for="model-wanda20-q4" class="pruned-selected">
           <div class="name">Wanda 20% + Q4<span class="pruned-badge">PRUNED</span></div>
-          <div class="meta">69 MB download*</div>
+          <div class="meta">21 MB download</div>
           <div class="meta">Light pruning, near-lossless</div>
         </label>
       </div>
@@ -556,16 +556,16 @@ h1 {
         <input type="radio" name="model" id="model-wanda40-q4" value="wanda40-q4">
         <label for="model-wanda40-q4" class="pruned-selected">
           <div class="name">Wanda 40% + Q4<span class="pruned-badge">PRUNED</span></div>
-          <div class="meta">69 MB download*</div>
+          <div class="meta">24 MB download</div>
           <div class="meta">Aggressive pruning</div>
         </label>
       </div>
       <div class="model-option">
         <input type="radio" name="model" id="model-fullq4" value="fullq4">
         <label for="model-fullq4">
-          <div class="name">Full Q4<span class="new-badge">~8MB</span></div>
-          <div class="meta">69 MB download*</div>
-          <div class="meta">Q4 encoder + Q4 predictor</div>
+          <div class="name">Full Q4<span class="new-badge">~11MB</span></div>
+          <div class="meta">11 MB download</div>
+          <div class="meta">INT8 encoder + Q4 predictor</div>
         </label>
       </div>
     </div>
@@ -1103,13 +1103,17 @@ async function loadModel() {
     }
 
     var urls = {
-      'f32':  './lewm-full.bin',
-      'int8': './lewm-full.bin',
-      'q4':   './lewm-full.bin',
+      'q4':   './lewm-q4-pred.bin',
       'wanda20-q4': './lewm-wanda20-q4.bin',
       'wanda40-q4': './lewm-wanda40-q4.bin',
       'fullq4': './lewm-full.bin'
     };
+
+    if (!urls[format]) {
+      setStatus('Format "' + format + '" requires f32 checkpoint (not available in demo)', 'err');
+      btn.disabled = false;
+      return;
+    }
 
     setStatus('Downloading ' + format.toUpperCase() + ' weights...');
     showProgress(true);
@@ -1127,26 +1131,20 @@ async function loadModel() {
 
     showProgress(false);
     var sizeMb = (data.length / 1048576).toFixed(1);
-    setStatus('Downloaded ' + sizeMb + ' MB. Constructing models...');
+    setStatus('Downloaded ' + sizeMb + ' MB. Loading pre-quantized model...');
 
-    // Always create f32 reference
-    var tc0 = performance.now();
-    refModel = new RealLeWM(data);
-    var refMs = (performance.now() - tc0).toFixed(1);
-
-    // Create quantized model (or reuse f32 if selected)
+    // Load pre-quantized LQ40 model directly
     var model;
     var tc = performance.now();
-    if (format === 'f32') {
-      model = refModel;
-    } else if (format === 'int8') {
-      model = RealLeWMInt8.from_f32_data(data);
-    } else if (format === 'q4' || format === 'wanda20-q4' || format === 'wanda40-q4') {
-      model = RealLeWMQ4.from_f32_data(data);
-    } else if (format === 'fullq4') {
-      model = RealLeWMFullQ4.from_f32_data(data);
+    if (format === 'fullq4') {
+      model = RealLeWMFullQ4.from_lq40_data(data);
+    } else {
+      model = RealLeWMQ4.from_lq40_data(data);
     }
     var constructMs = (performance.now() - tc).toFixed(1);
+
+    // Use loaded model as its own reference (no separate f32 baseline)
+    refModel = model;
 
     currentModel = model;
     currentFormat = format;
@@ -1163,7 +1161,7 @@ async function loadModel() {
     document.getElementById('run-compare-btn').disabled = false;
 
     // Show which model is loaded in the header
-    var modelNames = { 'f32': 'f32 (52.1 MB)', 'int8': 'INT8 (21.4 MB)', 'q4': 'Q4 pred (17.4 MB)', 'wanda20-q4': 'Wanda 20%+Q4 (17.4 MB)', 'wanda40-q4': 'Wanda 40%+Q4 (17.4 MB)', 'fullq4': 'Full Q4 (9.4 MB)' };
+    var modelNames = { 'q4': 'Q4 pred (' + sizeMb + ' MB)', 'wanda20-q4': 'Wanda 20%+Q4 (' + sizeMb + ' MB)', 'wanda40-q4': 'Wanda 40%+Q4 (' + sizeMb + ' MB)', 'fullq4': 'Full Q4 (' + sizeMb + ' MB)' };
     var labelEl = document.getElementById('active-model-label');
     while (labelEl.firstChild) labelEl.removeChild(labelEl.firstChild);
     if (format === 'f32') {
