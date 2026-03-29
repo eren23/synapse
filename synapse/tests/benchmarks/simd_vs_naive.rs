@@ -12,7 +12,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use synapse_inference::config::*;
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::weight_loading::AlignedBuffer;
 
 // ── Helpers ──────────────────────────────────────────────────────────

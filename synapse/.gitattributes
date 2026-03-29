@@ -1,0 +1,1 @@
+web/lewm-compress-demo/*.bin filter=lfs diff=lfs merge=lfs -text

@@ -9,7 +9,7 @@
 use super::buffer::BufferPool;
 use super::device::MetalBackend;
 use crate::kv_cache::KVCacheLayer;
-use crate::model::decoder_layer::DecoderLayer;
+use crate::models::lm::decoder_layer::DecoderLayer;
 use crate::ops::attention::cached_attention_decode;
 use crate::ops::norm::apply_norm;
 

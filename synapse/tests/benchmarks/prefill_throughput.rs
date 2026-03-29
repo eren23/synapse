@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use synapse_inference::config::*;
 use synapse_inference::generation::GenerationPipeline;
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
 /// Qwen3-architecture benchmark config with reduced dimensions.
@@ -125,7 +125,7 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     w
 }
 
-fn build_model(cfg: &ModelConfig) -> synapse_inference::model::CausalLM {
+fn build_model(cfg: &ModelConfig) -> synapse_inference::models::CausalLM {
     let mut model = ModelBuilder::from_config(cfg);
     let weights = generate_fake_hf_weights(cfg);
     let mapper = WeightMapper::qwen3();

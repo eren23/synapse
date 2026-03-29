@@ -1,7 +1,7 @@
 //! Integration tests for HybridModel (Qwen3.5-style DeltaNet + GQA).
 
-use synapse_inference::model::Model;
-use synapse_inference::ssm::{
+use synapse_inference::models::Model;
+use synapse_inference::models::{
     DeltaNetDecoderLayer, GqaDecoderLayer, HybridConfig, HybridLayer, HybridModel,
 };
 

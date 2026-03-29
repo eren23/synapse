@@ -1,14 +1,13 @@
 use std::time::Instant;
-use synapse_inference::model::lewm::{LeWMBuffers, LeWMConfig, LeWorldModel};
-use synapse_inference::quantization::quantized_lewm::quantize_lewm;
-use synapse_inference::quantization::q4::{quantize_lewm_q4, cached_q4_lewm};
+use synapse_inference::models::vision::lewm::{LeWMBuffers, LeWMConfig, LeWorldModel};
+use synapse_inference::quantization::{quantize_lewm, quantize_lewm_q4, cached_q4_lewm};
 
 fn main() {
     let config = LeWMConfig::pusht();
     
     // Load real model
     let weights_path = "/tmp/lewm-pusht/pusht/lejepa_weights.safetensors";
-    let weights = synapse_inference::weight_loading::safetensors::load_safetensors(
+    let weights = synapse_inference::weight_loading::load_safetensors(
         std::path::Path::new(weights_path)
     ).expect("Failed to load weights");
     

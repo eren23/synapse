@@ -15,7 +15,7 @@
 use std::path::PathBuf;
 
 use synapse_inference::engine::InferenceEngine;
-use synapse_inference::model::traits::Model;
+use synapse_inference::models::traits::Model;
 use synapse_inference::pruning::{
     SensitivityAnalyzer, LayerRemover, WandaPruner, MambaChannelPruner,
     SurgeonPipeline, PruningStrategy,
@@ -57,8 +57,8 @@ fn main() {
     let mamba_model = engine.ssm_model.as_ref().expect("Not an SSM model");
 
     // Downcast to MambaModel
-    let mamba: &synapse_inference::ssm::MambaModel = unsafe {
-        &*(mamba_model.as_ref() as *const dyn Model as *const synapse_inference::ssm::MambaModel)
+    let mamba: &synapse_inference::models::MambaModel = unsafe {
+        &*(mamba_model.as_ref() as *const dyn Model as *const synapse_inference::models::MambaModel)
     };
 
     eprintln!("Model: {} layers, d_model={}, d_inner={}, vocab={}",
@@ -162,8 +162,8 @@ fn parse_prune_spec(spec: &str) -> Vec<PruningStrategy> {
     strategies
 }
 
-fn clone_mamba_model(m: &synapse_inference::ssm::MambaModel) -> synapse_inference::ssm::MambaModel {
-    use synapse_inference::ssm::mamba_block::MambaBlock;
+fn clone_mamba_model(m: &synapse_inference::models::MambaModel) -> synapse_inference::models::MambaModel {
+    use synapse_inference::models::ssm::mamba::block::MambaBlock;
 
     let blocks: Vec<MambaBlock> = m.blocks.iter().map(|b| {
         MambaBlock {
@@ -188,7 +188,7 @@ fn clone_mamba_model(m: &synapse_inference::ssm::MambaModel) -> synapse_inferenc
         }
     }).collect();
 
-    synapse_inference::ssm::MambaModel::new(
+    synapse_inference::models::MambaModel::new(
         m.config.clone(),
         m.embed_tokens.clone(),
         blocks,

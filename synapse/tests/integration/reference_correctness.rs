@@ -3,12 +3,12 @@
 //! Each test uses hand-computed expected values with tight tolerances to
 //! verify mathematical correctness of the kernel implementations.
 
-use synapse_inference::ssm::{
+use synapse_inference::models::{
     deltanet_step, selective_scan_seq, wkv7_step, MambaBlock, MambaConfig, MambaModel,
 };
 use synapse_inference::quantization::TernaryLinear;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
-use synapse_inference::model::ModelState;
+use synapse_inference::models::ModelState;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Test 1: Selective Scan Reference Values

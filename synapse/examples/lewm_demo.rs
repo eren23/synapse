@@ -10,7 +10,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use synapse_inference::model::{LeWMConfig, LeWorldModel};
+use synapse_inference::models::{LeWMConfig, LeWorldModel};
 use synapse_inference::weight_loading::load_safetensors;
 
 fn main() {

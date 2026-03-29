@@ -18,7 +18,7 @@ impl Instant {
     fn elapsed(&self) -> Duration { Duration::ZERO }
 }
 
-use crate::model::traits::{Model, ModelState};
+use crate::models::traits::{Model, ModelState};
 
 use super::output::GenerationOutput;
 use super::sampler::{CombinedSampler, GreedySampler, Sampler};
@@ -493,7 +493,7 @@ impl<'a> GenerationPipeline<'a> {
 mod tests {
     use super::*;
     use crate::config::*;
-    use crate::model::{CausalLM, ModelBuilder};
+    use crate::models::{CausalLM, ModelBuilder};
     use crate::weight_loading::{RawTensor, WeightMapper};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};

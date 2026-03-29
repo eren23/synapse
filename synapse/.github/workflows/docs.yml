@@ -1,9 +1,9 @@
-name: Deploy mdBook to GitHub Pages
+name: Deploy docs & web demos to GitHub Pages
 
 on:
   push:
     branches: [main]
-    paths: ['docs/**']
+    paths: ['docs/**', 'web/**', 'synapse-wasm/pkg/**']
   workflow_dispatch:
 
 permissions:
@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Install mdBook
         run: |
@@ -33,10 +35,23 @@ jobs:
       - name: Build book
         run: mdbook build docs/
 
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp -r docs/book/* _site/
+          cp -r web/lewm-compress-demo _site/lewm-compress-demo
+          cp -r web/ssm-demo _site/ssm-demo
+          cp -r web/trajectories _site/trajectories 2>/dev/null || true
+          cp web/index.html _site/demos.html 2>/dev/null || true
+          if [ -d synapse-wasm/pkg ]; then
+            mkdir -p _site/synapse-wasm-pkg
+            cp -rL synapse-wasm/pkg/* _site/synapse-wasm-pkg/
+          fi
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/book
+          path: _site
 
   deploy:
     environment:

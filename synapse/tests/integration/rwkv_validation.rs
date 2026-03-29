@@ -1,7 +1,7 @@
 //! Integration tests for RwkvModel using the public API.
 
-use synapse_inference::model::Model;
-use synapse_inference::ssm::{RwkvBlock, RwkvConfig, RwkvModel};
+use synapse_inference::models::Model;
+use synapse_inference::models::{RwkvBlock, RwkvConfig, RwkvModel};
 
 fn pseudo_random_vec(seed: u64, len: usize) -> Vec<f32> {
     let mut state = seed;

@@ -7,8 +7,8 @@
 //! These are structured pruning methods that actually reduce matrix dimensions,
 //! yielding real speedups without sparse kernel support.
 
-use crate::ssm::mamba_block::MambaBlock;
-use crate::ssm::rwkv_block::RwkvBlock;
+use crate::models::ssm::mamba::block::MambaBlock;
+use crate::models::ssm::rwkv::block::RwkvBlock;
 
 /// Result of channel pruning on a Mamba model.
 #[derive(Debug)]

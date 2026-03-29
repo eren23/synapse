@@ -1,10 +1,10 @@
 use std::time::Instant;
-use synapse_inference::model::lewm::{LeWMConfig, LeWorldModel};
+use synapse_inference::models::vision::lewm::{LeWMConfig, LeWorldModel};
 
 fn main() {
     let config = LeWMConfig::pusht();
     let weights_path = "/tmp/lewm-pusht/pusht/lejepa_weights.safetensors";
-    let weights = synapse_inference::weight_loading::safetensors::load_safetensors(
+    let weights = synapse_inference::weight_loading::load_safetensors(
         std::path::Path::new(weights_path)
     ).expect("load");
     let mut model = LeWorldModel::from_config(&config);

@@ -1103,12 +1103,12 @@ async function loadModel() {
     }
 
     var urls = {
-      'f32':  '../lewm_weights.bin',
-      'int8': '../lewm_weights.bin',
-      'q4':   '../lewm_weights.bin',
-      'wanda20-q4': '../lewm_weights.bin',
-      'wanda40-q4': '../lewm_weights.bin',
-      'fullq4': '../lewm_weights.bin'
+      'f32':  './lewm-full.bin',
+      'int8': './lewm-full.bin',
+      'q4':   './lewm-full.bin',
+      'wanda20-q4': './lewm-wanda20-q4.bin',
+      'wanda40-q4': './lewm-wanda40-q4.bin',
+      'fullq4': './lewm-full.bin'
     };
 
     setStatus('Downloading ' + format.toUpperCase() + ' weights...');

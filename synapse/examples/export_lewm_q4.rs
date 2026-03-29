@@ -21,7 +21,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use synapse_inference::model::{LeWMConfig, LeWorldModel};
+use synapse_inference::models::{LeWMConfig, LeWorldModel};
 use synapse_inference::quantization::{
     quantize_lewm_q4, quantize_lewm_full,
     Q4Linear, QuantizedLinear,
@@ -440,7 +440,7 @@ fn write_q4_layer(f: &mut std::fs::File, layer: &QuantizedQ4AdaLNLayer) -> usize
 /// Write a ProjectionHead from QuantizedQ4LeWM (uses AlignedBuffer layers via Deref).
 fn write_projection_head(
     f: &mut std::fs::File,
-    proj: &synapse_inference::model::lewm::ProjectionHead,
+    proj: &synapse_inference::models::vision::lewm::ProjectionHead,
 ) -> usize {
     let mut n = 0;
     // Number of layers
@@ -458,7 +458,7 @@ fn write_projection_head(
 /// Write a ProjectionHead from FullyQuantizedLeWM (same struct, same layout).
 fn write_projection_head_from_lewm(
     f: &mut std::fs::File,
-    proj: &synapse_inference::model::lewm::ProjectionHead,
+    proj: &synapse_inference::models::vision::lewm::ProjectionHead,
 ) -> usize {
     write_projection_head(f, proj)
 }

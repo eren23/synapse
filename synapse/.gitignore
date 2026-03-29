@@ -14,7 +14,8 @@ synapse-esp32/target/
 
 # Model weights (too large for git — download separately)
 models/
-web/**/*.bin
+# lewm-compress-demo bins tracked via Git LFS (see .gitattributes)
+web/ssm-demo/*.bin
 web/**/*.pt
 web/**/*.npz
 web/**/*.safetensors

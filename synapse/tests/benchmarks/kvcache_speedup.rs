@@ -11,7 +11,7 @@ use std::time::Instant;
 use synapse_inference::config::*;
 use synapse_inference::generation::{GenerationConfig, GenerationPipeline};
 use synapse_inference::kv_cache::KVCache;
-use synapse_inference::model::ModelBuilder;
+use synapse_inference::models::ModelBuilder;
 use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
 fn bench_config() -> ModelConfig {
@@ -123,7 +123,7 @@ fn generate_fake_hf_weights(cfg: &ModelConfig) -> HashMap<String, RawTensor> {
     w
 }
 
-fn build_model(cfg: &ModelConfig) -> synapse_inference::model::CausalLM {
+fn build_model(cfg: &ModelConfig) -> synapse_inference::models::CausalLM {
     let mut model = ModelBuilder::from_config(cfg);
     let weights = generate_fake_hf_weights(cfg);
     let mapper = WeightMapper::qwen3();
@@ -171,7 +171,7 @@ fn kvcache_decode_5x_speedup_at_64_tokens() {
         cfg.attention.head_dim(),
     )
     .unwrap();
-    let mut state = synapse_inference::model::ModelState::KvCache(cache);
+    let mut state = synapse_inference::models::ModelState::KvCache(cache);
     let config_cached = GenerationConfig {
         max_new_tokens: 64,
         ..Default::default()

@@ -7,15 +7,16 @@
 //!
 //! Target deployment: ESP32-P4 (32MB PSRAM) and WASM browser.
 
-use crate::model::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
-use crate::model::vit::ViTConfig;
+use crate::models::vision::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
+use crate::models::vision::vit::ViTConfig;
 use crate::ops::activation::gelu;
 use crate::ops::attention::bidirectional_attention;
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::layernorm;
 use crate::ops::patch_embed::patch_embed;
 use crate::ops::vector::{add_vecs, add_vecs_inplace};
-use crate::quantization::q4::Q4Linear;
+use crate::quantization::Q4Linear;
+use crate::quantization::QuantizedQ4AdaLNLayer;
 use crate::quantization::QuantizedLinear;
 
 /// INT8-quantized ViT encoder layer.
@@ -115,7 +116,7 @@ pub struct FullyQuantizedLeWM {
     pub final_norm_bias: Vec<f32>,
     pub vit_config: ViTConfig,
     // Q4 predictor (reuse existing)
-    pub predictor_layers: Vec<crate::quantization::q4::QuantizedQ4AdaLNLayer>,
+    pub predictor_layers: Vec<QuantizedQ4AdaLNLayer>,
     pub predictor_pos_embed: Vec<f32>,
     pub predictor_norm_weight: Vec<f32>,
     pub predictor_norm_bias: Vec<f32>,
@@ -297,8 +298,8 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
     }).collect();
 
     // Quantize predictor layers to Q4 (reuse existing quantize_lewm_q4 logic)
-    let predictor_layers: Vec<crate::quantization::q4::QuantizedQ4AdaLNLayer> = model.predictor_layers.iter().map(|layer| {
-        crate::quantization::q4::QuantizedQ4AdaLNLayer {
+    let predictor_layers: Vec<QuantizedQ4AdaLNLayer> = model.predictor_layers.iter().map(|layer| {
+        QuantizedQ4AdaLNLayer {
             adaln_linear: Q4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden),
             adaln_bias: layer.adaln_bias.to_vec(),
             to_qkv: Q4Linear::from_f32(&layer.to_qkv, 3 * inner_dim, hidden),
@@ -315,7 +316,7 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
         }
     }).collect();
 
-    use super::quantized_lewm::clone_projection_head;
+    use super::int8_lewm::clone_projection_head;
 
     FullyQuantizedLeWM {
         config: cfg.clone(),
@@ -435,7 +436,7 @@ pub struct Q4FullLeWM {
     pub final_norm_weight: Vec<f32>,
     pub final_norm_bias: Vec<f32>,
     pub vit_config: ViTConfig,
-    pub predictor_layers: Vec<crate::quantization::q4::QuantizedQ4AdaLNLayer>,
+    pub predictor_layers: Vec<QuantizedQ4AdaLNLayer>,
     pub predictor_pos_embed: Vec<f32>,
     pub predictor_norm_weight: Vec<f32>,
     pub predictor_norm_bias: Vec<f32>,
@@ -559,7 +560,7 @@ pub fn quantize_lewm_q4_full(model: &LeWorldModel) -> Q4FullLeWM {
     }).collect();
 
     let predictor_layers = model.predictor_layers.iter().map(|layer| {
-        crate::quantization::q4::QuantizedQ4AdaLNLayer {
+        QuantizedQ4AdaLNLayer {
             adaln_linear: Q4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden),
             adaln_bias: layer.adaln_bias.to_vec(),
             to_qkv: Q4Linear::from_f32(&layer.to_qkv, 3 * inner_dim, hidden),
@@ -576,7 +577,7 @@ pub fn quantize_lewm_q4_full(model: &LeWorldModel) -> Q4FullLeWM {
         }
     }).collect();
 
-    use super::quantized_lewm::clone_projection_head;
+    use super::int8_lewm::clone_projection_head;
 
     Q4FullLeWM {
         config: cfg.clone(),

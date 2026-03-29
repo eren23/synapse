@@ -13,14 +13,14 @@
 //! This gives ~8-10x total compression vs f32, with the RMSNorm fix
 //! maintaining prediction quality.
 
-use crate::model::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
-use crate::model::vit::ViTModel;
+use crate::models::vision::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
+use crate::models::vision::vit::ViTModel;
 use crate::ops::activation::gelu;
 use crate::ops::attention::bidirectional_attention;
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::layernorm;
 use crate::quantization::QuantizedLinear;
-use crate::quantization::ternary_linear::TernaryLinear;
+use crate::quantization::TernaryLinear;
 
 /// RMSNorm: normalize by root-mean-square (no learned weight, just stabilization).
 #[inline]
@@ -353,7 +353,7 @@ pub fn quantize_lewm_ternary(model: &LeWorldModel) -> TernaryLeWM {
         }
     }).collect();
 
-    use super::quantized_lewm::{clone_vit_encoder, clone_projection_head};
+    use super::int8_lewm::{clone_vit_encoder, clone_projection_head};
 
     TernaryLeWM {
         config: cfg.clone(),

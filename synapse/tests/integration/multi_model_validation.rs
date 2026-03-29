@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use synapse_inference::config::position::RoPEScaling;
 use synapse_inference::config::*;
 use synapse_inference::kv_cache::KVCache;
-use synapse_inference::model::{CausalLM, ModelBuilder};
+use synapse_inference::models::{CausalLM, ModelBuilder};
 use synapse_inference::quantization::{quantize_model, quantize_model_ternary};
 use synapse_inference::weight_loading::{AlignedBuffer, RawTensor, WeightMapper};
 
@@ -647,7 +647,7 @@ fn test_gemma_quantized_forward_produces_finite_logits() {
 // ViT (Vision Transformer)
 // ════════════════════════════════════════════════════════════════════════
 
-use synapse_inference::model::{ViTConfig, ViTModel};
+use synapse_inference::models::{ViTConfig, ViTModel};
 
 const VIT_IMAGE_SIZE: usize = 8;
 const VIT_PATCH_SIZE: usize = 4;

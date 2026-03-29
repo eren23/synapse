@@ -4,7 +4,7 @@
 //! skipped. Layers whose removal causes minimal divergence are candidates for
 //! pruning or removal.
 
-use crate::model::causal_lm::ModelOutput;
+use crate::models::lm::causal_lm::ModelOutput;
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
 
@@ -55,9 +55,9 @@ impl SensitivityAnalyzer {
     /// Returns importance scores sorted by divergence (most redundant first).
     pub fn analyze_mamba(
         &self,
-        config: &crate::ssm::config::MambaConfig,
+        config: &crate::models::ssm::mamba::config::MambaConfig,
         embed_tokens: &[f32],
-        blocks: &[crate::ssm::mamba_block::MambaBlock],
+        blocks: &[crate::models::ssm::mamba::block::MambaBlock],
         final_norm_weight: &[f32],
         lm_head_weight: &[f32],
         calibration_tokens: &[u32],
@@ -100,11 +100,11 @@ impl SensitivityAnalyzer {
     /// Analyze an RWKV model's layer sensitivity.
     pub fn analyze_rwkv(
         &self,
-        config: &crate::ssm::rwkv_config::RwkvConfig,
+        config: &crate::models::ssm::rwkv::config::RwkvConfig,
         embed_tokens: &[f32],
         pre_ln_weight: Option<&[f32]>,
         pre_ln_bias: Option<&[f32]>,
-        blocks: &[crate::ssm::rwkv_block::RwkvBlock],
+        blocks: &[crate::models::ssm::rwkv::block::RwkvBlock],
         final_norm_weight: &[f32],
         final_norm_bias: &[f32],
         lm_head_weight: &[f32],
@@ -145,9 +145,9 @@ impl SensitivityAnalyzer {
     /// Forward pass through Mamba model, optionally skipping one layer.
     fn mamba_forward_skip(
         &self,
-        config: &crate::ssm::config::MambaConfig,
+        config: &crate::models::ssm::mamba::config::MambaConfig,
         embed_tokens: &[f32],
-        blocks: &[crate::ssm::mamba_block::MambaBlock],
+        blocks: &[crate::models::ssm::mamba::block::MambaBlock],
         final_norm_weight: &[f32],
         lm_head_weight: &[f32],
         token_ids: &[u32],
@@ -158,7 +158,7 @@ impl SensitivityAnalyzer {
         let norm_eps = config.norm_eps as f32;
 
         // Create fresh state for each analysis run
-        let mut state = crate::ssm::state::RecurrentState::new(
+        let mut state = crate::models::ssm::mamba::state::RecurrentState::new(
             config.num_layers,
             config.d_inner(),
             config.d_state,
@@ -207,11 +207,11 @@ impl SensitivityAnalyzer {
     /// Forward pass through RWKV model, optionally skipping one layer.
     fn rwkv_forward_skip(
         &self,
-        config: &crate::ssm::rwkv_config::RwkvConfig,
+        config: &crate::models::ssm::rwkv::config::RwkvConfig,
         embed_tokens: &[f32],
         pre_ln_weight: Option<&[f32]>,
         pre_ln_bias: Option<&[f32]>,
-        blocks: &[crate::ssm::rwkv_block::RwkvBlock],
+        blocks: &[crate::models::ssm::rwkv::block::RwkvBlock],
         final_norm_weight: &[f32],
         final_norm_bias: &[f32],
         lm_head_weight: &[f32],
@@ -222,7 +222,7 @@ impl SensitivityAnalyzer {
         let vocab = config.vocab_size;
 
         // Create fresh RWKV state
-        let mut state = crate::ssm::rwkv_state::RwkvState::new(
+        let mut state = crate::models::ssm::rwkv::state::RwkvState::new(
             config.num_layers,
             config.hidden_size,
             config.num_heads,
@@ -399,8 +399,8 @@ mod tests {
 
     #[test]
     fn test_sensitivity_mamba_synthetic() {
-        use crate::ssm::config::MambaConfig;
-        use crate::ssm::mamba_block::MambaBlock;
+        use crate::models::ssm::mamba::config::MambaConfig;
+        use crate::models::ssm::mamba::block::MambaBlock;
 
         let d_model = 16;
         let d_inner = 32;
