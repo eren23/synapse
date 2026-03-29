@@ -10,23 +10,25 @@ Runs on desktop (Metal GPU), browser (WASM), and ESP32 — from one codebase.
 
 ## Highlights
 
-- **Zig SIMD kernels** — NEON + AVX2 matmul, attention, RoPE, RMSNorm via C ABI
-- **Metal GPU** — Apple Silicon acceleration with zero CPU-GPU round-trip forward pass (13 compute shaders)
-- **WASM runtime** — Pure Rust browser path, no FFI, runs entirely client-side
-- **ESP32-P4** — Edge inference on RISC-V microcontrollers over WiFi HTTP
-- **Multi-format weights** — safetensors + GGUF (Q4_0, Q4_K, Q6_K, Q8_0)
-- **Speculative decoding** — Self-speculative decode with KV rollback
-- **World models** — Built-in LEWM (ViT encoder + DiT predictor) with browser + ESP32 targets
+<!-- status:synapse-features:start -->
+- **Zig SIMD kernels** (Stable) — Native kernels target NEON and AVX2 through a C ABI layer.
+- **Metal GPU** (Beta) — Apple Silicon acceleration is available behind the metal feature.
+- **Pure Rust WASM runtime** (Stable) — The browser path avoids Zig FFI and runs entirely client-side.
+- **GGUF + safetensors loading** (Stable) — Native runtime loads common checkpoint formats.
+- **Speculative decoding** (Experimental) — Self-speculative decode path with KV rollback is available but not a headline stability claim.
+- **Training workspace** (Beta) — Autograd, NN, data, graph, and training crates remain available in the workspace.
+<!-- status:synapse-features:end -->
 
 ## Benchmarks
 
 <!-- status:synapse-benchmark:start -->
-| Model | Quantization | Prefill (tok/s) | Decode (tok/s) |
-|-------|-------------|-----------------|----------------|
-| Qwen3-0.6B | f32 | 11 | 7.3 |
-| Qwen3-0.6B | INT8 | 23 | **27.3** |
-| LLaMA 3.2-1B | f32 | 1 | 2.1 |
-| LLaMA 3.2-1B | INT8 | 8 | 9.7 |
+| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |
+|--------|---------------|--------|-----------------|----------------|-------|
+| Qwen3 | f32 CPU | hello | 11 | 7.3 | Runtime backend=cpu_simd; prompt=hello |
+| Qwen3 | INT8 CPU | hello | 23 | 27.3 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | f32 CPU | hello | 1 | 2.1 | Runtime backend=cpu_simd; prompt=hello |
+| LLaMA 3.2 | INT8 CPU | hello | 8 | 9.7 | Runtime backend=cpu_simd; prompt=hello |
+| Reference | llama.cpp Q4_K_M | reference_only | 5518 | 173 | Reference only, not a parity claim |
 <!-- status:synapse-benchmark:end -->
 
 > Measured end-to-end on Apple Silicon. Full matrix with synthetic and exploratory rows in [`status/benchmark_matrix.md`](status/benchmark_matrix.md).
@@ -72,17 +74,13 @@ See [BUILD.md](BUILD.md) for cross-compilation details.
 ## Supported Models
 
 <!-- status:synapse-models:start -->
-| Model Family | Type | Status | Notes |
-|--------------|------|--------|-------|
-| **Qwen3** | LLM (GQA) | Validated | Benchmarked, logits verified |
-| **LLaMA 3.2** | LLM (GQA) | Validated | Benchmarked locally |
-| **Mistral 7B** | LLM (Sliding Window) | Config Ready | Synthetic tests passing |
-| **Phi-3** | LLM (GQA) | In Progress | Weight mapper underway |
-| **Gemma** | LLM (MHA, GeGLU) | Config Ready | Synthetic tests passing |
-| **ViT** | Vision | Validated | Patch embedding, classification head |
-| **CLIP** | Vision+Text | Supported | Dual-encoder with projection |
-| **DINOv2** | Vision | Supported | Self-supervised ViT variant |
-| **LEWM** | World Model | Validated | ViT encoder + DiT predictor |
+| Model Family | Status | Evidence | Notes |
+|--------------|--------|----------|-------|
+| Qwen3 | Validated | Benchmarked Local | Real checkpoint benchmarked locally; logits verified |
+| LLaMA 3.2 | Benchmarked Local | Benchmarked Local | Real checkpoint benchmarked locally on this machine |
+| Mistral 7B | Config Ready | Synthetic Validated | Sliding-window config path present; synthetic correctness tests pass, but the scaled synthetic throughput benchmark is currently failing |
+| Phi-3 | In Progress | Synthetic Validated | Weight-mapper support in progress; synthetic validation passing |
+| Gemma | Config Ready | Synthetic Validated | Same core transformer path; synthetic validation passing |
 <!-- status:synapse-models:end -->
 
 332 unit tests + 17 multi-architecture integration tests cover all model families.
