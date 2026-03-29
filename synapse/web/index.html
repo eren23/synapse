@@ -53,7 +53,7 @@
         <!-- status:web-subtitle:start -->
 <p class="subtitle">
     Real models running locally via WASM. No server, no GPU, no cloud.
-    <span class="tag">~158 KB WASM core</span>
+    <span class="tag">491 KB WASM</span>
     <span class="tag">WASM SIMD</span>
     <span class="tag">Pure Rust runtime</span>
 </p>
@@ -61,6 +61,20 @@
     Browser demos use the pure-Rust WASM path. Native builds use Rust + Zig SIMD kernels with optional Metal acceleration.
 </p>
 <!-- status:web-subtitle:end -->
+<p class="subtitle" style="margin-top:-4px;">
+    <span class="tag">v0.1.0</span>
+    <span class="tag">484 tests</span>
+    <span class="tag">MIT</span>
+</p>
+
+        <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
+            <a href="lewm-compress-demo/#explore" style="display:inline-flex; align-items:center; gap:6px; background:#1a2332; border:1px solid #30475e; color:#58a6ff; padding:8px 16px; border-radius:6px; font-size:12px; font-weight:bold; text-decoration:none; transition:background 0.15s;">
+                <span style="font-size:14px;">&#x1F50D;</span> Compression Explorer — Load &amp; compare quantized models live
+            </a>
+            <a href="ssm-demo/" style="display:inline-flex; align-items:center; gap:6px; background:#1a2a1a; border:1px solid #2d5a2d; color:#4ade80; padding:8px 16px; border-radius:6px; font-size:12px; font-weight:bold; text-decoration:none; transition:background 0.15s;">
+                <span style="font-size:14px;">&#x1F4AC;</span> Mamba Chat — SSM running in browser
+            </a>
+        </div>
 
         <div class="tabs">
             <button class="active-tab" onclick="switchTab('compress')">Compression</button>
@@ -166,6 +180,16 @@
                 </p>
                 <p style="font-size:11px; color:#666; margin-top:6px;">
                     WASM engine: 491 KB (133 KB brotli) · Loads LeWM, Mamba, RWKV from one binary · Zero server dependencies
+                </p>
+            </div>
+            <div class="card">
+                <p style="font-size:12px; color:#aaa;">
+                    <strong>SSM Chat →</strong>
+                    <a href="ssm-demo/" style="color:#4ade80;">Open Mamba-130M chat demo</a>
+                    — State Space Model running entirely in your browser via WASM.
+                </p>
+                <p style="font-size:11px; color:#666; margin-top:6px;">
+                    Mamba architecture · Selective state spaces · Temperature + token controls
                 </p>
             </div>
         </div>
@@ -353,6 +377,13 @@
             </div>
         </div>
 
+        <div style="text-align:center; padding:2rem 0 1rem; color:#666; font-size:11px; border-top:1px solid #222; margin-top:20px;">
+            Powered by <strong style="color:#e0e0e0;">Synapse</strong> — 491 KB WASM engine, zero server dependencies
+            <br style="margin-bottom:4px;">
+            <span style="color:#4fc3f7;">Main Hub</span> ·
+            <a href="lewm-compress-demo/" style="color:#4fc3f7;">Compression Demo</a> ·
+            <a href="ssm-demo/" style="color:#4ade80;">SSM Chat</a>
+        </div>
         <div id="log"></div>
     </div>
 

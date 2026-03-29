@@ -31,12 +31,16 @@
 </style>
 </head>
 <body>
+  <a href="../" style="color:#60a5fa; font-size:0.8rem; text-decoration:none;">← Back to Synapse demos</a>
   <h1>Synapse SSM Demo <span class="badge">WASM</span></h1>
   <p class="subtitle">Mamba-130M running entirely in your browser — no server, no GPU</p>
 
   <div class="container">
     <div id="status-box" class="status">
       <span class="label">Status:</span> <span id="status" class="value">Loading WASM module...</span>
+      <div id="progress-bar" style="display:none; margin-top:0.5rem; background:#222; border-radius:4px; height:6px; overflow:hidden;">
+        <div id="progress-fill" style="width:0%; height:100%; background:#4ade80; border-radius:4px; transition:width 0.2s;"></div>
+      </div>
     </div>
 
     <div id="output"><span class="prompt" id="prompt-display"></span><span class="generated" id="gen-display"></span></div>
@@ -52,15 +56,22 @@
     </div>
 
     <div class="stats" id="stats"></div>
+
+    <div style="text-align:center; padding:1.5rem 0 0.5rem; color:#666; font-size:0.75rem;">
+      Powered by <strong style="color:#e0e0e0;">Synapse</strong> — 491 KB WASM engine
+      <br><a href="../" style="color:#60a5fa;">Main Hub</a> · <a href="../lewm-compress-demo/" style="color:#60a5fa;">Compression Demo</a> · <span style="color:#4ade80;">SSM Chat</span>
+    </div>
   </div>
 
 <script type="module">
-import init, { WasmMamba } from '../../synapse-wasm/pkg/synapse_wasm.js';
+import init, { WasmMamba } from '../synapse-wasm-pkg/synapse_wasm.js';
 
 let model = null;
 
 const statusEl = document.getElementById('status');
 const statusBox = document.getElementById('status-box');
+const progressBar = document.getElementById('progress-bar');
+const progressFill = document.getElementById('progress-fill');
 const promptInput = document.getElementById('prompt-input');
 const genBtn = document.getElementById('gen-btn');
 const promptDisplay = document.getElementById('prompt-display');
@@ -75,6 +86,45 @@ function setStatus(msg, isError = false) {
   statusBox.className = isError ? 'status error' : 'status';
 }
 
+function setProgress(pct) {
+  if (pct < 0) {
+    progressBar.style.display = 'none';
+    progressFill.style.width = '0%';
+  } else {
+    progressBar.style.display = 'block';
+    progressFill.style.width = Math.min(pct, 100) + '%';
+  }
+}
+
+async function fetchWithProgress(url, statusEl) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('HTTP ' + resp.status + ': ' + url);
+  const contentLength = resp.headers.get('content-length');
+  const total = contentLength ? parseInt(contentLength) : 0;
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total > 0) {
+      const pct = Math.round((received / total) * 100);
+      const mb = (received / 1048576).toFixed(1);
+      const totalMb = (total / 1048576).toFixed(1);
+      statusEl.textContent = `Downloading: ${mb} / ${totalMb} MB (${pct}%)`;
+      setProgress(pct);
+    } else {
+      statusEl.textContent = `Downloading: ${(received / 1048576).toFixed(1)} MB...`;
+    }
+  }
+  const buf = new Uint8Array(received);
+  let pos = 0;
+  for (const chunk of chunks) { buf.set(chunk, pos); pos += chunk.length; }
+  return buf;
+}
+
 async function loadModel() {
   try {
     setStatus('Initializing WASM...');
@@ -85,20 +135,20 @@ async function loadModel() {
     if (!configResp.ok) throw new Error('config.json not found');
     const configText = await configResp.text();
 
-    setStatus('Loading weights (671MB, please wait)...');
-    const weightsResp = await fetch('model.safetensors');
-    if (!weightsResp.ok) throw new Error('model.safetensors not found');
-    const weightsBytes = new Uint8Array(await weightsResp.arrayBuffer());
+    setStatus('Downloading weights...');
+    setProgress(0);
+    const weightsBytes = await fetchWithProgress('model.safetensors', statusEl);
+    setProgress(-1);
     const sizeMB = (weightsBytes.length / 1e6).toFixed(1);
 
     setStatus(`Building model from ${sizeMB}MB weights...`);
     model = WasmMamba.create(configText, weightsBytes);
 
     // Load tokenizer into WASM (BPE runs in Rust, not JS)
-    setStatus('Loading tokenizer...');
-    const tokResp = await fetch('tokenizer.json');
-    if (!tokResp.ok) throw new Error('tokenizer.json not found');
-    const tokBytes = new TextEncoder().encode(await tokResp.text());
+    setStatus('Downloading tokenizer...');
+    setProgress(0);
+    const tokBytes = await fetchWithProgress('tokenizer.json', statusEl);
+    setProgress(-1);
     model.load_tokenizer(tokBytes);
 
     setStatus(`Ready! Mamba-130M (${model.num_layers()} layers, d=${model.d_model()}, ${sizeMB}MB)`);
@@ -106,6 +156,7 @@ async function loadModel() {
     genBtn.disabled = false;
     promptInput.focus();
   } catch (e) {
+    setProgress(-1);
     setStatus(`Error: ${e.message}`, true);
     console.error(e);
   }

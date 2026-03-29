@@ -20,10 +20,10 @@ Modular local inference engine with Zig SIMD kernels, Metal GPU acceleration, a 
 | Target | Backend | Quantization | Use Case |
 |--------|---------|-------------|----------|
 | **Desktop** | Zig SIMD (NEON/AVX2) + Metal GPU | f32, f16, INT8, Q4 | Development, serving |
-| **Browser** | Pure Rust (WASM) | f32, INT8 | Embeddable widget, client-side demos |
+| **Browser** | Pure Rust (WASM) | f32, INT8, Q4, Wanda | Embeddable widget, client-side demos |
 | **ESP32-P4** | Pure Rust (RISC-V) | INT8, Q4 | Edge inference via WiFi HTTP |
 
-WASM budget: ~160KB core + ~32KB JS wrapper.
+WASM budget: 491 KB (133 KB brotli).
 
 ## Supported Models
 
@@ -38,6 +38,8 @@ WASM budget: ~160KB core + ~32KB JS wrapper.
 | **CLIP** | Vision+Text | Supported |
 | **DINOv2** | Vision | Supported |
 | **LEWM** | World Model | Validated — runs on all 3 targets |
+| **Mamba** | SSM | Validated — 130M/370M, INT8+Q4, browser WASM |
+| **RWKV-7** | SSM | Validated — 0.1B/0.4B, value residuals, pre-LayerNorm |
 
 Adding a new model = write a config JSON + weight mapper. No engine changes.
 
@@ -96,6 +98,38 @@ Latent Emergent World Model — ViT encoder + DiT predictor for latent state pre
 - **ESP32-P4**: Phone camera -> WiFi HTTP -> LEWM inference -> JSON response
 - **Quantization**: INT8 (~4x smaller), Q4 (~6.4x compression, ~7MB weights)
 
+### Compression Results (First-Ever JEPA Quantization)
+
+| Config | Size | Quality (cos@20) |
+|--------|------|-------------------|
+| f32 baseline | 52.1 MB | 1.000 |
+| INT8 predictor | 21.4 MB | 0.9998 |
+| Q4 predictor | 17.4 MB | 0.998 |
+| Full Q4 (enc+pred) | 9.4 MB | 0.93 |
+
+No published work on JEPA quantization exists — these are first-of-kind results.
+
+**Browser demos**: [Main hub](synapse/web/) · [Compression benchmark](synapse/web/lewm-compress-demo/) · [SSM chat](synapse/web/ssm-demo/)
+
+## Roadmap
+
+| Goal | Status |
+|------|--------|
+| Sub-8MB LEWM at cos >0.95 | Current best: 9.4 MB, cos 0.93. Next: structured pruning, mixed Q4/Q8, Hadamard rotation |
+| ESP32-P4 hardware deployment | Code ready (25 tests passing), awaiting hardware for video demo |
+| WASM pre-quantized binaries | Skip the 69 MB f32 download — load ~10 MB Q4 directly |
+| npm package for WASM widget | Package synapse-wasm as embeddable `<script>` module |
+
+### Why Synapse?
+
+| Capability | Synapse | Alternatives |
+|-----------|---------|-------------|
+| JEPA/LEWM quantization | Q4: 9.4 MB, cos 0.93 (first published) | None exist |
+| WASM binary | 491 KB (133 KB brotli) | Candle: 2-5 MB |
+| SSM inference | Mamba + RWKV-7 via Zig SIMD | Candle: Mamba v1 only |
+| Edge deployment | ESP32-P4 ready | TFLite Micro (no world models) |
+| Model surgery | Wanda + channel + layer pruning | None in compiled languages |
+
 ## Architecture
 
 ```
@@ -145,6 +179,7 @@ cargo test --release                       # Full suite including benchmarks
 | 4 | SIMD kernel wiring, KV cache, Metal GPU shaders |
 | 5 | Multi-model support (LLaMA, Mistral, Phi-3, Gemma), GGUF loading, Q4 quantization |
 | 6 | LEWM world models, WASM runtime, ESP32 target, speculative decoding |
+| 7 | SSM inference (Mamba, RWKV-7), model surgery/pruning, LEWM Q4 compression, WASM demos |
 
 ## Built With
 

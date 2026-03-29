@@ -312,6 +312,139 @@ h1 {
   gap: 1.5rem;
 }
 
+/* Result tabs */
+.result-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 1rem;
+}
+.result-tabs button {
+  background: var(--bg-input);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  padding: 0.5rem 1.2rem;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  font-family: inherit;
+  transition: background 0.15s, color 0.15s;
+}
+.result-tabs button:hover { color: var(--text); }
+.result-tabs button.active {
+  background: var(--bg-card);
+  color: var(--text);
+  border-color: var(--accent-dim);
+  border-bottom: 1px solid var(--bg-card);
+  margin-bottom: -1px;
+}
+.result-tab-panel { display: none; }
+.result-tab-panel.active { display: block; }
+
+/* Explore tab */
+.explore-layout {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+.explore-canvas-wrap { flex: 1; min-width: 0; }
+.explore-canvas-wrap canvas {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+.explore-controls {
+  width: 180px;
+  flex-shrink: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+.explore-controls h3 {
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.slider-row {
+  margin-bottom: 0.5rem;
+}
+.slider-row .slider-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+.slider-row .slider-header .slider-val {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+.slider-row input[type=range] {
+  width: 100%;
+  accent-color: var(--accent);
+  margin-top: 2px;
+}
+.action-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 0.75rem;
+}
+.action-presets button {
+  background: var(--bg);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.action-presets button:hover { color: var(--text); border-color: var(--accent); }
+.run-compare-btn {
+  width: 100%;
+  background: var(--accent-dim);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  padding: 0.5rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+.run-compare-btn:hover { background: var(--accent); color: var(--bg); }
+.run-compare-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.cos-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: white;
+  background: var(--accent-dim);
+  pointer-events: none;
+}
+.cos-badge.good { background: #1a7f37; }
+.cos-badge.ok { background: #9a6700; }
+.cos-badge.bad { background: #cf222e; }
+.canvas-caption {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.4rem;
+}
+
+@media (max-width: 640px) {
+  .explore-layout { flex-direction: column; }
+  .explore-controls { width: 100%; }
+}
+
 /* Footer */
 .footer {
   text-align: center;
@@ -364,17 +497,20 @@ h1 {
 <body>
 <div class="container">
 
+  <a href="../" style="color:var(--accent); font-size:0.8rem; text-decoration:none; display:inline-block; margin-bottom:0.5rem;">← Back to Synapse demos</a>
   <h1>Synapse LEWM Compression Demo</h1>
   <p class="subtitle">World Model in Your Browser &mdash; Compare f32, INT8, Q4 quantization and Wanda pruning live</p>
 
   <div class="card">
     <h2>What is LEWM?</h2>
     <p class="description">
-      LEWM (Learned World Model) is a vision-based world model that learns to predict future
-      latent states from images and actions. It uses a ViT encoder (12 layers, 192 hidden) and
-      a DiT predictor with adaLN modulation (6 layers, 1024 inner dim). The full f32 model is
-      ~52MB of weights. Compression matters because this runs entirely in the browser via WASM
-      &mdash; smaller downloads mean faster cold starts, and lower memory means it works on more devices.
+      LEWM (Learned World Model) is a JEPA-based world model trained on the
+      <strong>PushT</strong> robotic task &mdash; a top-down environment where a circular pusher
+      moves a T-shaped block. The model encodes 224&times;224 images into a 192-dim latent state
+      (ViT encoder, 12 layers) and predicts future states from 2D push actions
+      (DiT predictor, 6 layers with adaLN). The full f32 model is ~52MB.
+      Compression matters because this runs entirely in the browser via WASM &mdash;
+      smaller models mean faster cold starts and wider device support.
     </p>
   </div>
 
@@ -445,30 +581,80 @@ h1 {
   </div>
 
   <div class="card" id="bench-panel" style="display:none">
-    <h2>Benchmark Results</h2>
-
-    <div class="bench-grid">
-      <div class="bench-stat">
-        <div class="value" id="bench-encode">--</div>
-        <div class="unit">ms</div>
-        <div class="label">Image Encode</div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+      <div class="result-tabs" style="margin-bottom:0;">
+        <button class="active" onclick="switchResultTab('benchmark')">Benchmark</button>
+        <button onclick="switchResultTab('explore')">Explore</button>
       </div>
-      <div class="bench-stat">
-        <div class="value" id="bench-rollout">--</div>
-        <div class="unit">ms</div>
-        <div class="label">20-Step Rollout</div>
-      </div>
-      <div class="bench-stat">
-        <div class="value" id="bench-throughput">--</div>
-        <div class="unit">steps/s</div>
-        <div class="label">Throughput</div>
+      <div id="active-model-label" style="font-family:var(--mono); font-size:0.8rem; color:var(--text-dim);">
       </div>
     </div>
 
-    <div class="heatmap-container">
-      <div class="heatmap-label">192-dim Latent State (encoded from test image)</div>
-      <div class="heatmap-bar" id="heatmap"></div>
-      <div class="heatmap-stats" id="heatmap-stats"></div>
+    <div class="result-tab-panel active" id="rtab-benchmark">
+      <div class="bench-grid">
+        <div class="bench-stat">
+          <div class="value" id="bench-encode">--</div>
+          <div class="unit">ms</div>
+          <div class="label">Image Encode</div>
+        </div>
+        <div class="bench-stat">
+          <div class="value" id="bench-rollout">--</div>
+          <div class="unit">ms</div>
+          <div class="label">20-Step Rollout</div>
+        </div>
+        <div class="bench-stat">
+          <div class="value" id="bench-throughput">--</div>
+          <div class="unit">steps/s</div>
+          <div class="label">Throughput</div>
+        </div>
+      </div>
+      <div class="heatmap-container">
+        <div class="heatmap-label">192-dim Latent State (encoded from test image)</div>
+        <div class="heatmap-bar" id="heatmap"></div>
+        <div class="heatmap-stats" id="heatmap-stats"></div>
+      </div>
+    </div>
+
+    <div class="result-tab-panel" id="rtab-explore">
+      <div class="explore-layout">
+        <div class="explore-canvas-wrap" style="position:relative;">
+          <canvas id="traj-canvas" width="500" height="320"></canvas>
+          <div class="cos-badge" id="cos-badge" style="display:none;">cos: --</div>
+          <div class="canvas-caption">
+            PushT latent trajectories — 192-dim state projected to 2D. Gray dashed = f32 reference. Colored = quantized model.
+            Both models encode the same scene and predict future states from identical push actions.
+          </div>
+        </div>
+        <div class="explore-controls">
+          <div style="margin-bottom:0.75rem;">
+            <div style="font-size:0.7rem; color:var(--text-dim); margin-bottom:4px;">Input scene (PushT task)</div>
+            <canvas id="scene-preview" width="120" height="120" style="width:100%; border-radius:4px; border:1px solid var(--border);"></canvas>
+            <div style="font-size:0.65rem; color:var(--text-dim); margin-top:2px; line-height:1.3;">
+              Top-down view: <span style="color:#e64d33;">T-block</span> to push, <span style="color:#3399e6;">blue pusher</span>
+            </div>
+          </div>
+          <h3>Push Direction</h3>
+          <div style="font-size:0.65rem; color:var(--text-dim); margin-bottom:0.4rem;">
+            Controls where the pusher moves. The world model predicts the resulting latent state.
+          </div>
+          <div class="slider-row">
+            <div class="slider-header"><span>dx (horizontal)</span><span class="slider-val" id="val-dx">0.50</span></div>
+            <input type="range" id="action-dx" min="-100" max="100" value="50">
+          </div>
+          <div class="slider-row">
+            <div class="slider-header"><span>dy (vertical)</span><span class="slider-val" id="val-dy">0.00</span></div>
+            <input type="range" id="action-dy" min="-100" max="100" value="0">
+          </div>
+          <div class="action-presets">
+            <button onclick="setAction(80,0)">Right</button>
+            <button onclick="setAction(-80,0)">Left</button>
+            <button onclick="setAction(0,-80)">Up</button>
+            <button onclick="setAction(0,80)">Down</button>
+            <button onclick="setAction(0,0)">Stay</button>
+          </div>
+          <button class="run-compare-btn" id="run-compare-btn" disabled onclick="runComparison()">Run Comparison</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -532,13 +718,13 @@ h1 {
           <td class="tbd" data-field="rollout-wanda40-q4">TBD</td>
           <td>aggressive</td>
         </tr>
-        <tr>
-          <td class="config-name">INT8enc + Q4pred</td>
-          <td>10.4 MB</td>
-          <td>118 ms</td>
-          <td>0.922</td>
-          <td class="tbd">TBD</td>
-          <td class="tbd">TBD</td>
+        <tr id="row-fullq4">
+          <td class="config-name">Full Q4 (enc+pred)</td>
+          <td>9.4 MB</td>
+          <td>111 ms</td>
+          <td>0.931</td>
+          <td class="tbd" data-field="encode-fullq4">TBD</td>
+          <td class="tbd" data-field="rollout-fullq4">TBD</td>
           <td>smallest</td>
         </tr>
         <tr>
@@ -589,26 +775,130 @@ h1 {
   </div>
 
   <div class="footer">
-    Powered by <strong>Synapse</strong> &mdash; 456 KB WASM engine, zero server dependencies
+    Powered by <strong>Synapse</strong> &mdash; 491 KB WASM engine, zero server dependencies
+    <br><a href="../" style="color:var(--accent);">Main Hub</a> · <span style="color:var(--accent);">Compression Demo</span> · <a href="../ssm-demo/" style="color:var(--accent);">SSM Chat</a>
   </div>
 
 </div>
 
+<script>
+// Tab switching + action presets (must be in regular script for onclick)
+window.switchResultTab = function(tab) {
+  document.querySelectorAll('.result-tab-panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.result-tabs button').forEach(function(b) { b.classList.remove('active'); });
+  document.getElementById('rtab-' + tab).classList.add('active');
+  // Find the clicked button
+  var buttons = document.querySelectorAll('.result-tabs button');
+  for (var i = 0; i < buttons.length; i++) {
+    if (buttons[i].textContent.toLowerCase() === tab) buttons[i].classList.add('active');
+  }
+};
+window.setAction = function(dx, dy) {
+  document.getElementById('action-dx').value = dx;
+  document.getElementById('action-dy').value = dy;
+  document.getElementById('val-dx').textContent = (dx / 100).toFixed(2);
+  document.getElementById('val-dy').textContent = (dy / 100).toFixed(2);
+};
+// Auto-switch to explore tab if URL has #explore
+if (window.location.hash === '#explore') {
+  // Wait for bench-panel to become visible, then switch
+  var observer = new MutationObserver(function(mutations) {
+    var panel = document.getElementById('bench-panel');
+    if (panel && panel.style.display !== 'none') {
+      switchResultTab('explore');
+      observer.disconnect();
+    }
+  });
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
+}
+</script>
 <script type="module">
 import init, { RealLeWM, RealLeWMInt8, RealLeWMQ4, RealLeWMFullQ4 } from '../synapse-wasm-pkg/synapse_wasm.js';
 
 let wasmReady = false;
 let currentModel = null;
 let currentFormat = null;
+let refModel = null;       // f32 reference (always created)
+let z0Ref = null;          // f32 encoded latent
+let z0Quant = null;        // quantized encoded latent
+let trajectoryPairs = [];  // [{ref, quant, label, color}]
+const COMPARE_STEPS = 20;
+const COMPARE_COLORS = ['#58a6ff', '#3fb950', '#f0883e', '#f85149', '#bc8cff'];
 
-// Generate a deterministic test image (224x224x3 HWC, f32)
+// Slider updates
+document.getElementById('action-dx').addEventListener('input', function(e) {
+  document.getElementById('val-dx').textContent = (e.target.value / 100).toFixed(2);
+});
+document.getElementById('action-dy').addEventListener('input', function(e) {
+  document.getElementById('val-dy').textContent = (e.target.value / 100).toFixed(2);
+});
+
+// Generate a PushT-like test image (224x224x3 HWC, f32, ImageNet-normalized)
+// PushT: top-down view of a table with a T-shaped block and a circular pusher
 function makeTestImage() {
-  const size = 224 * 224 * 3;
-  const img = new Float32Array(size);
-  for (let i = 0; i < size; i++) {
-    img[i] = ((i * 2654435761) >>> 0) / 4294967296;
+  var h = 224, w = 224;
+  var pixels = new Float32Array(h * w * 3);
+  var mean = [0.485, 0.456, 0.406];
+  var std = [0.229, 0.224, 0.225];
+
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var idx = (y * w + x) * 3;
+      // T-shaped block (top bar + vertical stem)
+      var inT = (y > h * 0.2 && y < h * 0.35 && x > w * 0.2 && x < w * 0.8) ||
+                (y >= h * 0.35 && y < h * 0.7 && x > w * 0.35 && x < w * 0.65);
+      // Circular pusher (bottom-right area)
+      var cx = w * 0.7, cy = h * 0.75, radius = w * 0.06;
+      var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+      var inPusher = dist < radius;
+
+      var r, g, b;
+      if (inPusher) {
+        r = 0.2; g = 0.6; b = 0.9; // blue pusher
+      } else if (inT) {
+        r = 0.9; g = 0.3; b = 0.2; // red-orange T-block
+      } else {
+        r = 0.85; g = 0.85; b = 0.82; // light gray table
+      }
+      pixels[idx]     = (r - mean[0]) / std[0];
+      pixels[idx + 1] = (g - mean[1]) / std[1];
+      pixels[idx + 2] = (b - mean[2]) / std[2];
+    }
   }
-  return img;
+  return pixels;
+}
+
+// Render the test image to a visible canvas for preview
+function renderTestImagePreview(canvasId) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var s = canvas.width; // square
+  var mean = [0.485, 0.456, 0.406];
+  var std = [0.229, 0.224, 0.225];
+
+  var imgData = ctx.createImageData(s, s);
+  for (var y = 0; y < s; y++) {
+    for (var x = 0; x < s; x++) {
+      var inT = (y > s * 0.2 && y < s * 0.35 && x > s * 0.2 && x < s * 0.8) ||
+                (y >= s * 0.35 && y < s * 0.7 && x > s * 0.35 && x < s * 0.65);
+      var cx = s * 0.7, cy = s * 0.75, radius = s * 0.06;
+      var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+      var inPusher = dist < radius;
+
+      var r, g, b;
+      if (inPusher) { r = 51; g = 153; b = 230; }
+      else if (inT) { r = 230; g = 77; b = 51; }
+      else { r = 217; g = 217; b = 209; }
+
+      var idx = (y * s + x) * 4;
+      imgData.data[idx] = r;
+      imgData.data[idx + 1] = g;
+      imgData.data[idx + 2] = b;
+      imgData.data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
 }
 
 // Generate deterministic test actions (20 steps x 10 dims)
@@ -837,12 +1127,18 @@ async function loadModel() {
 
     showProgress(false);
     var sizeMb = (data.length / 1048576).toFixed(1);
-    setStatus('Downloaded ' + sizeMb + ' MB. Constructing ' + format.toUpperCase() + ' model...');
+    setStatus('Downloaded ' + sizeMb + ' MB. Constructing models...');
 
+    // Always create f32 reference
+    var tc0 = performance.now();
+    refModel = new RealLeWM(data);
+    var refMs = (performance.now() - tc0).toFixed(1);
+
+    // Create quantized model (or reuse f32 if selected)
     var model;
     var tc = performance.now();
     if (format === 'f32') {
-      model = new RealLeWM(data);
+      model = refModel;
     } else if (format === 'int8') {
       model = RealLeWMInt8.from_f32_data(data);
     } else if (format === 'q4' || format === 'wanda20-q4' || format === 'wanda40-q4') {
@@ -854,7 +1150,43 @@ async function loadModel() {
 
     currentModel = model;
     currentFormat = format;
-    setStatus('Model ready in ' + constructMs + ' ms. Running benchmark...', 'ok');
+
+    // Encode test image on both models
+    var testImg = makeTestImage();
+    z0Ref = refModel.encode_image(testImg, 224, 224);
+    z0Quant = (format === 'f32') ? z0Ref : model.encode_image(testImg, 224, 224);
+
+    // Reset explore state
+    trajectoryPairs = [];
+    clearCanvas();
+    document.getElementById('cos-badge').style.display = 'none';
+    document.getElementById('run-compare-btn').disabled = false;
+
+    // Show which model is loaded in the header
+    var modelNames = { 'f32': 'f32 (52.1 MB)', 'int8': 'INT8 (21.4 MB)', 'q4': 'Q4 pred (17.4 MB)', 'wanda20-q4': 'Wanda 20%+Q4 (17.4 MB)', 'wanda40-q4': 'Wanda 40%+Q4 (17.4 MB)', 'fullq4': 'Full Q4 (9.4 MB)' };
+    var labelEl = document.getElementById('active-model-label');
+    while (labelEl.firstChild) labelEl.removeChild(labelEl.firstChild);
+    if (format === 'f32') {
+      var s1 = document.createElement('span');
+      s1.textContent = 'Showing: f32 baseline';
+      s1.style.color = 'var(--text)';
+      labelEl.appendChild(s1);
+    } else {
+      var t1 = document.createTextNode('Comparing: ');
+      var s2 = document.createElement('span');
+      s2.textContent = 'f32 ref';
+      s2.style.color = '#484f58';
+      var t2 = document.createTextNode(' vs ');
+      var s3 = document.createElement('span');
+      s3.textContent = modelNames[format];
+      s3.style.color = 'var(--accent)';
+      labelEl.appendChild(t1);
+      labelEl.appendChild(s2);
+      labelEl.appendChild(t2);
+      labelEl.appendChild(s3);
+    }
+
+    setStatus('Models ready (f32 ref: ' + refMs + 'ms, ' + format.toUpperCase() + ': ' + constructMs + 'ms). Running benchmark...', 'ok');
 
     await runBenchmark(model, format);
 
@@ -868,6 +1200,200 @@ async function loadModel() {
 }
 
 document.getElementById('load-btn').addEventListener('click', loadModel);
+
+// Render the scene preview on load
+renderTestImagePreview('scene-preview');
+
+// ── Explore: Trajectory Comparison ──────────────────────────
+
+function cosineSimilarity(a, b) {
+  var dot = 0, normA = 0, normB = 0;
+  for (var i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+function clearCanvas() {
+  var canvas = document.getElementById('traj-canvas');
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+window.runComparison = function() {
+  if (!refModel || !currentModel || !z0Ref) return;
+
+  var dx = parseInt(document.getElementById('action-dx').value) / 100;
+  var dy = parseInt(document.getElementById('action-dy').value) / 100;
+
+  // Build action tensor (20 steps x 10 dims)
+  var actions = new Float32Array(COMPARE_STEPS * 10);
+  for (var s = 0; s < COMPARE_STEPS; s++) {
+    actions[s * 10 + 0] = dx;
+    actions[s * 10 + 1] = dy;
+  }
+
+  // Run both models
+  var refTraj = refModel.rollout(new Float32Array(z0Ref), actions, COMPARE_STEPS);
+  var quantTraj = (currentFormat === 'f32')
+    ? refTraj
+    : currentModel.rollout(new Float32Array(z0Quant), actions, COMPARE_STEPS);
+
+  // Compute cosine similarity over full trajectory
+  var cos = cosineSimilarity(refTraj, quantTraj);
+
+  // Store pair
+  var label = 'dx=' + dx.toFixed(2) + ' dy=' + dy.toFixed(2);
+  trajectoryPairs.push({
+    ref: refTraj,
+    quant: quantTraj,
+    label: label,
+    color: COMPARE_COLORS[trajectoryPairs.length % COMPARE_COLORS.length],
+    cos: cos
+  });
+  if (trajectoryPairs.length > 5) trajectoryPairs.shift();
+
+  // Update cosine badge
+  var badge = document.getElementById('cos-badge');
+  badge.style.display = '';
+  badge.textContent = 'cos: ' + cos.toFixed(4);
+  badge.className = 'cos-badge ' + (cos > 0.99 ? 'good' : cos > 0.95 ? 'ok' : 'bad');
+
+  drawTrajectories();
+};
+
+function drawTrajectories() {
+  var canvas = document.getElementById('traj-canvas');
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 0.5;
+  for (var gx = 0; gx <= W; gx += 40) {
+    ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke();
+  }
+  for (var gy = 0; gy <= H; gy += 40) {
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke();
+  }
+
+  if (trajectoryPairs.length === 0) return;
+
+  // Compute global bounds across all trajectories
+  var minX = z0Ref[0], maxX = z0Ref[0], minY = z0Ref[1], maxY = z0Ref[1];
+  for (var p = 0; p < trajectoryPairs.length; p++) {
+    var pair = trajectoryPairs[p];
+    for (var s = 0; s < COMPARE_STEPS; s++) {
+      var rx = pair.ref[s * 192], ry = pair.ref[s * 192 + 1];
+      var qx = pair.quant[s * 192], qy = pair.quant[s * 192 + 1];
+      minX = Math.min(minX, rx, qx); maxX = Math.max(maxX, rx, qx);
+      minY = Math.min(minY, ry, qy); maxY = Math.max(maxY, ry, qy);
+    }
+  }
+  var rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1;
+  var pad = 40;
+  var toX = function(v) { return pad + ((v - minX) / rangeX) * (W - 2 * pad); };
+  var toY = function(v) { return pad + ((v - minY) / rangeY) * (H - 2 * pad); };
+
+  // Start point
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(toX(z0Ref[0]), toY(z0Ref[1]), 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8b949e';
+  ctx.font = '10px monospace';
+  ctx.fillText('z\u2080', toX(z0Ref[0]) + 9, toY(z0Ref[1]) - 5);
+
+  // Draw each trajectory pair
+  for (var pi = 0; pi < trajectoryPairs.length; pi++) {
+    var tp = trajectoryPairs[pi];
+    var alpha = 0.3 + 0.7 * ((pi + 1) / trajectoryPairs.length); // older = more transparent
+
+    // f32 reference (gray dashed)
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#484f58';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(toX(z0Ref[0]), toY(z0Ref[1]));
+    for (var sr = 0; sr < COMPARE_STEPS; sr++) {
+      ctx.lineTo(toX(tp.ref[sr * 192]), toY(tp.ref[sr * 192 + 1]));
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Quantized (colored solid)
+    ctx.strokeStyle = tp.color;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(toX(z0Quant[0]), toY(z0Quant[1]));
+    for (var sq = 0; sq < COMPARE_STEPS; sq++) {
+      ctx.lineTo(toX(tp.quant[sq * 192]), toY(tp.quant[sq * 192 + 1]));
+    }
+    ctx.stroke();
+
+    // Dots along quantized path
+    for (var sd = 0; sd < COMPARE_STEPS; sd++) {
+      var dotAlpha = 0.3 + 0.7 * (sd / COMPARE_STEPS);
+      ctx.globalAlpha = alpha * dotAlpha;
+      ctx.fillStyle = tp.color;
+      ctx.beginPath();
+      ctx.arc(toX(tp.quant[sd * 192]), toY(tp.quant[sd * 192 + 1]), 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
+
+    // Glowing endpoint (quantized)
+    var ex = toX(tp.quant[(COMPARE_STEPS - 1) * 192]);
+    var ey = toY(tp.quant[(COMPARE_STEPS - 1) * 192 + 1]);
+    ctx.shadowColor = tp.color;
+    ctx.shadowBlur = 8;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(ex, ey, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    // Gray endpoint (reference)
+    var rex = toX(tp.ref[(COMPARE_STEPS - 1) * 192]);
+    var rey = toY(tp.ref[(COMPARE_STEPS - 1) * 192 + 1]);
+    ctx.fillStyle = '#484f58';
+    ctx.beginPath();
+    ctx.arc(rex, rey, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // Draw labels last (on top of everything) with collision avoidance
+  var placedLabels = [];
+  for (var li = 0; li < trajectoryPairs.length; li++) {
+    var lp = trajectoryPairs[li];
+    var lAlpha = 0.3 + 0.7 * ((li + 1) / trajectoryPairs.length);
+    var lx = toX(lp.quant[(COMPARE_STEPS - 1) * 192]);
+    var ly = toY(lp.quant[(COMPARE_STEPS - 1) * 192 + 1]);
+
+    // Find a non-overlapping y position
+    var labelY = ly - 4;
+    for (var ci = 0; ci < placedLabels.length; ci++) {
+      if (Math.abs(lx - placedLabels[ci].x) < 80 && Math.abs(labelY - placedLabels[ci].y) < 13) {
+        labelY = placedLabels[ci].y + 13;
+      }
+    }
+    placedLabels.push({ x: lx, y: labelY });
+
+    ctx.save();
+    ctx.globalAlpha = lAlpha;
+    ctx.fillStyle = lp.color;
+    ctx.font = '10px monospace';
+    ctx.fillText(lp.label, lx + 8, labelY);
+    ctx.restore();
+  }
+}
 </script>
 </body>
 </html>
