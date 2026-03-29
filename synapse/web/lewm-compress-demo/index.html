@@ -1184,7 +1184,7 @@ async function loadModel() {
       labelEl.appendChild(s3);
     }
 
-    setStatus('Models ready (f32 ref: ' + refMs + 'ms, ' + format.toUpperCase() + ': ' + constructMs + 'ms). Running benchmark...', 'ok');
+    setStatus('Model ready (' + format.toUpperCase() + ': ' + constructMs + 'ms). Running benchmark...', 'ok');
 
     await runBenchmark(model, format);
 
