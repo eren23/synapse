@@ -64,3 +64,6 @@ weights/
 
 # Slim model binaries for WASM demo (large, not in LFS)
 synapse/web/lewm-compress-demo/lewm-slim-*.bin
+
+# ESP-IDF build cache
+.embuild/

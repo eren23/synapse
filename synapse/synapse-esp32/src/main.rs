@@ -139,31 +139,20 @@ fn main() {
         //
         // Build: cargo build --target riscv32imafc-esp-espidf --features esp32 --release
 
+        // esp-idf-svc handles the stdio init that raw esp-idf-sys doesn't
         esp_idf_svc::sys::link_patches();
         esp_idf_svc::log::EspLogger::initialize_default();
-        log::info!("Synapse ESP32-P4 inference server starting...");
 
-        // TODO: WiFi initialization
-        // let wifi = wifi_connect("SSID", "PASS")?;
+        // Use ESP_LOG directly instead of println (avoids Rust stdio)
+        log::info!("=== Synapse ESP32-P4 ALIVE ===");
+        log::info!("Heap: {} bytes", unsafe { esp_idf_svc::sys::esp_get_free_heap_size() });
+        log::info!("PSRAM: {} bytes", unsafe {
+            esp_idf_svc::sys::heap_caps_get_free_size(esp_idf_svc::sys::MALLOC_CAP_SPIRAM)
+        });
 
-        // TODO: Load model — options:
-        // a) HTTP POST to /load_model endpoint (flexible, no flash size limit)
-        // b) include_bytes!("path/to/model.bin") for slim models that fit in flash
-        // c) Read from SPIFFS/LittleFS partition
-
-        // For now, start with zeroed model for hardware validation
-        use synapse_esp32::model::{Esp32LeWM, Esp32Model};
-        let model = Esp32Model::LeWM(Esp32LeWM::new_zeroed());
-        let info = model.model_info();
-        log::info!("Model loaded: {} ({}, {} layers, {})",
-            info.name, info.model_type, info.num_layers, info.quantization);
-
-        // TODO: Start HTTP server
-        // synapse_esp32::server::start_http_server(model);
-
-        log::info!("ESP32-P4 ready. Model loaded, awaiting HTTP server implementation.");
         loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            log::info!("tick");
+            unsafe { esp_idf_svc::sys::vTaskDelay(200); }
         }
     }
 

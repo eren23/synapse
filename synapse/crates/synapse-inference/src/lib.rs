@@ -1,14 +1,17 @@
 pub mod capabilities;
+#[cfg(not(target_os = "espidf"))]
 pub mod chat_template;
 pub mod config;
 #[cfg(feature = "diffusion")]
 pub mod diffusion;
+#[cfg(not(target_os = "espidf"))]
 pub mod engine;
 pub mod generation;
 pub mod kv_cache;
 #[cfg(feature = "metal")]
 pub mod metal;
 pub mod models;
+#[cfg(not(target_os = "espidf"))]
 pub mod model_adapter;
 pub mod ops;
 pub mod pruning;
@@ -22,11 +25,13 @@ pub mod prelude {
         ArtifactBudget, CapabilityReport, FeatureStatus, ModelProfile, ModelSupportLevel,
         NativeKernelInfo, RuntimeProfile, SupportLevel,
     };
+    #[cfg(not(target_os = "espidf"))]
     pub use crate::chat_template::{ChatMessage, ChatTemplate, ChatTemplateOptions};
     pub use crate::config::{
         ArchitectureConfig, AttentionConfig, FFNConfig, ModelConfig, NormConfig, PositionConfig,
         QuantConfig,
     };
+    #[cfg(not(target_os = "espidf"))]
     pub use crate::engine::{InferenceEngine, RuntimePlan, RuntimeSummary};
     pub use crate::generation::{
         CombinedSampler, GenerationConfig, GenerationOutput, GenerationPipeline, GreedySampler,
@@ -34,6 +39,7 @@ pub mod prelude {
         TopPSampler,
     };
     pub use crate::models::{CausalLM, DecoderLayer, LoadResult, Model, ModelBuilder, ModelOutput, ModelState};
+    #[cfg(not(target_os = "espidf"))]
     pub use crate::model_adapter::{
         ModelAdapter, ModelAdapterKind, ReasoningMarkers, ThinkingMode,
     };
