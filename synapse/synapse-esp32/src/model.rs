@@ -1,14 +1,14 @@
 //! Model loading and inference for ESP32.
 //!
 //! Supports multiple model types:
-//! - LEWM world model (encode/predict/rollout)
+//! - LEWM world model (encode/predict/rollout) — f32 or Q4 quantized
 //! - Mamba Q4 language model (text generation)
 //! - RWKV-7 Q4 language model (text generation)
 
 use std::time::Instant;
 use synapse_inference::models::vision::lewm::{LeWMConfig, LeWorldModel};
 use synapse_inference::models::traits::{Model, ModelState};
-use synapse_inference::quantization::{Q4MambaModel, Q4RwkvModel};
+use synapse_inference::quantization::{Q4MambaModel, Q4RwkvModel, QuantizedQ4LeWM};
 use synapse_inference::models::ssm::mamba::config::MambaConfig;
 use synapse_inference::models::ssm::mamba::block::MambaBlock;
 use synapse_inference::models::ssm::mamba::model::MambaModel;
@@ -42,11 +42,17 @@ pub struct ModelInfo {
 // ---------------------------------------------------------------------------
 
 /// Loaded LEWM model ready for inference on ESP32.
+///
+/// Internally uses either f32 (for testing) or Q4 quantized weights
+/// (for deployment). Q4 models are loaded from LQ40 binary format.
 pub struct Esp32LeWM {
     config: LeWMConfig,
-    // For now, use f32 model. When Q4 binary loading is ready,
-    // switch to QuantizedQ4LeWM.
-    model: LeWorldModel,
+    inner: Esp32LeWMInner,
+}
+
+enum Esp32LeWMInner {
+    F32(LeWorldModel),
+    Q4(QuantizedQ4LeWM),
 }
 
 /// Timing information for a single inference call.
@@ -58,27 +64,42 @@ pub struct InferenceMetrics {
 }
 
 impl Esp32LeWM {
-    /// Create a model with default PushT config and zeroed weights.
+    /// Create a model with default PushT config and zeroed weights (f32).
     /// For testing without real weights.
     pub fn new_zeroed() -> Self {
         let config = LeWMConfig::pusht();
         let model = LeWorldModel::from_config(&config);
-        Esp32LeWM { config, model }
+        Esp32LeWM { config, inner: Esp32LeWMInner::F32(model) }
     }
 
-    /// Load model from compact binary data.
-    /// Format: [u32 header_len][JSON header][weight data]
-    /// TODO: Implement when weight conversion script is ready.
-    pub fn from_binary(_data: &[u8]) -> Result<Self, String> {
-        // Placeholder -- will be implemented with convert_lewm_q4_esp32.py
-        Err("Binary loading not yet implemented. Use new_zeroed() for testing.".into())
+    /// Create a slim model with zeroed weights (f32).
+    /// For testing the slim architecture path without real weights.
+    pub fn new_slim_zeroed() -> Self {
+        let config = LeWMConfig::slim();
+        let model = LeWorldModel::from_config(&config);
+        Esp32LeWM { config, inner: Esp32LeWMInner::F32(model) }
+    }
+
+    /// Load model from LQ40 binary data (Q4 quantized).
+    ///
+    /// Format: `[4B "LQ40"][4B config_len][JSON config][weight data]`
+    ///
+    /// Automatically detects slim models from config. Keeps weights in Q4
+    /// format (~12-17MB) to fit in ESP32-P4's 32MB PSRAM.
+    pub fn from_binary(data: &[u8]) -> Result<Self, String> {
+        let q4_model = QuantizedQ4LeWM::from_lq40_bytes(data)?;
+        let config = q4_model.config.clone();
+        Ok(Esp32LeWM { config, inner: Esp32LeWMInner::Q4(q4_model) })
     }
 
     /// Encode an image to a latent state.
     /// image: flat [H*W*3] f32 pixel data, normalized to [0,1].
     pub fn encode(&self, image: &[f32], height: usize, width: usize) -> (Vec<f32>, InferenceMetrics) {
         let start = Instant::now();
-        let latent = self.model.encode(image, height, width);
+        let latent = match &self.inner {
+            Esp32LeWMInner::F32(m) => m.encode(image, height, width),
+            Esp32LeWMInner::Q4(m) => m.encode(image, height, width),
+        };
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         let metrics = InferenceMetrics {
             operation: "encode".into(),
@@ -91,7 +112,10 @@ impl Esp32LeWM {
     /// Predict next latent state given current state and action.
     pub fn predict_next(&self, state: &[f32], action: &[f32]) -> (Vec<f32>, InferenceMetrics) {
         let start = Instant::now();
-        let next = self.model.predict_next(state, action);
+        let next = match &self.inner {
+            Esp32LeWMInner::F32(m) => m.predict_next(state, action),
+            Esp32LeWMInner::Q4(m) => m.predict_next(state, action),
+        };
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         let metrics = InferenceMetrics {
             operation: "predict".into(),
@@ -104,7 +128,10 @@ impl Esp32LeWM {
     /// Multi-step rollout.
     pub fn rollout(&self, state: &[f32], actions: &[Vec<f32>]) -> (Vec<Vec<f32>>, InferenceMetrics) {
         let start = Instant::now();
-        let trajectory = self.model.rollout(state, actions);
+        let trajectory = match &self.inner {
+            Esp32LeWMInner::F32(m) => m.rollout(state, actions),
+            Esp32LeWMInner::Q4(m) => m.rollout(state, actions),
+        };
         let ms = start.elapsed().as_secs_f64() * 1000.0;
         let steps = trajectory.len();
         let metrics = InferenceMetrics {
@@ -119,12 +146,20 @@ impl Esp32LeWM {
     pub fn latent_dim(&self) -> usize { self.config.latent_dim }
     pub fn action_dim(&self) -> usize { self.config.action_dim }
 
+    /// Whether this model is Q4-quantized (vs f32 testing mode).
+    pub fn is_quantized(&self) -> bool {
+        matches!(self.inner, Esp32LeWMInner::Q4(_))
+    }
+
     pub fn model_info(&self) -> ModelInfo {
+        let quant = if self.is_quantized() { "Q4_0" } else { "f32" };
+        let slim = if self.config.has_projection() { " slim" } else { "" };
         ModelInfo {
-            name: "LeWorldModel (PushT)".into(),
+            name: format!("LeWorldModel{} ({}d/{}e/{}p)", slim,
+                self.config.latent_dim, self.config.encoder_layers, self.config.predictor_layers),
             model_type: "lewm".into(),
             num_layers: self.config.predictor_layers,
-            quantization: "Q4_0".into(),
+            quantization: quant.into(),
         }
     }
 }
@@ -435,12 +470,44 @@ mod tests {
         assert_eq!(cfg.patch_size, 14);
         assert_eq!(cfg.predictor_layers, 6);
         assert_eq!(cfg.predictor_heads, 16);
+        assert!(!model.is_quantized());
+        assert_eq!(model.model_info().quantization, "f32");
     }
 
     #[test]
-    fn esp32_model_binary_loading_not_yet_implemented() {
+    fn esp32_model_binary_loading_rejects_invalid() {
         let result = Esp32LeWM::from_binary(&[0u8; 64]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn esp32_model_binary_loading_rejects_short() {
+        let result = Esp32LeWM::from_binary(b"LQ40");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn esp32_slim_model_creates_zeroed() {
+        let model = Esp32LeWM::new_slim_zeroed();
+        assert_eq!(model.latent_dim(), 96);
+        assert_eq!(model.action_dim(), 10);
+        assert!(!model.is_quantized());
+        let info = model.model_info();
+        assert!(info.name.contains("slim"));
+        assert_eq!(info.quantization, "f32");
+    }
+
+    #[test]
+    fn esp32_slim_model_config_correct() {
+        let model = Esp32LeWM::new_slim_zeroed();
+        let cfg = model.config();
+        // Slim: 96d latent, 4 encoder layers, 4 predictor layers
+        assert_eq!(cfg.latent_dim, 96);
+        assert_eq!(cfg.predictor_hidden, 192);
+        assert_eq!(cfg.encoder_layers, 4);
+        assert_eq!(cfg.predictor_layers, 4);
+        // Slim needs projection weights to run predict —
+        // predict_next requires loaded weights, not tested with zeroed model.
     }
 
     #[test]

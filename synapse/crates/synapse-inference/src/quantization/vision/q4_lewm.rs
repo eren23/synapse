@@ -333,6 +333,121 @@ impl QuantizedQ4LeWM {
         }
         states
     }
+
+    /// Load from LQ40 binary format (as produced by `export_lewm_q4`).
+    ///
+    /// Format: `[4B "LQ40"][4B config_len][JSON config][sequential weight data]`
+    ///
+    /// Parses the `q4-pred` mode binary: f32 ViT encoder + Q4 predictor layers.
+    /// Automatically supports slim models when the config has `latent_dim != predictor_hidden`.
+    pub fn from_lq40_bytes(data: &[u8]) -> Result<Self, String> {
+        use crate::weight_loading::AlignedBuffer;
+
+        if data.len() < 8 {
+            return Err("LQ40 data too short".into());
+        }
+        if &data[0..4] != b"LQ40" {
+            return Err("Not LQ40 format".into());
+        }
+
+        let config_len = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+        if data.len() < 8 + config_len {
+            return Err("LQ40 config truncated".into());
+        }
+        let config_json: serde_json::Value = serde_json::from_slice(&data[8..8 + config_len])
+            .map_err(|e| format!("LQ40 config parse error: {}", e))?;
+
+        let config = lq40_config_from_json(&config_json)?;
+        let mut off = 8 + config_len;
+
+        // --- f32 Encoder (use from_config + populate weights) ---
+        let vit_config = crate::models::vision::vit::ViTConfig {
+            image_size: config.image_size,
+            patch_size: config.patch_size,
+            hidden_size: config.encoder_hidden,
+            num_layers: config.encoder_layers,
+            num_heads: config.encoder_heads,
+            intermediate_size: config.encoder_inter,
+            channels: config.channels,
+            num_classes: 0,
+        };
+        let mut encoder = ViTModel::from_config(&vit_config);
+
+        encoder.patch_proj = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+        encoder.patch_proj_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+        encoder.cls_token = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+        encoder.pos_embed = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+
+        for layer in encoder.layers.iter_mut() {
+            layer.attn_norm_weight = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.attn_norm_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.w_q = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.q_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.w_k = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.k_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.w_v = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.v_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.w_o = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.o_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.ffn_norm_weight = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.ffn_norm_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.ffn_up = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.ffn_up_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.ffn_down = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+            layer.ffn_down_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+        }
+        encoder.final_norm_weight = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+        encoder.final_norm_bias = AlignedBuffer::from_slice(&lq40_read_f32(data, &mut off));
+
+        // --- Q4 Predictor ---
+        let predictor_pos_embed = lq40_read_f32(data, &mut off);
+        let mut predictor_layers = Vec::with_capacity(config.predictor_layers);
+        for _ in 0..config.predictor_layers {
+            let layer = lq40_read_q4_adaln_layer(data, &mut off)?;
+            predictor_layers.push(layer);
+        }
+        let predictor_norm_weight = lq40_read_f32(data, &mut off);
+        let predictor_norm_bias = lq40_read_f32(data, &mut off);
+
+        // --- Action encoder (f32) ---
+        let action_conv_weight = lq40_read_f32(data, &mut off);
+        let action_conv_bias = lq40_read_f32(data, &mut off);
+        let action_mlp1_weight = lq40_read_f32(data, &mut off);
+        let action_mlp1_bias = lq40_read_f32(data, &mut off);
+        let action_mlp2_weight = lq40_read_f32(data, &mut off);
+        let action_mlp2_bias = lq40_read_f32(data, &mut off);
+
+        // --- Projectors (f32) ---
+        let projector = lq40_read_projection_head(data, &mut off);
+        let pred_proj = lq40_read_projection_head(data, &mut off);
+
+        // --- Input/Cond projections (optional, for slim models) ---
+        let input_proj_weight = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
+        let input_proj_bias = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
+        let cond_proj_weight = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
+        let cond_proj_bias = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
+
+        Ok(QuantizedQ4LeWM {
+            config,
+            encoder,
+            predictor_layers,
+            predictor_pos_embed,
+            predictor_norm_weight,
+            predictor_norm_bias,
+            action_conv_weight,
+            action_conv_bias,
+            action_mlp1_weight,
+            action_mlp1_bias,
+            action_mlp2_weight,
+            action_mlp2_bias,
+            projector,
+            pred_proj,
+            input_proj_weight,
+            input_proj_bias,
+            cond_proj_weight,
+            cond_proj_bias,
+        })
+    }
 }
 
 /// Quantize a LeWorldModel to Q4_0.
@@ -1175,4 +1290,140 @@ mod tests {
         let traj = cached.rollout(&z, &actions);
         assert_eq!(traj.len(), 5);
     }
+
+    #[test]
+    fn lq40_rejects_invalid_magic() {
+        let result = QuantizedQ4LeWM::from_lq40_bytes(b"XXXX\x00\x00\x00\x00");
+        match result {
+            Err(e) => assert!(e.contains("Not LQ40"), "unexpected error: {}", e),
+            Ok(_) => panic!("expected error for invalid magic"),
+        }
+    }
+
+    #[test]
+    fn lq40_rejects_short_data() {
+        let result = QuantizedQ4LeWM::from_lq40_bytes(b"LQ40");
+        match result {
+            Err(e) => assert!(e.contains("too short"), "unexpected error: {}", e),
+            Ok(_) => panic!("expected error for short data"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LQ40 binary reader helpers
+// ---------------------------------------------------------------------------
+
+fn lq40_read_u32(data: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
+}
+
+/// Read a length-prefixed f32 vector.
+fn lq40_read_f32(data: &[u8], off: &mut usize) -> Vec<f32> {
+    let len = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let mut v = Vec::with_capacity(len);
+    for i in 0..len {
+        let base = *off + i * 4;
+        v.push(f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]));
+    }
+    *off += len * 4;
+    v
+}
+
+/// Read a Q4Linear from LQ40 binary (sparse format with bitmap).
+fn lq40_read_q4_linear(data: &[u8], off: &mut usize) -> Result<Q4Linear, String> {
+    use crate::quantization::Q4Block;
+
+    let out_features = lq40_read_u32(data, *off) as usize; *off += 4;
+    let in_features = lq40_read_u32(data, *off) as usize; *off += 4;
+    let total_blocks = lq40_read_u32(data, *off) as usize; *off += 4;
+    let nonzero_count = lq40_read_u32(data, *off) as usize; *off += 4;
+
+    let bitmap_bytes = (total_blocks + 7) / 8;
+    let bitmap = &data[*off..*off + bitmap_bytes];
+    *off += bitmap_bytes;
+
+    // Read only non-zero blocks, reconstruct full block array
+    let mut blocks = Vec::with_capacity(total_blocks);
+    let mut nz_idx = 0;
+    for i in 0..total_blocks {
+        let is_nonzero = (bitmap[i / 8] >> (i % 8)) & 1 == 1;
+        if is_nonzero {
+            let base = *off + nz_idx * 20;
+            let scale = f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]);
+            let mut nibbles = [0u8; 16];
+            nibbles.copy_from_slice(&data[base + 4..base + 20]);
+            blocks.push(Q4Block { scale, nibbles });
+            nz_idx += 1;
+        } else {
+            blocks.push(Q4Block { scale: 0.0, nibbles: [0u8; 16] });
+        }
+    }
+    *off += nonzero_count * 20;
+
+    Ok(Q4Linear { blocks, out_features, in_features })
+}
+
+/// Read a Q4 adaLN predictor layer from LQ40 format.
+fn lq40_read_q4_adaln_layer(data: &[u8], off: &mut usize) -> Result<QuantizedQ4AdaLNLayer, String> {
+    let adaln_linear = lq40_read_q4_linear(data, off)?;
+    let adaln_bias = lq40_read_f32(data, off);
+    let to_qkv = lq40_read_q4_linear(data, off)?;
+    let attn_out = lq40_read_q4_linear(data, off)?;
+    let attn_out_bias = lq40_read_f32(data, off);
+    let attn_norm_weight = lq40_read_f32(data, off);
+    let attn_norm_bias = lq40_read_f32(data, off);
+    let mlp_norm_weight = lq40_read_f32(data, off);
+    let mlp_norm_bias = lq40_read_f32(data, off);
+    let mlp_up = lq40_read_q4_linear(data, off)?;
+    let mlp_up_bias = lq40_read_f32(data, off);
+    let mlp_down = lq40_read_q4_linear(data, off)?;
+    let mlp_down_bias = lq40_read_f32(data, off);
+
+    Ok(QuantizedQ4AdaLNLayer {
+        adaln_linear, adaln_bias, to_qkv, attn_out, attn_out_bias,
+        attn_norm_weight, attn_norm_bias, mlp_norm_weight, mlp_norm_bias,
+        mlp_up, mlp_up_bias, mlp_down, mlp_down_bias,
+    })
+}
+
+/// Read a ProjectionHead: [u32 num_layers] then (weight, bias) f32 pairs.
+fn lq40_read_projection_head(data: &[u8], off: &mut usize) -> ProjectionHead {
+    use crate::weight_loading::AlignedBuffer;
+    let n = lq40_read_u32(data, *off) as usize; *off += 4;
+    let mut layers = Vec::with_capacity(n);
+    for _ in 0..n {
+        let w = lq40_read_f32(data, off);
+        let b = lq40_read_f32(data, off);
+        layers.push((AlignedBuffer::from_slice(&w), AlignedBuffer::from_slice(&b)));
+    }
+    ProjectionHead { layers }
+}
+
+/// Parse LeWMConfig from LQ40 JSON header.
+fn lq40_config_from_json(v: &serde_json::Value) -> Result<LeWMConfig, String> {
+    let get_usize = |key: &str| -> Result<usize, String> {
+        v.get(key)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .ok_or_else(|| format!("Missing '{}' in LQ40 config", key))
+    };
+
+    Ok(LeWMConfig {
+        image_size: get_usize("image_size")?,
+        patch_size: get_usize("patch_size")?,
+        encoder_hidden: get_usize("encoder_hidden")?,
+        encoder_layers: get_usize("encoder_layers")?,
+        encoder_heads: get_usize("encoder_heads")?,
+        encoder_inter: get_usize("encoder_inter")?,
+        predictor_hidden: get_usize("predictor_hidden")?,
+        predictor_layers: get_usize("predictor_layers")?,
+        predictor_heads: get_usize("predictor_heads")?,
+        predictor_inner_dim: get_usize("predictor_inner_dim")?,
+        predictor_inter: get_usize("predictor_inter")?,
+        action_dim: get_usize("action_dim")?,
+        latent_dim: get_usize("latent_dim")?,
+        channels: get_usize("channels")?,
+    })
 }

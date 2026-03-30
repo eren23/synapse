@@ -30,10 +30,16 @@ fn main() {
             cfg.image_size, cfg.image_size, cfg.patch_size,
             cfg.encoder_layers, cfg.predictor_layers);
 
-        // Test binary loading returns error (not yet implemented)
+        // Test binary loading rejects invalid data
         let result = Esp32LeWM::from_binary(&[0u8; 64]);
         assert!(result.is_err());
-        println!("Binary loading: correctly returns 'not yet implemented'");
+        println!("Binary loading: correctly rejects invalid data");
+
+        // Test slim model
+        let slim = Esp32LeWM::new_slim_zeroed();
+        assert_eq!(slim.latent_dim(), 96);
+        assert!(!slim.is_quantized());
+        println!("Slim model: latent_dim={}, quantized={}", slim.latent_dim(), slim.is_quantized());
 
         // Test server status handler (backwards compat)
         let status = synapse_esp32::server::handle_lewm_status(&lewm);
