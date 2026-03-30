@@ -130,6 +130,11 @@ pub struct FullyQuantizedLeWM {
     // Projectors (f32, small)
     pub projector: ProjectionHead,
     pub pred_proj: ProjectionHead,
+    // Input/conditioning projections (latent_dim → predictor_hidden bottleneck)
+    pub input_proj_weight: Vec<f32>,
+    pub input_proj_bias: Vec<f32>,
+    pub cond_proj_weight: Vec<f32>,
+    pub cond_proj_bias: Vec<f32>,
 }
 
 impl FullyQuantizedLeWM {
@@ -167,27 +172,52 @@ impl FullyQuantizedLeWM {
     /// Predict next latent using Q4 predictor.
     pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
-        let latent_dim = self.config.latent_dim;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        let action_hidden = self.encode_action(action);
+        let a_embed = self.encode_action(action);
 
-        // Build sequence with positional embedding
-        let seq_len = latent_dim / hidden;
-        let mut x = vec![0.0f32; seq_len * hidden];
-        for i in 0..seq_len * hidden {
-            x[i] = z_t[i] + self.predictor_pos_embed[i];
+        // Build input sequence: [z_t, a_embed, target_token]
+        let seq_len = 3;
+        let seq_dim = if has_proj { latent } else { hidden };
+        let mut seq = vec![0.0f32; seq_len * seq_dim];
+        seq[..seq_dim].copy_from_slice(z_t);
+        seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+
+        // Add positional embeddings
+        if !self.predictor_pos_embed.is_empty() {
+            let pos_len = self.predictor_pos_embed.len().min(seq.len());
+            for i in 0..pos_len {
+                seq[i] += self.predictor_pos_embed[i];
+            }
         }
+
+        // Apply projections if bottleneck architecture
+        let (mut x, conditioning) = if has_proj {
+            let projected_seq = super::apply_input_proj(
+                &self.input_proj_weight, &self.input_proj_bias,
+                &seq, seq_len, latent, hidden,
+            );
+            let projected_cond = super::apply_cond_proj(
+                &self.cond_proj_weight, &self.cond_proj_bias,
+                &a_embed, latent, hidden,
+            );
+            (projected_seq, projected_cond)
+        } else {
+            (seq, a_embed)
+        };
 
         // Q4 predictor layers
         for layer in &self.predictor_layers {
-            x = layer.forward(&x, &action_hidden, seq_len, hidden, num_heads, inner_dim, inter);
+            x = layer.forward(&x, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
         }
 
         let normed = layernorm(&x, &self.predictor_norm_weight, 1e-6, hidden);
-        self.pred_proj.forward(&normed)
+        let target = &normed[2 * hidden..3 * hidden];
+        self.pred_proj.forward(target)
     }
 
     pub fn rollout(&self, z_start: &[f32], actions: &[Vec<f32>]) -> Vec<Vec<f32>> {
@@ -202,7 +232,7 @@ impl FullyQuantizedLeWM {
 
     fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         let act_dim = self.config.action_dim;
-        let hidden = self.config.predictor_hidden;
+        let hidden = self.config.latent_dim;
 
         let conv_out = if !self.action_conv_weight.is_empty() {
             let out = matmul_t(action, &self.action_conv_weight, 1, act_dim, act_dim);
@@ -340,8 +370,13 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
         action_mlp2_bias: model.action_mlp2_bias.to_vec(),
         projector: clone_projection_head(&model.projector),
         pred_proj: clone_projection_head(&model.pred_proj),
+        input_proj_weight: model.input_proj_weight.to_vec(),
+        input_proj_bias: model.input_proj_bias.to_vec(),
+        cond_proj_weight: model.cond_proj_weight.to_vec(),
+        cond_proj_bias: model.cond_proj_bias.to_vec(),
     }
 }
+
 
 // ── Q4 encoder layer ──────────────────────────────────────────────
 
@@ -448,6 +483,11 @@ pub struct Q4FullLeWM {
     pub action_mlp2_bias: Vec<f32>,
     pub projector: ProjectionHead,
     pub pred_proj: ProjectionHead,
+    // Input/conditioning projections (latent_dim → predictor_hidden bottleneck)
+    pub input_proj_weight: Vec<f32>,
+    pub input_proj_bias: Vec<f32>,
+    pub cond_proj_weight: Vec<f32>,
+    pub cond_proj_bias: Vec<f32>,
 }
 
 impl Q4FullLeWM {
@@ -469,22 +509,50 @@ impl Q4FullLeWM {
 
     pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
-        let latent_dim = self.config.latent_dim;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        let action_hidden = self.encode_action(action, hidden);
-        let seq_len = latent_dim / hidden;
-        let mut x = vec![0.0f32; seq_len * hidden];
-        for i in 0..seq_len * hidden {
-            x[i] = z_t[i] + self.predictor_pos_embed[i];
+        let a_embed = self.encode_action(action, self.config.latent_dim);
+
+        // Build input sequence: [z_t, a_embed, target_token]
+        let seq_len = 3;
+        let seq_dim = if has_proj { latent } else { hidden };
+        let mut seq = vec![0.0f32; seq_len * seq_dim];
+        seq[..seq_dim].copy_from_slice(z_t);
+        seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+
+        // Add positional embeddings
+        if !self.predictor_pos_embed.is_empty() {
+            let pos_len = self.predictor_pos_embed.len().min(seq.len());
+            for i in 0..pos_len {
+                seq[i] += self.predictor_pos_embed[i];
+            }
         }
+
+        // Apply projections if bottleneck architecture
+        let (mut x, conditioning) = if has_proj {
+            let projected_seq = super::apply_input_proj(
+                &self.input_proj_weight, &self.input_proj_bias,
+                &seq, seq_len, latent, hidden,
+            );
+            let projected_cond = super::apply_cond_proj(
+                &self.cond_proj_weight, &self.cond_proj_bias,
+                &a_embed, latent, hidden,
+            );
+            (projected_seq, projected_cond)
+        } else {
+            (seq, a_embed)
+        };
+
         for layer in &self.predictor_layers {
-            x = layer.forward(&x, &action_hidden, seq_len, hidden, num_heads, inner_dim, inter);
+            x = layer.forward(&x, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
         }
         let normed = layernorm(&x, &self.predictor_norm_weight, 1e-6, hidden);
-        self.pred_proj.forward(&normed)
+        let target = &normed[2 * hidden..3 * hidden];
+        self.pred_proj.forward(target)
     }
 
     pub fn rollout(&self, z_start: &[f32], actions: &[Vec<f32>]) -> Vec<Vec<f32>> {
@@ -601,6 +669,10 @@ pub fn quantize_lewm_q4_full(model: &LeWorldModel) -> Q4FullLeWM {
         action_mlp2_bias: model.action_mlp2_bias.to_vec(),
         projector: clone_projection_head(&model.projector),
         pred_proj: clone_projection_head(&model.pred_proj),
+        input_proj_weight: model.input_proj_weight.to_vec(),
+        input_proj_bias: model.input_proj_bias.to_vec(),
+        cond_proj_weight: model.cond_proj_weight.to_vec(),
+        cond_proj_bias: model.cond_proj_bias.to_vec(),
     }
 }
 

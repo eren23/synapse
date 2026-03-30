@@ -184,6 +184,11 @@ pub struct QuantizedQ4LeWM {
     // Projection heads -- small, keep f32
     pub projector: ProjectionHead,
     pub pred_proj: ProjectionHead,
+    // Input/conditioning projections (latent_dim → predictor_hidden bottleneck)
+    pub input_proj_weight: Vec<f32>,
+    pub input_proj_bias: Vec<f32>,
+    pub cond_proj_weight: Vec<f32>,
+    pub cond_proj_bias: Vec<f32>,
 }
 
 impl QuantizedQ4LeWM {
@@ -198,7 +203,7 @@ impl QuantizedQ4LeWM {
     /// Encode an action vector to an action embedding (f32 path).
     fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         let act_dim = self.config.action_dim;
-        let hidden = self.config.predictor_hidden;
+        let hidden = self.config.latent_dim;
 
         // 1. 1D conv with kernel_size=1 (equivalent to linear layer)
         let mut conv_out = vec![0.0f32; act_dim];
@@ -256,19 +261,22 @@ impl QuantizedQ4LeWM {
     /// Uses the Q4-quantized predictor layers for the heavy DiT forward pass.
     pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        // 1. Encode action -> [hidden]
+        // 1. Encode action -> [latent_dim]
         let a_embed = self.encode_action(action);
 
-        // 2. Build input sequence: [z_t, a_embed, target_token] each [hidden]
+        // 2. Build input sequence at latent_dim or predictor_hidden
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * hidden];
-        seq[..hidden].copy_from_slice(z_t);
-        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        // seq[2*hidden..3*hidden] = zeros (target position to be predicted)
+        let seq_dim = if has_proj { latent } else { hidden };
+        let mut seq = vec![0.0f32; seq_len * seq_dim];
+        seq[..seq_dim].copy_from_slice(z_t);
+        seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+        // seq[2*seq_dim..3*seq_dim] = zeros (target position to be predicted)
 
         // 3. Add positional embeddings
         if !self.predictor_pos_embed.is_empty() {
@@ -278,12 +286,27 @@ impl QuantizedQ4LeWM {
             }
         }
 
-        // 4. Run through Q4-quantized predictor layers
+        // 4. Apply projections if bottleneck architecture
+        let (mut seq, conditioning) = if has_proj {
+            let projected_seq = super::apply_input_proj(
+                &self.input_proj_weight, &self.input_proj_bias,
+                &seq, seq_len, latent, hidden,
+            );
+            let projected_cond = super::apply_cond_proj(
+                &self.cond_proj_weight, &self.cond_proj_bias,
+                &a_embed, latent, hidden,
+            );
+            (projected_seq, projected_cond)
+        } else {
+            (seq, a_embed)
+        };
+
+        // 5. Run through Q4-quantized predictor layers
         for layer in &self.predictor_layers {
-            seq = layer.forward(&seq, &a_embed, seq_len, hidden, num_heads, inner_dim, inter);
+            seq = layer.forward(&seq, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
         }
 
-        // 5. Final norm
+        // 6. Final norm
         let mut normed = layernorm(&seq, &self.predictor_norm_weight, 1e-6, hidden);
         if !self.predictor_norm_bias.is_empty() {
             for t in 0..seq_len {
@@ -293,10 +316,10 @@ impl QuantizedQ4LeWM {
             }
         }
 
-        // 6. Extract target position (index 2) -> [hidden]
+        // 7. Extract target position (index 2) -> [hidden]
         let target = &normed[2 * hidden..3 * hidden];
 
-        // 7. Project back through pred_proj (f32)
+        // 8. Project back through pred_proj (f32)
         self.pred_proj.forward(target)
     }
 
@@ -370,8 +393,13 @@ pub fn quantize_lewm_q4(model: &LeWorldModel) -> QuantizedQ4LeWM {
         action_mlp2_bias: model.action_mlp2_bias.to_vec(),
         projector: clone_projection_head(&model.projector),
         pred_proj: clone_projection_head(&model.pred_proj),
+        input_proj_weight: model.input_proj_weight.to_vec(),
+        input_proj_bias: model.input_proj_bias.to_vec(),
+        cond_proj_weight: model.cond_proj_weight.to_vec(),
+        cond_proj_bias: model.cond_proj_bias.to_vec(),
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // CachedQ4Linear: dequant-at-load for BLAS-speed Q4 inference
@@ -594,6 +622,11 @@ pub struct CachedQ4LeWM {
     // Projection heads -- small, keep f32
     pub projector: ProjectionHead,
     pub pred_proj: ProjectionHead,
+    // Input/conditioning projections (latent_dim → predictor_hidden bottleneck)
+    pub input_proj_weight: Vec<f32>,
+    pub input_proj_bias: Vec<f32>,
+    pub cond_proj_weight: Vec<f32>,
+    pub cond_proj_bias: Vec<f32>,
 }
 
 impl CachedQ4LeWM {
@@ -608,7 +641,7 @@ impl CachedQ4LeWM {
     /// Encode an action vector to an action embedding (f32 path).
     fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         let act_dim = self.config.action_dim;
-        let hidden = self.config.predictor_hidden;
+        let hidden = self.config.latent_dim;
 
         // 1. 1D conv with kernel_size=1 (equivalent to linear layer)
         let mut conv_out = vec![0.0f32; act_dim];
@@ -666,19 +699,22 @@ impl CachedQ4LeWM {
     /// Uses the CachedQ4 predictor layers for the heavy DiT forward pass.
     pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        // 1. Encode action -> [hidden]
+        // 1. Encode action -> [latent_dim]
         let a_embed = self.encode_action(action);
 
-        // 2. Build input sequence: [z_t, a_embed, target_token] each [hidden]
+        // 2. Build input sequence at latent_dim or predictor_hidden
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * hidden];
-        seq[..hidden].copy_from_slice(z_t);
-        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        // seq[2*hidden..3*hidden] = zeros (target position to be predicted)
+        let seq_dim = if has_proj { latent } else { hidden };
+        let mut seq = vec![0.0f32; seq_len * seq_dim];
+        seq[..seq_dim].copy_from_slice(z_t);
+        seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+        // seq[2*seq_dim..3*seq_dim] = zeros (target position to be predicted)
 
         // 3. Add positional embeddings
         if !self.predictor_pos_embed.is_empty() {
@@ -688,12 +724,27 @@ impl CachedQ4LeWM {
             }
         }
 
-        // 4. Run through CachedQ4 predictor layers
+        // 4. Apply projections if bottleneck architecture
+        let (mut seq, conditioning) = if has_proj {
+            let projected_seq = super::apply_input_proj(
+                &self.input_proj_weight, &self.input_proj_bias,
+                &seq, seq_len, latent, hidden,
+            );
+            let projected_cond = super::apply_cond_proj(
+                &self.cond_proj_weight, &self.cond_proj_bias,
+                &a_embed, latent, hidden,
+            );
+            (projected_seq, projected_cond)
+        } else {
+            (seq, a_embed)
+        };
+
+        // 5. Run through CachedQ4 predictor layers
         for layer in &self.predictor_layers {
-            seq = layer.forward(&seq, &a_embed, seq_len, hidden, num_heads, inner_dim, inter);
+            seq = layer.forward(&seq, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
         }
 
-        // 5. Final norm
+        // 6. Final norm
         let mut normed = layernorm(&seq, &self.predictor_norm_weight, 1e-6, hidden);
         if !self.predictor_norm_bias.is_empty() {
             for t in 0..seq_len {
@@ -703,10 +754,10 @@ impl CachedQ4LeWM {
             }
         }
 
-        // 6. Extract target position (index 2) -> [hidden]
+        // 7. Extract target position (index 2) -> [hidden]
         let target = &normed[2 * hidden..3 * hidden];
 
-        // 7. Project back through pred_proj (f32)
+        // 8. Project back through pred_proj (f32)
         self.pred_proj.forward(target)
     }
 
@@ -783,6 +834,10 @@ pub fn cached_q4_lewm(model: &LeWorldModel) -> CachedQ4LeWM {
         action_mlp2_bias: model.action_mlp2_bias.to_vec(),
         projector: clone_projection_head(&model.projector),
         pred_proj: clone_projection_head(&model.pred_proj),
+        input_proj_weight: model.input_proj_weight.to_vec(),
+        input_proj_bias: model.input_proj_bias.to_vec(),
+        cond_proj_weight: model.cond_proj_weight.to_vec(),
+        cond_proj_bias: model.cond_proj_bias.to_vec(),
     }
 }
 

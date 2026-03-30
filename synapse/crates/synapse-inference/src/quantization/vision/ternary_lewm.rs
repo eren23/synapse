@@ -194,6 +194,11 @@ pub struct TernaryLeWM {
     pub action_mlp2_bias: Vec<f32>,
     pub projector: ProjectionHead,
     pub pred_proj: ProjectionHead,
+    // Input/conditioning projections (latent_dim → predictor_hidden bottleneck)
+    pub input_proj_weight: Vec<f32>,
+    pub input_proj_bias: Vec<f32>,
+    pub cond_proj_weight: Vec<f32>,
+    pub cond_proj_bias: Vec<f32>,
 }
 
 impl TernaryLeWM {
@@ -204,16 +209,17 @@ impl TernaryLeWM {
 
     pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
-        let latent_dim = self.config.latent_dim;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        // Action embedding (same as f32 version)
-        let action_hidden = self.encode_action(action, hidden);
+        // Action embedding → [latent_dim]
+        let action_hidden = self.encode_action(action, self.config.latent_dim);
 
         // Build input sequence: [z_t_projected] with positional embedding
-        let seq_len = latent_dim / hidden;
+        let seq_len = latent / hidden;
         let mut x = vec![0.0f32; seq_len * hidden];
         for t in 0..seq_len {
             for j in 0..hidden {
@@ -222,9 +228,24 @@ impl TernaryLeWM {
             }
         }
 
+        // Apply projections if bottleneck architecture
+        let (mut x, conditioning) = if has_proj {
+            let projected_seq = super::apply_input_proj(
+                &self.input_proj_weight, &self.input_proj_bias,
+                &x, seq_len, latent, hidden,
+            );
+            let projected_cond = super::apply_cond_proj(
+                &self.cond_proj_weight, &self.cond_proj_bias,
+                &action_hidden, latent, hidden,
+            );
+            (projected_seq, projected_cond)
+        } else {
+            (x, action_hidden)
+        };
+
         // Run through ternary predictor layers
         for layer in &self.predictor_layers {
-            x = layer.forward(&x, &action_hidden, seq_len, hidden, num_heads, inner_dim, inter);
+            x = layer.forward(&x, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
         }
 
         // Final norm + projection
@@ -370,8 +391,13 @@ pub fn quantize_lewm_ternary(model: &LeWorldModel) -> TernaryLeWM {
         action_mlp2_bias: model.action_mlp2_bias.to_vec(),
         projector: clone_projection_head(&model.projector),
         pred_proj: clone_projection_head(&model.pred_proj),
+        input_proj_weight: model.input_proj_weight.to_vec(),
+        input_proj_bias: model.input_proj_bias.to_vec(),
+        cond_proj_weight: model.cond_proj_weight.to_vec(),
+        cond_proj_bias: model.cond_proj_bias.to_vec(),
     }
 }
+
 
 #[cfg(test)]
 mod tests {
