@@ -35,6 +35,7 @@ fn main() {
     let mut checkpoint: Option<PathBuf> = None;
     let mut mode: String = "q4-pred".into();
     let mut output: Option<PathBuf> = None;
+    let mut config_path: Option<PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -42,14 +43,18 @@ fn main() {
             "--checkpoint" | "-c" => { i += 1; checkpoint = Some(PathBuf::from(&args[i])); }
             "--mode" | "-m" => { i += 1; mode = args[i].clone(); }
             "--output" | "-o" => { i += 1; output = Some(PathBuf::from(&args[i])); }
+            "--config" => { i += 1; config_path = Some(PathBuf::from(&args[i])); }
             "--help" | "-h" => {
-                eprintln!("Usage: export_lewm_q4 --checkpoint <path> --mode <mode> --output <path>");
+                eprintln!("Usage: export_lewm_q4 --checkpoint <path> --mode <mode> --output <path> [--config <json>]");
                 eprintln!();
                 eprintln!("Modes:");
                 eprintln!("  q4-pred     Q4 predictor only, f32 encoder (~17MB)");
                 eprintln!("  full        INT8 encoder + Q4 predictor (~10MB)");
                 eprintln!("  wanda20-q4  Wanda 20% prune then Q4 (~17MB, better compressed)");
                 eprintln!("  wanda40-q4  Wanda 40% prune then Q4 (~17MB, better compressed)");
+                eprintln!();
+                eprintln!("Options:");
+                eprintln!("  --config    config.json from convert_lewm_ckpt.py (for slim variants)");
                 std::process::exit(0);
             }
             _ => {}
@@ -72,8 +77,13 @@ fn main() {
         std::process::exit(1);
     }
 
-    let config = LeWMConfig::pusht();
+    let config = if let Some(cp) = config_path {
+        LeWMConfig::from_json(&cp).expect("Failed to load config.json")
+    } else {
+        LeWMConfig::pusht()
+    };
     eprintln!("Loading f32 LEWM from {}...", checkpoint.display());
+    eprintln!("  Config: {}d latent, {}e/{}p", config.latent_dim, config.encoder_layers, config.predictor_layers);
     let mut model = LeWorldModel::from_config(&config);
     let weights = load_safetensors(path).expect("Failed to load safetensors");
     let stats = model.load_weights(weights).expect("Failed to load weights");
@@ -235,6 +245,12 @@ fn export_q4_pred_with_mode(
     let proj_bytes = total_written - proj_start;
     eprintln!("    Projectors: {:.2} MB", proj_bytes as f64 / 1_048_576.0);
 
+    // --- Input/Cond projections (f32, for slim bottleneck models) ---
+    total_written += write_f32_vec(&mut file, &model.input_proj_weight);
+    total_written += write_f32_vec(&mut file, &model.input_proj_bias);
+    total_written += write_f32_vec(&mut file, &model.cond_proj_weight);
+    total_written += write_f32_vec(&mut file, &model.cond_proj_bias);
+
     eprintln!("  Total: {:.2} MB", total_written as f64 / 1_048_576.0);
 }
 
@@ -344,6 +360,12 @@ fn export_full(model: &FullyQuantizedLeWM, config: &LeWMConfig, output: &Path) {
     total_written += write_projection_head_from_lewm(&mut file, &model.pred_proj);
     let proj_bytes = total_written - proj_start;
     eprintln!("    Projectors: {:.2} MB", proj_bytes as f64 / 1_048_576.0);
+
+    // --- Input/Cond projections (f32, for slim bottleneck models) ---
+    total_written += write_f32_vec(&mut file, &model.input_proj_weight);
+    total_written += write_f32_vec(&mut file, &model.input_proj_bias);
+    total_written += write_f32_vec(&mut file, &model.cond_proj_weight);
+    total_written += write_f32_vec(&mut file, &model.cond_proj_bias);
 
     eprintln!("  Total: {:.2} MB", total_written as f64 / 1_048_576.0);
 }

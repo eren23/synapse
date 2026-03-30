@@ -214,3 +214,7 @@ path = "examples/geometric_attention_demo.rs"
 [[example]]
 name = "export_lewm_q4"
 path = "examples/export_lewm_q4.rs"
+
+[[example]]
+name = "lewm_slim_vs_baseline"
+path = "examples/lewm_slim_vs_baseline.rs"
