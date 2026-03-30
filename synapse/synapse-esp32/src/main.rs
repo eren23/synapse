@@ -123,17 +123,48 @@ fn main() {
 
         println!("\nAll host tests passed. Ready for ESP32-P4 deployment.");
         println!("  Supported models: LeWM, Mamba Q4, RWKV Q4");
-        println!("  Next: flash with `cargo build --target riscv32imc-esp-espidf --features esp32`");
+        println!("  Next: flash with `cargo build --target riscv32imafc-esp-espidf --features esp32 --release`");
     }
 
     #[cfg(feature = "esp32")]
     {
         // Real ESP32-P4 entry point
-        // TODO: Initialize when hardware arrives
-        // esp_idf_svc::sys::link_patches();
-        // esp_idf_svc::log::EspLogger::initialize_default();
-        // WiFi connect -> HTTP server -> inference loop
-        compile_error!("ESP32 target not yet configured. Install ESP-IDF toolchain first.");
+        // Requires: espup install, target riscv32imafc-esp-espidf
+        //
+        // Boot sequence:
+        // 1. Init ESP-IDF (patches, logger)
+        // 2. Connect WiFi
+        // 3. Load model from flash or HTTP POST
+        // 4. Start HTTP inference server
+        //
+        // Build: cargo build --target riscv32imafc-esp-espidf --features esp32 --release
+
+        esp_idf_svc::sys::link_patches();
+        esp_idf_svc::log::EspLogger::initialize_default();
+        log::info!("Synapse ESP32-P4 inference server starting...");
+
+        // TODO: WiFi initialization
+        // let wifi = wifi_connect("SSID", "PASS")?;
+
+        // TODO: Load model — options:
+        // a) HTTP POST to /load_model endpoint (flexible, no flash size limit)
+        // b) include_bytes!("path/to/model.bin") for slim models that fit in flash
+        // c) Read from SPIFFS/LittleFS partition
+
+        // For now, start with zeroed model for hardware validation
+        use synapse_esp32::model::{Esp32LeWM, Esp32Model};
+        let model = Esp32Model::LeWM(Esp32LeWM::new_zeroed());
+        let info = model.model_info();
+        log::info!("Model loaded: {} ({}, {} layers, {})",
+            info.name, info.model_type, info.num_layers, info.quantization);
+
+        // TODO: Start HTTP server
+        // synapse_esp32::server::start_http_server(model);
+
+        log::info!("ESP32-P4 ready. Model loaded, awaiting HTTP server implementation.");
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
     }
 
     #[cfg(not(any(feature = "host-test", feature = "esp32")))]

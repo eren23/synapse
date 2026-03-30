@@ -1,0 +1,33 @@
+# ESP32-P4 SDK configuration for synapse inference
+# Reference: https://docs.espressif.com/projects/esp-idf/en/stable/esp32p4/
+
+# --- PSRAM (32MB external, HEX mode for max bandwidth) ---
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_HEX=y
+CONFIG_SPIRAM_SPEED_200M=y
+# Allow malloc to use PSRAM for large allocations (model weights)
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096
+
+# --- Memory / heap ---
+# Increase main task stack for model loading
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=32768
+# Allocate large buffers in PSRAM
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# --- L2 cache (maximize for weight streaming) ---
+# ESP32-P4 has 768KB L2MEM that can be partitioned as cache + scratchpad
+CONFIG_ESP32P4_L2_CACHE_128KB=y
+
+# --- WiFi ---
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_ESP_WIFI_STA_DISCONNECTED_PM_ENABLE=n
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+# Enable dual-core scheduling
+CONFIG_FREERTOS_UNICORE=n

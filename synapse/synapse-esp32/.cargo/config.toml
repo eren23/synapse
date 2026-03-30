@@ -1,0 +1,20 @@
+# ESP32-P4 build configuration
+# Only applies when building for the ESP32-P4 target.
+# Host builds (cargo test, cargo run) are unaffected.
+
+[target.riscv32imafc-esp-espidf]
+linker = "ldproxy"
+# runner = "espflash flash --monitor"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[build]
+# Default target for host testing — override with --target for ESP32
+# target = "riscv32imafc-esp-espidf"
+
+[env]
+# ESP-IDF version pinning
+ESP_IDF_VERSION = "v5.3"
+# Required for PSRAM support on ESP32-P4
+ESP_IDF_SDKCONFIG_DEFAULTS = "sdkconfig.defaults"
