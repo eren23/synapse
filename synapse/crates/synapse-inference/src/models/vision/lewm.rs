@@ -60,6 +60,56 @@ impl LeWMConfig {
         }
     }
 
+    /// Slim configuration: 96d latent, 4 encoder layers, 4 predictor layers.
+    /// Predictor internals stay at 192d; uses input_proj/cond_proj to bridge.
+    pub fn slim() -> Self {
+        LeWMConfig {
+            image_size: 224,
+            patch_size: 14,
+            channels: 3,
+            encoder_hidden: 192,
+            encoder_layers: 4,
+            encoder_heads: 3,
+            encoder_inter: 768,
+            predictor_hidden: 192,
+            predictor_layers: 4,
+            predictor_heads: 16,
+            predictor_inner_dim: 1024,
+            predictor_inter: 2048,
+            action_dim: 10,
+            latent_dim: 96,
+        }
+    }
+
+    /// Load config from a JSON file (written by convert_lewm_ckpt.py).
+    pub fn from_json(path: &std::path::Path) -> Result<Self, String> {
+        let data = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read config: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(&data)
+            .map_err(|e| format!("Failed to parse config JSON: {e}"))?;
+        Ok(LeWMConfig {
+            image_size: v["image_size"].as_u64().unwrap_or(224) as usize,
+            patch_size: v["patch_size"].as_u64().unwrap_or(14) as usize,
+            channels: v["channels"].as_u64().unwrap_or(3) as usize,
+            encoder_hidden: v["encoder_hidden"].as_u64().unwrap_or(192) as usize,
+            encoder_layers: v["encoder_layers"].as_u64().unwrap_or(6) as usize,
+            encoder_heads: v["encoder_heads"].as_u64().unwrap_or(3) as usize,
+            encoder_inter: v["encoder_inter"].as_u64().unwrap_or(768) as usize,
+            predictor_hidden: v["predictor_hidden"].as_u64().unwrap_or(192) as usize,
+            predictor_layers: v["predictor_layers"].as_u64().unwrap_or(6) as usize,
+            predictor_heads: v["predictor_heads"].as_u64().unwrap_or(16) as usize,
+            predictor_inner_dim: v["predictor_inner_dim"].as_u64().unwrap_or(1024) as usize,
+            predictor_inter: v["predictor_inter"].as_u64().unwrap_or(2048) as usize,
+            action_dim: v["action_dim"].as_u64().unwrap_or(10) as usize,
+            latent_dim: v["latent_dim"].as_u64().unwrap_or(192) as usize,
+        })
+    }
+
+    /// Whether this config has a latent bottleneck (latent_dim != predictor_hidden).
+    pub fn has_projection(&self) -> bool {
+        self.latent_dim != self.predictor_hidden
+    }
+
     pub fn predictor_head_dim(&self) -> usize {
         self.predictor_inner_dim / self.predictor_heads
     }
@@ -334,6 +384,12 @@ pub struct LeWorldModel {
     pub action_mlp1_bias: AlignedBuffer,
     pub action_mlp2_weight: AlignedBuffer,
     pub action_mlp2_bias: AlignedBuffer,
+    // Predictor input/conditioning projections (latent_dim → predictor_hidden).
+    // Empty when latent_dim == predictor_hidden (baseline, no bottleneck).
+    pub input_proj_weight: AlignedBuffer,
+    pub input_proj_bias: AlignedBuffer,
+    pub cond_proj_weight: AlignedBuffer,
+    pub cond_proj_bias: AlignedBuffer,
     // Projector (encoder → predictor space)
     pub projector: ProjectionHead,
     // Pred_proj (predictor → output space)
@@ -374,6 +430,10 @@ impl LeWorldModel {
             action_mlp1_bias: AlignedBuffer::new_zeroed(0),
             action_mlp2_weight: AlignedBuffer::new_zeroed(0),
             action_mlp2_bias: AlignedBuffer::new_zeroed(0),
+            input_proj_weight: AlignedBuffer::new_zeroed(0),
+            input_proj_bias: AlignedBuffer::new_zeroed(0),
+            cond_proj_weight: AlignedBuffer::new_zeroed(0),
+            cond_proj_bias: AlignedBuffer::new_zeroed(0),
             projector: ProjectionHead::new_zeroed(3),
             pred_proj: ProjectionHead::new_zeroed(3),
         }
@@ -393,10 +453,10 @@ impl LeWorldModel {
     /// Encode an action vector to an action embedding.
     ///
     /// `action`: `[action_dim]` (e.g. `[10]`).
-    /// Returns `[predictor_hidden]`.
+    /// Returns `[latent_dim]` (== `predictor_hidden` when no projection).
     fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         let act_dim = self.config.action_dim;
-        let hidden = self.config.predictor_hidden;
+        let hidden = self.config.latent_dim;
 
         // 1. 1D conv with kernel_size=1 is equivalent to a linear layer
         let mut conv_out = vec![0.0f32; act_dim];
@@ -455,6 +515,44 @@ impl LeWorldModel {
         out
     }
 
+    /// Apply input_proj: `[seq_len, latent_dim]` → `[seq_len, predictor_hidden]`.
+    fn apply_input_proj(&self, seq: &[f32], seq_len: usize) -> Vec<f32> {
+        let latent = self.config.latent_dim;
+        let hidden = self.config.predictor_hidden;
+        let mut out = vec![0.0f32; seq_len * hidden];
+        for t in 0..seq_len {
+            let row = matmul_t(
+                &seq[t * latent..(t + 1) * latent],
+                &self.input_proj_weight,
+                1,
+                latent,
+                hidden,
+            );
+            out[t * hidden..(t + 1) * hidden].copy_from_slice(&row);
+        }
+        if !self.input_proj_bias.is_empty() {
+            for t in 0..seq_len {
+                for j in 0..hidden {
+                    out[t * hidden + j] += self.input_proj_bias[j];
+                }
+            }
+        }
+        out
+    }
+
+    /// Apply cond_proj: `[latent_dim]` → `[predictor_hidden]`.
+    fn apply_cond_proj(&self, cond: &[f32]) -> Vec<f32> {
+        let latent = self.config.latent_dim;
+        let hidden = self.config.predictor_hidden;
+        let mut out = matmul_t(cond, &self.cond_proj_weight, 1, latent, hidden);
+        if !self.cond_proj_bias.is_empty() {
+            for j in 0..hidden {
+                out[j] += self.cond_proj_bias[j];
+            }
+        }
+        out
+    }
+
     /// Predict the next latent state given current latent and action.
     ///
     /// `z_t`: `[latent_dim]` — current latent state.
@@ -462,21 +560,23 @@ impl LeWorldModel {
     /// Returns `[latent_dim]` — predicted next latent state.
     pub fn predict_next(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        // 1. Encode action → [hidden]
+        // 1. Encode action → [latent_dim]
         let a_embed = self.encode_action(action);
 
-        // 2. Build input sequence: [z_t, a_embed, target_token] each [hidden]
+        // 2. Build input sequence at latent_dim: [z_t, a_embed, zeros]
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * hidden];
-        seq[..hidden].copy_from_slice(z_t);
-        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        // seq[2*hidden..3*hidden] = zeros (target position to be predicted)
+        let seq_dim = if has_proj { latent } else { hidden };
+        let mut seq = vec![0.0f32; seq_len * seq_dim];
+        seq[..seq_dim].copy_from_slice(z_t);
+        seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
 
-        // 3. Add positional embeddings
+        // 3. Add positional embeddings (at latent_dim or predictor_hidden)
         if !self.predictor_pos_embed.is_empty() {
             let pos_len = self.predictor_pos_embed.len().min(seq.len());
             for i in 0..pos_len {
@@ -484,14 +584,22 @@ impl LeWorldModel {
             }
         }
 
-        // 4. Run through predictor layers (conditioning = action embedding)
+        // 4. Apply projections if bottleneck architecture
+        let (mut seq, conditioning) = if has_proj {
+            let projected_seq = self.apply_input_proj(&seq, seq_len);
+            let projected_cond = self.apply_cond_proj(&a_embed);
+            (projected_seq, projected_cond)
+        } else {
+            (seq, a_embed)
+        };
+
+        // 5. Run through predictor layers (conditioning = projected action embedding)
         for layer in &self.predictor_layers {
-            seq = layer.forward(&seq, &a_embed, seq_len, hidden, num_heads, inner_dim, inter);
+            seq = layer.forward(&seq, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
         }
 
-        // 5. Final norm
+        // 6. Final norm
         let normed = layernorm(&seq, &self.predictor_norm_weight, 1e-6, hidden);
-        // Add norm bias
         let mut normed = normed;
         if !self.predictor_norm_bias.is_empty() {
             for t in 0..seq_len {
@@ -501,10 +609,10 @@ impl LeWorldModel {
             }
         }
 
-        // 6. Extract target position (index 2) → [hidden]
+        // 7. Extract target position (index 2) → [hidden]
         let target = &normed[2 * hidden..3 * hidden];
 
-        // 7. Project back through pred_proj
+        // 8. Project back through pred_proj → [latent_dim]
         self.pred_proj.forward(target)
     }
 
@@ -540,36 +648,54 @@ impl LeWorldModel {
         bufs: &mut LeWMBuffers,
     ) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
         let head_dim = inner_dim / num_heads;
+        let has_proj = !self.input_proj_weight.is_empty();
 
-        // 1. Encode action -> [hidden] (small, keep allocating)
+        // 1. Encode action -> [latent_dim]
         let a_embed = self.encode_action(action);
 
-        // 2. Build input sequence into bufs.seq: [z_t, a_embed, zeros]
+        // 2. Build input sequence and apply projections
         let seq_len = 3;
-        bufs.seq[..hidden].copy_from_slice(z_t);
-        bufs.seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        for j in 2 * hidden..3 * hidden {
-            bufs.seq[j] = 0.0;
-        }
-
-        // 3. Add positional embeddings
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(bufs.seq.len());
-            for i in 0..pos_len {
-                bufs.seq[i] += self.predictor_pos_embed[i];
+        let conditioning = if has_proj {
+            // Build sequence at latent_dim, then project
+            let seq_dim = latent;
+            let mut latent_seq = vec![0.0f32; seq_len * seq_dim];
+            latent_seq[..seq_dim].copy_from_slice(z_t);
+            latent_seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(latent_seq.len());
+                for i in 0..pos_len {
+                    latent_seq[i] += self.predictor_pos_embed[i];
+                }
             }
-        }
+            let projected = self.apply_input_proj(&latent_seq, seq_len);
+            bufs.seq[..seq_len * hidden].copy_from_slice(&projected);
+            self.apply_cond_proj(&a_embed)
+        } else {
+            bufs.seq[..hidden].copy_from_slice(z_t);
+            bufs.seq[hidden..2 * hidden].copy_from_slice(&a_embed);
+            for j in 2 * hidden..3 * hidden {
+                bufs.seq[j] = 0.0;
+            }
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(bufs.seq.len());
+                for i in 0..pos_len {
+                    bufs.seq[i] += self.predictor_pos_embed[i];
+                }
+            }
+            a_embed
+        };
 
-        // 4. Run through predictor layers with fused kernels
+        // 3. Run through predictor layers with fused kernels
         for layer in &self.predictor_layers {
             let mod_dim = 6 * hidden;
 
             // Step 1: Compute adaLN modulation into bufs.mod_params
-            let mod_result = matmul_t(&a_embed, &layer.adaln_weight, 1, hidden, mod_dim);
+            let mod_result = matmul_t(&conditioning, &layer.adaln_weight, 1, hidden, mod_dim);
             bufs.mod_params[..mod_dim].copy_from_slice(&mod_result);
             if !layer.adaln_bias.is_empty() {
                 for j in 0..mod_dim {
@@ -723,34 +849,49 @@ impl LeWorldModel {
         backend: &crate::metal::MetalBackend,
     ) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
+        let has_proj = !self.input_proj_weight.is_empty();
 
         // 1. Encode action on CPU (tiny, not worth GPU)
         let a_embed = self.encode_action(action);
 
-        // 2. Build input sequence on CPU: [z_t, a_embed, zeros]
+        // 2. Build input sequence and apply projections on CPU
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * hidden];
-        seq[..hidden].copy_from_slice(z_t);
-        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        // seq[2*hidden..3*hidden] = zeros (target position)
-
-        // 3. Add positional embeddings
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(seq.len());
-            for i in 0..pos_len {
-                seq[i] += self.predictor_pos_embed[i];
+        let (seq, conditioning) = if has_proj {
+            let mut latent_seq = vec![0.0f32; seq_len * latent];
+            latent_seq[..latent].copy_from_slice(z_t);
+            latent_seq[latent..2 * latent].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(latent_seq.len());
+                for i in 0..pos_len {
+                    latent_seq[i] += self.predictor_pos_embed[i];
+                }
             }
-        }
+            let projected_seq = self.apply_input_proj(&latent_seq, seq_len);
+            let projected_cond = self.apply_cond_proj(&a_embed);
+            (projected_seq, projected_cond)
+        } else {
+            let mut seq = vec![0.0f32; seq_len * hidden];
+            seq[..hidden].copy_from_slice(z_t);
+            seq[hidden..2 * hidden].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len {
+                    seq[i] += self.predictor_pos_embed[i];
+                }
+            }
+            (seq, a_embed)
+        };
 
-        // 4. Run 6 predictor layers on GPU (single command buffer)
+        // 3. Run predictor layers on GPU (single command buffer)
         let output = crate::metal::lewm_forward::lewm_predict_metal(
             &seq,
-            &a_embed,
+            &conditioning,
             state,
             backend,
         );
 
-        // 5. Final layernorm on CPU (small, [3, 192])
+        // 4. Final layernorm on CPU (small, [3, hidden])
         let normed = layernorm(&output, &self.predictor_norm_weight, 1e-6, hidden);
         let mut normed = normed;
         if !self.predictor_norm_bias.is_empty() {
@@ -761,12 +902,12 @@ impl LeWorldModel {
             }
         }
 
-        // 6. Extract target position (index 2) and project
+        // 5. Extract target position (index 2) and project
         let target = &normed[2 * hidden..3 * hidden];
         self.pred_proj.forward(target)
     }
 
-    /// Fused Metal predict: ONE kernel dispatch per layer (6 total).
+    /// Fused Metal predict: ONE kernel dispatch per layer.
     /// Uses the monolithic `adaln_layer_fused` shader.
     #[cfg(feature = "metal")]
     pub fn predict_next_metal_fused(
@@ -777,27 +918,37 @@ impl LeWorldModel {
         backend: &crate::metal::MetalBackend,
     ) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
+        let has_proj = !self.input_proj_weight.is_empty();
         let a_embed = self.encode_action(action);
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * hidden];
-        seq[..hidden].copy_from_slice(z_t);
-        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(seq.len());
-            for i in 0..pos_len {
-                seq[i] += self.predictor_pos_embed[i];
+        let (seq, conditioning) = if has_proj {
+            let mut ls = vec![0.0f32; seq_len * latent];
+            ls[..latent].copy_from_slice(z_t);
+            ls[latent..2 * latent].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pl = self.predictor_pos_embed.len().min(ls.len());
+                for i in 0..pl { ls[i] += self.predictor_pos_embed[i]; }
             }
-        }
+            (self.apply_input_proj(&ls, seq_len), self.apply_cond_proj(&a_embed))
+        } else {
+            let mut seq = vec![0.0f32; seq_len * hidden];
+            seq[..hidden].copy_from_slice(z_t);
+            seq[hidden..2 * hidden].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pl = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pl { seq[i] += self.predictor_pos_embed[i]; }
+            }
+            (seq, a_embed)
+        };
         let output = crate::metal::lewm_forward::lewm_predict_metal_fused(
-            &seq, &a_embed, state, backend,
+            &seq, &conditioning, state, backend,
         );
         let normed = layernorm(&output, &self.predictor_norm_weight, 1e-6, hidden);
         let mut normed = normed;
         if !self.predictor_norm_bias.is_empty() {
             for t in 0..seq_len {
-                for j in 0..hidden {
-                    normed[t * hidden + j] += self.predictor_norm_bias[j];
-                }
+                for j in 0..hidden { normed[t * hidden + j] += self.predictor_norm_bias[j]; }
             }
         }
         let target = &normed[2 * hidden..3 * hidden];
@@ -814,27 +965,37 @@ impl LeWorldModel {
         backend: &crate::metal::MetalBackend,
     ) -> Vec<f32> {
         let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
+        let has_proj = !self.input_proj_weight.is_empty();
         let a_embed = self.encode_action(action);
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * hidden];
-        seq[..hidden].copy_from_slice(z_t);
-        seq[hidden..2 * hidden].copy_from_slice(&a_embed);
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(seq.len());
-            for i in 0..pos_len {
-                seq[i] += self.predictor_pos_embed[i];
+        let (seq, conditioning) = if has_proj {
+            let mut ls = vec![0.0f32; seq_len * latent];
+            ls[..latent].copy_from_slice(z_t);
+            ls[latent..2 * latent].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pl = self.predictor_pos_embed.len().min(ls.len());
+                for i in 0..pl { ls[i] += self.predictor_pos_embed[i]; }
             }
-        }
+            (self.apply_input_proj(&ls, seq_len), self.apply_cond_proj(&a_embed))
+        } else {
+            let mut seq = vec![0.0f32; seq_len * hidden];
+            seq[..hidden].copy_from_slice(z_t);
+            seq[hidden..2 * hidden].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pl = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pl { seq[i] += self.predictor_pos_embed[i]; }
+            }
+            (seq, a_embed)
+        };
         let output = crate::metal::lewm_forward::lewm_predict_metal_fused_v3(
-            &seq, &a_embed, state, backend,
+            &seq, &conditioning, state, backend,
         );
         let normed = layernorm(&output, &self.predictor_norm_weight, 1e-6, hidden);
         let mut normed = normed;
         if !self.predictor_norm_bias.is_empty() {
             for t in 0..seq_len {
-                for j in 0..hidden {
-                    normed[t * hidden + j] += self.predictor_norm_bias[j];
-                }
+                for j in 0..hidden { normed[t * hidden + j] += self.predictor_norm_bias[j]; }
             }
         }
         let target = &normed[2 * hidden..3 * hidden];
@@ -908,6 +1069,24 @@ impl LeWorldModel {
         }
         if let Some(rest) = key.strip_prefix("predictor.transformer.layers.") {
             return self.set_predictor_layer_weight(rest, tensor);
+        }
+
+        // ── Input/conditioning projections (slim bottleneck models) ──
+        if key == "predictor.transformer.input_proj.weight" {
+            self.input_proj_weight = tensor.data.clone();
+            return true;
+        }
+        if key == "predictor.transformer.input_proj.bias" {
+            self.input_proj_bias = tensor.data.clone();
+            return true;
+        }
+        if key == "predictor.transformer.cond_proj.weight" {
+            self.cond_proj_weight = tensor.data.clone();
+            return true;
+        }
+        if key == "predictor.transformer.cond_proj.bias" {
+            self.cond_proj_bias = tensor.data.clone();
+            return true;
         }
 
         // ── Action encoder ───────────────────────────────────────────
