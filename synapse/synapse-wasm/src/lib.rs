@@ -217,6 +217,13 @@ pub struct RealLeWM {
     pred_proj_bn_bias: Vec<f32>,
     pred_proj_bn_mean: Vec<f32>,
     pred_proj_bn_var: Vec<f32>,
+
+    // Slim bottleneck support
+    latent_dim: usize,
+    input_proj_weight: Vec<f32>,
+    input_proj_bias: Vec<f32>,
+    cond_proj_weight: Vec<f32>,
+    cond_proj_bias: Vec<f32>,
 }
 
 // ── JSON header types ───────────────────────────────────────────────
@@ -395,9 +402,10 @@ impl RealLeWM {
             *v = gelu(*v);
         }
 
-        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, HIDDEN);
+        let action_out_dim = self.latent_dim;
+        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, action_out_dim);
         if !self.action_mlp2_b.is_empty() {
-            for j in 0..HIDDEN {
+            for j in 0..action_out_dim {
                 out[j] += self.action_mlp2_b[j];
             }
         }
@@ -558,54 +566,97 @@ impl RealLeWM {
     // ── Predictor Forward ───────────────────────────────────────────
 
     fn predict_next_inner(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
-        // 1. Encode action -> [HIDDEN]
         let a_embed = self.encode_action(action);
-
-        // 2. Project state through projector: [192] -> [2048] -> BN -> GELU -> [192]
-        let z_projected = Self::projection_forward(
-            z_t,
-            &self.projector_layers,
-            &self.projector_bn_weight,
-            &self.projector_bn_bias,
-            &self.projector_bn_mean,
-            &self.projector_bn_var,
-        );
-
-        // 3. Build sequence: [z_projected, action_embed, zeros] + pos_embed
+        let has_proj = !self.input_proj_weight.is_empty();
+        let latent = self.latent_dim;
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * HIDDEN];
-        seq[..HIDDEN].copy_from_slice(&z_projected);
-        seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
-        // seq[2*HIDDEN..3*HIDDEN] = zeros (target position)
 
-        // Add positional embeddings
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(seq.len());
-            for i in 0..pos_len {
-                seq[i] += self.predictor_pos_embed[i];
+        if has_proj {
+            // Slim bottleneck path: z_t is already in latent space (e.g. 96d)
+            let mut seq = vec![0.0f32; seq_len * latent];
+            seq[..latent].copy_from_slice(z_t);
+            seq[latent..2 * latent].copy_from_slice(&a_embed);
+
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len { seq[i] += self.predictor_pos_embed[i]; }
             }
+
+            // input_proj: [3, latent] -> [3, HIDDEN]
+            let mut projected = vec![0.0f32; seq_len * HIDDEN];
+            for t in 0..seq_len {
+                let row = matmul_t(&seq[t*latent..(t+1)*latent], &self.input_proj_weight, 1, latent, HIDDEN);
+                projected[t*HIDDEN..(t+1)*HIDDEN].copy_from_slice(&row);
+            }
+            if !self.input_proj_bias.is_empty() {
+                for t in 0..seq_len {
+                    for j in 0..HIDDEN { projected[t*HIDDEN+j] += self.input_proj_bias[j]; }
+                }
+            }
+
+            // cond_proj: [latent] -> [HIDDEN]
+            let mut conditioning = matmul_t(&a_embed, &self.cond_proj_weight, 1, latent, HIDDEN);
+            if !self.cond_proj_bias.is_empty() {
+                for j in 0..HIDDEN { conditioning[j] += self.cond_proj_bias[j]; }
+            }
+
+            // Run predictor at HIDDEN dim
+            let mut seq = projected;
+            for layer in &self.predictor_layers {
+                seq = self.adaln_layer_forward(&seq, &conditioning, layer, seq_len);
+            }
+
+            let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+            let target = &normed[2 * HIDDEN..3 * HIDDEN];
+
+            Self::projection_forward(target, &self.pred_proj_layers,
+                &self.pred_proj_bn_weight, &self.pred_proj_bn_bias,
+                &self.pred_proj_bn_mean, &self.pred_proj_bn_var)
+        } else {
+            // Original baseline path
+            // 1. Project state through projector: [192] -> [2048] -> BN -> GELU -> [192]
+            let z_projected = Self::projection_forward(
+                z_t,
+                &self.projector_layers,
+                &self.projector_bn_weight,
+                &self.projector_bn_bias,
+                &self.projector_bn_mean,
+                &self.projector_bn_var,
+            );
+
+            // 2. Build sequence: [z_projected, action_embed, zeros] + pos_embed
+            let mut seq = vec![0.0f32; seq_len * HIDDEN];
+            seq[..HIDDEN].copy_from_slice(&z_projected);
+            seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
+
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len {
+                    seq[i] += self.predictor_pos_embed[i];
+                }
+            }
+
+            // 3. Run through predictor layers (conditioning = action embedding)
+            for layer in &self.predictor_layers {
+                seq = self.adaln_layer_forward(&seq, &a_embed, layer, seq_len);
+            }
+
+            // 4. Final norm
+            let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+
+            // 5. Extract target position (index 2)
+            let target = &normed[2 * HIDDEN..3 * HIDDEN];
+
+            // 6. Project through pred_proj
+            Self::projection_forward(
+                target,
+                &self.pred_proj_layers,
+                &self.pred_proj_bn_weight,
+                &self.pred_proj_bn_bias,
+                &self.pred_proj_bn_mean,
+                &self.pred_proj_bn_var,
+            )
         }
-
-        // 4. Run through predictor layers (conditioning = action embedding)
-        for layer in &self.predictor_layers {
-            seq = self.adaln_layer_forward(&seq, &a_embed, layer, seq_len);
-        }
-
-        // 5. Final norm
-        let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
-
-        // 6. Extract target position (index 2)
-        let target = &normed[2 * HIDDEN..3 * HIDDEN];
-
-        // 7. Project through pred_proj
-        Self::projection_forward(
-            target,
-            &self.pred_proj_layers,
-            &self.pred_proj_bn_weight,
-            &self.pred_proj_bn_bias,
-            &self.pred_proj_bn_mean,
-            &self.pred_proj_bn_var,
-        )
     }
 }
 
@@ -643,6 +694,18 @@ impl RealLeWM {
         let get_opt =
             |name: &str| -> Vec<f32> { Self::get_tensor_opt(&header, data, data_start, name) };
 
+        // Count encoder layers from tensor map (fall back to constant)
+        let enc_layers_n = (0..).take_while(|i| {
+            header.contains_key(&format!("encoder.encoder.layer.{}.attention.attention.query.weight", i))
+        }).count();
+        let enc_layers_n = if enc_layers_n == 0 { ENCODER_LAYERS } else { enc_layers_n };
+
+        // Count predictor layers from tensor map (fall back to constant)
+        let pred_layers_n = (0..).take_while(|i| {
+            header.contains_key(&format!("predictor.transformer.layers.{}.adaLN_modulation.1.weight", i))
+        }).count();
+        let pred_layers_n = if pred_layers_n == 0 { PREDICTOR_LAYERS } else { pred_layers_n };
+
         // 3. Load encoder weights
         let encoder_patch_proj = get("encoder.embeddings.patch_embeddings.projection.weight")?;
         let encoder_patch_proj_bias = get("encoder.embeddings.patch_embeddings.projection.bias")?;
@@ -651,8 +714,8 @@ impl RealLeWM {
         let encoder_norm_w = get("encoder.layernorm.weight")?;
         let encoder_norm_b = get("encoder.layernorm.bias")?;
 
-        let mut encoder_layers = Vec::with_capacity(ENCODER_LAYERS);
-        for i in 0..ENCODER_LAYERS {
+        let mut encoder_layers = Vec::with_capacity(enc_layers_n);
+        for i in 0..enc_layers_n {
             let prefix = format!("encoder.encoder.layer.{}", i);
             encoder_layers.push(ViTLayerWeights {
                 q_w: get(&format!("{}.attention.attention.query.weight", prefix))?,
@@ -679,8 +742,8 @@ impl RealLeWM {
         let predictor_norm_w = get("predictor.transformer.norm.weight")?;
         let predictor_norm_b = get("predictor.transformer.norm.bias")?;
 
-        let mut predictor_layers = Vec::with_capacity(PREDICTOR_LAYERS);
-        for i in 0..PREDICTOR_LAYERS {
+        let mut predictor_layers = Vec::with_capacity(pred_layers_n);
+        for i in 0..pred_layers_n {
             let prefix = format!("predictor.transformer.layers.{}", i);
             predictor_layers.push(AdaLNWeights {
                 adaln_w: get(&format!("{}.adaLN_modulation.1.weight", prefix))?,
@@ -727,6 +790,20 @@ impl RealLeWM {
         let pred_proj_bn_mean = get_opt("pred_proj.net.1.running_mean");
         let pred_proj_bn_var = get_opt("pred_proj.net.1.running_var");
 
+        // 8. Load slim bottleneck projections (optional)
+        let input_proj_weight = get_opt("predictor.transformer.input_proj.weight");
+        let input_proj_bias = get_opt("predictor.transformer.input_proj.bias");
+        let cond_proj_weight = get_opt("predictor.transformer.cond_proj.weight");
+        let cond_proj_bias = get_opt("predictor.transformer.cond_proj.bias");
+
+        // Detect latent_dim from input_proj shape or fall back to HIDDEN
+        let latent_dim = if !input_proj_weight.is_empty() {
+            // input_proj is [HIDDEN, latent_dim], so latent_dim = len / HIDDEN
+            input_proj_weight.len() / HIDDEN
+        } else {
+            HIDDEN
+        };
+
         Ok(RealLeWM {
             encoder_patch_proj,
             encoder_patch_proj_bias,
@@ -755,12 +832,25 @@ impl RealLeWM {
             pred_proj_bn_bias,
             pred_proj_bn_mean,
             pred_proj_bn_var,
+            latent_dim,
+            input_proj_weight,
+            input_proj_bias,
+            cond_proj_weight,
+            cond_proj_bias,
         })
     }
 
-    /// Encode a 224x224x3 image (HWC, flat f32 array) to a latent state [192].
+    /// Encode a 224x224x3 image (HWC, flat f32 array) to a latent state.
+    /// For slim models with input_proj, projects 192d encoder output to latent space.
     pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
-        self.encode_image_inner(pixels, height, width)
+        let vit_out = self.encode_image_inner(pixels, height, width);
+        if !self.input_proj_weight.is_empty() {
+            Self::projection_forward(&vit_out,
+                &self.projector_layers, &self.projector_bn_weight, &self.projector_bn_bias,
+                &self.projector_bn_mean, &self.projector_bn_var)
+        } else {
+            vit_out
+        }
     }
 
     /// Predict next latent state given current state [192] and action [10].
@@ -768,9 +858,9 @@ impl RealLeWM {
         self.predict_next_inner(state, action)
     }
 
-    /// Multi-step rollout. Returns flattened array [num_steps * 192].
+    /// Multi-step rollout. Returns flattened array [num_steps * latent_dim].
     pub fn rollout(&self, state: &[f32], actions: &[f32], num_steps: usize) -> Vec<f32> {
-        let mut states = Vec::with_capacity(num_steps * LATENT_DIM);
+        let mut states = Vec::with_capacity(num_steps * self.latent_dim);
         let mut current = state.to_vec();
         for step in 0..num_steps {
             let action = &actions[step * ACTION_DIM..(step + 1) * ACTION_DIM];
@@ -780,9 +870,9 @@ impl RealLeWM {
         states
     }
 
-    /// Returns the latent dimension (192).
+    /// Returns the latent dimension (192 for baseline, 96 for slim).
     pub fn latent_dim(&self) -> usize {
-        LATENT_DIM
+        self.latent_dim
     }
 }
 
@@ -2617,6 +2707,13 @@ pub struct RealLeWMQ4 {
     pred_proj_bn_bias: Vec<f32>,
     pred_proj_bn_mean: Vec<f32>,
     pred_proj_bn_var: Vec<f32>,
+
+    // Slim bottleneck support
+    latent_dim: usize,
+    input_proj_weight: Vec<f32>,
+    input_proj_bias: Vec<f32>,
+    cond_proj_weight: Vec<f32>,
+    cond_proj_bias: Vec<f32>,
 }
 
 impl RealLeWMQ4 {
@@ -2724,9 +2821,10 @@ impl RealLeWMQ4 {
             *v = gelu(*v);
         }
 
-        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, HIDDEN);
+        let action_out_dim = self.latent_dim;
+        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, action_out_dim);
         if !self.action_mlp2_b.is_empty() {
-            for j in 0..HIDDEN {
+            for j in 0..action_out_dim {
                 out[j] += self.action_mlp2_b[j];
             }
         }
@@ -2841,44 +2939,79 @@ impl RealLeWMQ4 {
 
     fn predict_next_inner(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
         let a_embed = self.encode_action(action);
-
-        let z_projected = RealLeWM::projection_forward(
-            z_t,
-            &self.projector_layers,
-            &self.projector_bn_weight,
-            &self.projector_bn_bias,
-            &self.projector_bn_mean,
-            &self.projector_bn_var,
-        );
+        let has_proj = !self.input_proj_weight.is_empty();
+        let latent = self.latent_dim;
 
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * HIDDEN];
-        seq[..HIDDEN].copy_from_slice(&z_projected);
-        seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
 
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(seq.len());
-            for i in 0..pos_len {
-                seq[i] += self.predictor_pos_embed[i];
+        if has_proj {
+            // Slim bottleneck path: z_t is already in latent space (96d)
+            // from encode_image (first call) or pred_proj (subsequent calls)
+            let mut seq = vec![0.0f32; seq_len * latent];
+            seq[..latent].copy_from_slice(z_t);
+            seq[latent..2 * latent].copy_from_slice(&a_embed);
+
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len { seq[i] += self.predictor_pos_embed[i]; }
             }
+
+            // input_proj: [3, latent] -> [3, HIDDEN]
+            let mut projected = vec![0.0f32; seq_len * HIDDEN];
+            for t in 0..seq_len {
+                let row = matmul_t(&seq[t*latent..(t+1)*latent], &self.input_proj_weight, 1, latent, HIDDEN);
+                projected[t*HIDDEN..(t+1)*HIDDEN].copy_from_slice(&row);
+            }
+            if !self.input_proj_bias.is_empty() {
+                for t in 0..seq_len {
+                    for j in 0..HIDDEN { projected[t*HIDDEN+j] += self.input_proj_bias[j]; }
+                }
+            }
+
+            // cond_proj: [latent] -> [HIDDEN]
+            let mut conditioning = matmul_t(&a_embed, &self.cond_proj_weight, 1, latent, HIDDEN);
+            if !self.cond_proj_bias.is_empty() {
+                for j in 0..HIDDEN { conditioning[j] += self.cond_proj_bias[j]; }
+            }
+
+            // Run predictor at HIDDEN dim
+            let mut seq = projected;
+            for layer in &self.predictor_layers {
+                seq = self.adaln_layer_forward_q4(&seq, &conditioning, layer, seq_len);
+            }
+
+            let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+            let target = &normed[2 * HIDDEN..3 * HIDDEN];
+
+            RealLeWM::projection_forward(target, &self.pred_proj_layers,
+                &self.pred_proj_bn_weight, &self.pred_proj_bn_bias,
+                &self.pred_proj_bn_mean, &self.pred_proj_bn_var)
+        } else {
+            // Original baseline path (keep unchanged)
+            let z_projected = RealLeWM::projection_forward(z_t,
+                &self.projector_layers, &self.projector_bn_weight, &self.projector_bn_bias,
+                &self.projector_bn_mean, &self.projector_bn_var);
+
+            let mut seq = vec![0.0f32; seq_len * HIDDEN];
+            seq[..HIDDEN].copy_from_slice(&z_projected);
+            seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
+
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len { seq[i] += self.predictor_pos_embed[i]; }
+            }
+
+            for layer in &self.predictor_layers {
+                seq = self.adaln_layer_forward_q4(&seq, &a_embed, layer, seq_len);
+            }
+
+            let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+            let target = &normed[2 * HIDDEN..3 * HIDDEN];
+
+            RealLeWM::projection_forward(target, &self.pred_proj_layers,
+                &self.pred_proj_bn_weight, &self.pred_proj_bn_bias,
+                &self.pred_proj_bn_mean, &self.pred_proj_bn_var)
         }
-
-        for layer in &self.predictor_layers {
-            seq = self.adaln_layer_forward_q4(&seq, &a_embed, layer, seq_len);
-        }
-
-        let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
-
-        let target = &normed[2 * HIDDEN..3 * HIDDEN];
-
-        RealLeWM::projection_forward(
-            target,
-            &self.pred_proj_layers,
-            &self.pred_proj_bn_weight,
-            &self.pred_proj_bn_bias,
-            &self.pred_proj_bn_mean,
-            &self.pred_proj_bn_var,
-        )
     }
 
 }
@@ -2912,6 +3045,18 @@ impl RealLeWMQ4 {
         let get_opt =
             |name: &str| -> Vec<f32> { RealLeWM::get_tensor_opt(&header, data, data_start, name) };
 
+        // Count encoder layers from tensor map (fall back to constant)
+        let enc_layers_n = (0..).take_while(|i| {
+            header.contains_key(&format!("encoder.encoder.layer.{}.attention.attention.query.weight", i))
+        }).count();
+        let enc_layers_n = if enc_layers_n == 0 { ENCODER_LAYERS } else { enc_layers_n };
+
+        // Count predictor layers from tensor map (fall back to constant)
+        let pred_layers_n = (0..).take_while(|i| {
+            header.contains_key(&format!("predictor.transformer.layers.{}.adaLN_modulation.1.weight", i))
+        }).count();
+        let pred_layers_n = if pred_layers_n == 0 { PREDICTOR_LAYERS } else { pred_layers_n };
+
         // Load encoder weights (f32, same as RealLeWM)
         let encoder_patch_proj = get("encoder.embeddings.patch_embeddings.projection.weight")?;
         let encoder_patch_proj_bias = get("encoder.embeddings.patch_embeddings.projection.bias")?;
@@ -2920,8 +3065,8 @@ impl RealLeWMQ4 {
         let encoder_norm_w = get("encoder.layernorm.weight")?;
         let encoder_norm_b = get("encoder.layernorm.bias")?;
 
-        let mut encoder_layers = Vec::with_capacity(ENCODER_LAYERS);
-        for i in 0..ENCODER_LAYERS {
+        let mut encoder_layers = Vec::with_capacity(enc_layers_n);
+        for i in 0..enc_layers_n {
             let prefix = format!("encoder.encoder.layer.{}", i);
             encoder_layers.push(ViTLayerWeights {
                 q_w: get(&format!("{}.attention.attention.query.weight", prefix))?,
@@ -2948,8 +3093,8 @@ impl RealLeWMQ4 {
         let predictor_norm_w = get("predictor.transformer.norm.weight")?;
         let predictor_norm_b = get("predictor.transformer.norm.bias")?;
 
-        let mut predictor_layers = Vec::with_capacity(PREDICTOR_LAYERS);
-        for i in 0..PREDICTOR_LAYERS {
+        let mut predictor_layers = Vec::with_capacity(pred_layers_n);
+        for i in 0..pred_layers_n {
             let prefix = format!("predictor.transformer.layers.{}", i);
             let f32_layer = AdaLNWeights {
                 adaln_w: get(&format!("{}.adaLN_modulation.1.weight", prefix))?,
@@ -2998,6 +3143,19 @@ impl RealLeWMQ4 {
         let pred_proj_bn_mean = get_opt("pred_proj.net.1.running_mean");
         let pred_proj_bn_var = get_opt("pred_proj.net.1.running_var");
 
+        // Slim bottleneck projections (optional)
+        let input_proj_weight = get_opt("predictor.transformer.input_proj.weight");
+        let input_proj_bias = get_opt("predictor.transformer.input_proj.bias");
+        let cond_proj_weight = get_opt("predictor.transformer.cond_proj.weight");
+        let cond_proj_bias = get_opt("predictor.transformer.cond_proj.bias");
+
+        // Detect latent_dim from input_proj shape or fall back to HIDDEN
+        let latent_dim = if !input_proj_weight.is_empty() {
+            input_proj_weight.len() / HIDDEN
+        } else {
+            HIDDEN
+        };
+
         Ok(RealLeWMQ4 {
             encoder_patch_proj,
             encoder_patch_proj_bias,
@@ -3026,12 +3184,18 @@ impl RealLeWMQ4 {
             pred_proj_bn_bias,
             pred_proj_bn_mean,
             pred_proj_bn_var,
+            latent_dim,
+            input_proj_weight,
+            input_proj_bias,
+            cond_proj_weight,
+            cond_proj_bias,
         })
     }
 
     /// Load pre-quantized LQ40 binary (f32 encoder + Q4 predictor).
     /// Works for q4-pred, wanda20-q4, wanda40-q4 modes.
     pub fn from_lq40_data(data: &[u8]) -> Result<RealLeWMQ4, JsError> {
+        console_error_panic_hook::set_once();
         if data.len() < 8 { return Err(JsError::new("LQ40 data too short")); }
         if &data[0..4] != b"LQ40" { return Err(JsError::new("Not LQ40 format")); }
 
@@ -3040,6 +3204,7 @@ impl RealLeWMQ4 {
             .map_err(|e| JsError::new(&format!("LQ40 config parse error: {}", e)))?;
         let enc_layers_n = config["encoder_layers"].as_u64().unwrap_or(ENCODER_LAYERS as u64) as usize;
         let pred_layers_n = config["predictor_layers"].as_u64().unwrap_or(PREDICTOR_LAYERS as u64) as usize;
+        let latent_dim = config["latent_dim"].as_u64().unwrap_or(HIDDEN as u64) as usize;
         let mut off = 8 + config_len;
 
         // --- f32 encoder ---
@@ -3100,6 +3265,12 @@ impl RealLeWMQ4 {
         let projector_layers = lq40_read_projection(data, &mut off);
         let pred_proj_layers = lq40_read_projection(data, &mut off);
 
+        // Input/cond projections for slim bottleneck models
+        let input_proj_weight = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+        let input_proj_bias = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+        let cond_proj_weight = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+        let cond_proj_bias = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+
         Ok(RealLeWMQ4 {
             encoder_patch_proj, encoder_patch_proj_bias, encoder_cls_token, encoder_pos_embed,
             encoder_layers, encoder_norm_w, encoder_norm_b,
@@ -3111,11 +3282,22 @@ impl RealLeWMQ4 {
             pred_proj_layers,
             pred_proj_bn_weight: vec![], pred_proj_bn_bias: vec![],
             pred_proj_bn_mean: vec![], pred_proj_bn_var: vec![],
+            latent_dim,
+            input_proj_weight, input_proj_bias, cond_proj_weight, cond_proj_bias,
         })
     }
 
     pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
-        self.encode_image_inner(pixels, height, width)
+        let vit_out = self.encode_image_inner(pixels, height, width);
+        // Slim models: project 192d encoder output to latent space (96d)
+        // Baseline: predict_next handles projection (backward compat)
+        if !self.input_proj_weight.is_empty() {
+            RealLeWM::projection_forward(&vit_out,
+                &self.projector_layers, &self.projector_bn_weight, &self.projector_bn_bias,
+                &self.projector_bn_mean, &self.projector_bn_var)
+        } else {
+            vit_out
+        }
     }
 
     pub fn predict_next(&self, state: &[f32], action: &[f32]) -> Vec<f32> {
@@ -3123,7 +3305,8 @@ impl RealLeWMQ4 {
     }
 
     pub fn rollout(&self, state: &[f32], actions: &[f32], num_steps: usize) -> Vec<f32> {
-        let mut states = Vec::with_capacity(num_steps * LATENT_DIM);
+        let lat = self.latent_dim;
+        let mut states = Vec::with_capacity(num_steps * lat);
         let mut current = state.to_vec();
         for step in 0..num_steps {
             let action = &actions[step * ACTION_DIM..(step + 1) * ACTION_DIM];
@@ -3134,7 +3317,7 @@ impl RealLeWMQ4 {
     }
 
     pub fn latent_dim(&self) -> usize {
-        LATENT_DIM
+        self.latent_dim
     }
 
     pub fn action_dim(&self) -> usize {
@@ -3272,6 +3455,12 @@ pub struct RealLeWMFullQ4 {
     pred_proj_bn_bias: Vec<f32>,
     pred_proj_bn_mean: Vec<f32>,
     pred_proj_bn_var: Vec<f32>,
+    // Slim bottleneck projections
+    latent_dim: usize,
+    input_proj_weight: Vec<f32>,
+    input_proj_bias: Vec<f32>,
+    cond_proj_weight: Vec<f32>,
+    cond_proj_bias: Vec<f32>,
 }
 
 impl RealLeWMFullQ4 {
@@ -3332,37 +3521,77 @@ impl RealLeWMFullQ4 {
         let mut h1 = matmul_t(&conv_out, &self.action_mlp1_w, 1, ACTION_DIM, inter);
         add_bias(&mut h1, &self.action_mlp1_b, 1, inter);
         for v in h1.iter_mut() { *v = gelu(*v); }
-        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, HIDDEN);
-        add_bias(&mut out, &self.action_mlp2_b, 1, HIDDEN);
+        let action_out_dim = self.latent_dim;
+        let mut out = matmul_t(&h1, &self.action_mlp2_w, 1, inter, action_out_dim);
+        add_bias(&mut out, &self.action_mlp2_b, 1, action_out_dim);
         out
     }
 
     fn predict_next_inner(&self, z_t: &[f32], action: &[f32]) -> Vec<f32> {
-        let z_projected = RealLeWM::projection_forward(
-            z_t, &self.projector_layers,
-            &self.projector_bn_weight, &self.projector_bn_bias,
-            &self.projector_bn_mean, &self.projector_bn_var,
-        );
         let a_embed = self.encode_action(action);
+        let has_proj = !self.input_proj_weight.is_empty();
+        let latent = self.latent_dim;
         let seq_len = 3;
-        let mut seq = vec![0.0f32; seq_len * HIDDEN];
-        seq[..HIDDEN].copy_from_slice(&z_projected);
-        seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
-        if !self.predictor_pos_embed.is_empty() {
-            let pos_len = self.predictor_pos_embed.len().min(seq.len());
-            for i in 0..pos_len { seq[i] += self.predictor_pos_embed[i]; }
+
+        if has_proj {
+            // Slim: z_t is already in latent space (from encode_image or prev pred_proj)
+            let mut seq = vec![0.0f32; seq_len * latent];
+            seq[..latent].copy_from_slice(z_t);
+            seq[latent..2 * latent].copy_from_slice(&a_embed);
+
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len { seq[i] += self.predictor_pos_embed[i]; }
+            }
+
+            // input_proj: [3, latent] -> [3, HIDDEN]
+            let mut projected = vec![0.0f32; seq_len * HIDDEN];
+            for t in 0..seq_len {
+                let row = matmul_t(&seq[t*latent..(t+1)*latent], &self.input_proj_weight, 1, latent, HIDDEN);
+                projected[t*HIDDEN..(t+1)*HIDDEN].copy_from_slice(&row);
+            }
+            if !self.input_proj_bias.is_empty() {
+                for t in 0..seq_len {
+                    for j in 0..HIDDEN { projected[t*HIDDEN+j] += self.input_proj_bias[j]; }
+                }
+            }
+
+            // cond_proj: [latent] -> [HIDDEN]
+            let mut conditioning = matmul_t(&a_embed, &self.cond_proj_weight, 1, latent, HIDDEN);
+            if !self.cond_proj_bias.is_empty() {
+                for j in 0..HIDDEN { conditioning[j] += self.cond_proj_bias[j]; }
+            }
+
+            let mut seq = projected;
+            for layer in &self.predictor_layers {
+                seq = adaln_layer_forward_q4_static(&seq, &conditioning, layer, seq_len);
+            }
+            let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+            let target = &normed[2 * HIDDEN..3 * HIDDEN];
+            RealLeWM::projection_forward(target, &self.pred_proj_layers,
+                &self.pred_proj_bn_weight, &self.pred_proj_bn_bias,
+                &self.pred_proj_bn_mean, &self.pred_proj_bn_var)
+        } else {
+            // Baseline: project z_t from encoder space
+            let z_projected = RealLeWM::projection_forward(z_t, &self.projector_layers,
+                &self.projector_bn_weight, &self.projector_bn_bias,
+                &self.projector_bn_mean, &self.projector_bn_var);
+            let mut seq = vec![0.0f32; seq_len * HIDDEN];
+            seq[..HIDDEN].copy_from_slice(&z_projected);
+            seq[HIDDEN..2 * HIDDEN].copy_from_slice(&a_embed);
+            if !self.predictor_pos_embed.is_empty() {
+                let pos_len = self.predictor_pos_embed.len().min(seq.len());
+                for i in 0..pos_len { seq[i] += self.predictor_pos_embed[i]; }
+            }
+            for layer in &self.predictor_layers {
+                seq = adaln_layer_forward_q4_static(&seq, &a_embed, layer, seq_len);
+            }
+            let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
+            let target = &normed[2 * HIDDEN..3 * HIDDEN];
+            RealLeWM::projection_forward(target, &self.pred_proj_layers,
+                &self.pred_proj_bn_weight, &self.pred_proj_bn_bias,
+                &self.pred_proj_bn_mean, &self.pred_proj_bn_var)
         }
-        // Reuse Q4 predictor forward from RealLeWMQ4
-        for layer in &self.predictor_layers {
-            seq = adaln_layer_forward_q4_static(&seq, &a_embed, layer, seq_len);
-        }
-        let normed = layernorm(&seq, &self.predictor_norm_w, &self.predictor_norm_b, HIDDEN);
-        let target = &normed[2 * HIDDEN..3 * HIDDEN];
-        RealLeWM::projection_forward(
-            target, &self.pred_proj_layers,
-            &self.pred_proj_bn_weight, &self.pred_proj_bn_bias,
-            &self.pred_proj_bn_mean, &self.pred_proj_bn_var,
-        )
     }
 }
 
@@ -3535,6 +3764,9 @@ impl RealLeWMFullQ4 {
             action_conv_w, action_conv_b, action_mlp1_w, action_mlp1_b, action_mlp2_w, action_mlp2_b,
             projector_layers, projector_bn_weight, projector_bn_bias, projector_bn_mean, projector_bn_var,
             pred_proj_layers, pred_proj_bn_weight, pred_proj_bn_bias, pred_proj_bn_mean, pred_proj_bn_var,
+            latent_dim: HIDDEN,
+            input_proj_weight: vec![], input_proj_bias: vec![],
+            cond_proj_weight: vec![], cond_proj_bias: vec![],
         })
     }
 
@@ -3550,6 +3782,7 @@ impl RealLeWMFullQ4 {
             .map_err(|e| JsError::new(&format!("LQ40 config parse error: {}", e)))?;
         let enc_layers_n = config["encoder_layers"].as_u64().unwrap_or(ENCODER_LAYERS as u64) as usize;
         let pred_layers_n = config["predictor_layers"].as_u64().unwrap_or(PREDICTOR_LAYERS as u64) as usize;
+        let latent_dim = config["latent_dim"].as_u64().unwrap_or(HIDDEN as u64) as usize;
         let mut off = 8 + config_len;
 
         // --- INT8 encoder: dequantize to f32, then Q4-quantize ---
@@ -3612,6 +3845,12 @@ impl RealLeWMFullQ4 {
         let projector_layers = lq40_read_projection(data, &mut off);
         let pred_proj_layers = lq40_read_projection(data, &mut off);
 
+        // --- Input/cond projections (slim bottleneck models) ---
+        let input_proj_weight = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+        let input_proj_bias = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+        let cond_proj_weight = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+        let cond_proj_bias = if off < data.len() { lq40_read_f32_vec(data, &mut off) } else { vec![] };
+
         Ok(RealLeWMFullQ4 {
             encoder_patch_proj, encoder_patch_proj_bias, encoder_cls_token, encoder_pos_embed,
             encoder_layers, encoder_norm_w, encoder_norm_b,
@@ -3623,21 +3862,35 @@ impl RealLeWMFullQ4 {
             pred_proj_layers,
             pred_proj_bn_weight: vec![], pred_proj_bn_bias: vec![],
             pred_proj_bn_mean: vec![], pred_proj_bn_var: vec![],
+            latent_dim,
+            input_proj_weight, input_proj_bias, cond_proj_weight, cond_proj_bias,
         })
     }
 
     pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
-        self.encode_image_inner(pixels, height, width)
+        let vit_out = self.encode_image_inner(pixels, height, width);
+        if !self.input_proj_weight.is_empty() {
+            RealLeWM::projection_forward(&vit_out,
+                &self.projector_layers, &self.projector_bn_weight, &self.projector_bn_bias,
+                &self.projector_bn_mean, &self.projector_bn_var)
+        } else {
+            vit_out
+        }
     }
 
     pub fn predict_next(&self, state: &[f32], action: &[f32]) -> Vec<f32> {
         self.predict_next_inner(state, action)
     }
 
+    pub fn latent_dim(&self) -> usize {
+        self.latent_dim
+    }
+
     pub fn rollout(&self, state: &[f32], actions: &[f32], num_steps: usize) -> Vec<f32> {
         let act_dim = ACTION_DIM;
+        let lat = self.latent_dim;
         let mut z = state.to_vec();
-        let mut all_states = Vec::with_capacity(num_steps * HIDDEN);
+        let mut all_states = Vec::with_capacity(num_steps * lat);
         for step in 0..num_steps {
             let action = &actions[step * act_dim..(step + 1) * act_dim];
             z = self.predict_next_inner(&z, action);
@@ -3646,6 +3899,5 @@ impl RealLeWMFullQ4 {
         all_states
     }
 
-    pub fn latent_dim(&self) -> usize { HIDDEN }
     pub fn action_dim(&self) -> usize { ACTION_DIM }
 }
