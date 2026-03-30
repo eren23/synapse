@@ -58,3 +58,9 @@ docs/superpowers/
 #fpga example vectors
 synapse/fpga/sim/*.json
 synapse/fpga/sim/*.npy
+
+# Local model weights (large binary files)
+weights/
+
+# Slim model binaries for WASM demo (large, not in LFS)
+synapse/web/lewm-compress-demo/lewm-slim-*.bin

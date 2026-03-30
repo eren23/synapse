@@ -399,7 +399,7 @@
     <script type="module">
         const wasmModulePath = window.location.pathname.includes('/web/')
             ? '../synapse-wasm/pkg/synapse_wasm.js'
-            : './synapse-wasm/pkg/synapse_wasm.js';
+            : './synapse-wasm-pkg/synapse_wasm.js';
         const { default: init, RealLeWM, RealLeWMInt8, NeoUnify } = await import(wasmModulePath);
 
         let model = null;
