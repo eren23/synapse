@@ -774,6 +774,50 @@ pub fn q4_0_gemv(n: usize, k: usize, a: &[f32], b_q4: &[u8]) -> Result<Vec<f32>,
     Ok(c)
 }
 
+/// Projection GEMV with fused bias: output[m,n] = input[m,k] * weight[n,k]^T + bias[n].
+///
+/// `input` is `[m * k]`, `weight` is `[n * k]` (row-major, each row = one output neuron),
+/// `bias` is `[n]` (or empty for no bias). Returns `[m * n]` f32 output.
+pub fn projection_gemv_bias(
+    m: usize,
+    n: usize,
+    k: usize,
+    input: &[f32],
+    weight: &[f32],
+    bias: &[f32],
+) -> Result<Vec<f32>, SynapseError> {
+    if m == 0 || n == 0 || k == 0 {
+        return Ok(vec![0.0f32; m * n]);
+    }
+    if input.len() < m * k {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    if weight.len() < n * k {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    if !bias.is_empty() && bias.len() < n {
+        return Err(SynapseError::ShapeMismatch);
+    }
+    let mut out = vec![0.0f32; m * n];
+    let bias_ptr = if bias.is_empty() {
+        std::ptr::null()
+    } else {
+        bias.as_ptr()
+    };
+    unsafe {
+        check_status(ffi::syn_projection_gemv_bias(
+            m,
+            n,
+            k,
+            input.as_ptr(),
+            weight.as_ptr(),
+            bias_ptr,
+            out.as_mut_ptr(),
+        ))?;
+    }
+    Ok(out)
+}
+
 // ------------------------------------------------------------------
 // KV-Cache (RAII wrapper over opaque FFI handle)
 // ------------------------------------------------------------------

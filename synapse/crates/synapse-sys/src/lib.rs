@@ -497,4 +497,17 @@ extern "C" {
         seq_len: usize,
         head_size: usize,
     ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // Projection GEMV with fused bias
+    // ------------------------------------------------------------------
+    pub fn syn_projection_gemv_bias(
+        m: usize,
+        n: usize,
+        k: usize,
+        input: *const f32,
+        weight: *const f32,
+        bias: *const f32,
+        output: *mut f32,
+    ) -> syn_status_t;
 }
