@@ -1104,33 +1104,78 @@ static void int8linear_forward_into(
     int8_t *row_quant,
     float *out
 ) {
-    memset(out, 0, m * linear->out_features * sizeof(float));
+    size_t in_f = linear->in_features;
+    size_t out_f = linear->out_features;
+    size_t in_pad = linear->in_features_padded;
+
+    memset(out, 0, m * out_f * sizeof(float));
+
+    if (linear->weights_t != NULL && m > 1) {
+        /*
+         * Tiled PIE path: pre-quantize ALL input rows, then iterate
+         * weights outer / rows inner. Each weight row (in_pad bytes)
+         * is loaded from PSRAM once and reused for all m input rows.
+         *
+         * Memory reads: out_f * in_pad (weight matrix once)
+         *             + m * in_pad (input rows, tiny, stays in cache)
+         * vs old path: m * out_f * in_pad (weight matrix per row!)
+         */
+        int8_t *all_i8 = (int8_t *)heap_caps_aligned_alloc(
+            16, m * in_pad, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        float *scales = (float *)malloc(m * sizeof(float));
+
+        if (all_i8 && scales) {
+            /* Pre-quantize all input rows */
+            for (size_t row = 0; row < m; ++row) {
+                quantize_row_int8(x + row * in_f, in_f,
+                                  all_i8 + row * in_pad, &scales[row]);
+                if (in_pad > in_f) {
+                    memset(all_i8 + row * in_pad + in_f, 0, in_pad - in_f);
+                }
+            }
+
+            /* Weights outer, rows inner: each weight row loaded once */
+            for (size_t j = 0; j < out_f; ++j) {
+                const int8_t *wj = linear->weights_t + j * in_pad;
+                float w_scale = linear->scales.data[j];
+                for (size_t row = 0; row < m; ++row) {
+                    int32_t dot = pie_dot_int8(
+                        all_i8 + row * in_pad, wj, in_pad);
+                    out[row * out_f + j] =
+                        (float)dot * scales[row] * w_scale;
+                }
+            }
+
+            free(all_i8);
+            free(scales);
+            return;
+        }
+        /* Fall through to per-row path if alloc failed */
+        free(all_i8);
+        free(scales);
+    }
+
+    /* Per-row path (m==1 or no transposed weights or alloc failed) */
     for (size_t row = 0; row < m; ++row) {
         float row_scale = 1.0f;
-        const float *src = x + row * linear->in_features;
-        quantize_row_int8(src, linear->in_features, row_quant, &row_scale);
+        quantize_row_int8(x + row * in_f, in_f, row_quant, &row_scale);
 
         if (linear->weights_t != NULL) {
-            /* PIE path: use transposed weights [out][in_padded] */
-            /* Allocate int32 accumulator on stack (out_features <= 768) */
             int32_t acc_buf[768];
-            pie_int8_gemv(row_quant, linear->weights_t,
-                          linear->out_features, linear->in_features_padded,
-                          acc_buf);
-            for (size_t out_col = 0; out_col < linear->out_features; ++out_col) {
-                out[row * linear->out_features + out_col] =
-                    (float)acc_buf[out_col] * row_scale * linear->scales.data[out_col];
+            pie_int8_gemv(row_quant, linear->weights_t, out_f, in_pad, acc_buf);
+            for (size_t j = 0; j < out_f; ++j) {
+                out[row * out_f + j] =
+                    (float)acc_buf[j] * row_scale * linear->scales.data[j];
             }
         } else {
-            /* Scalar fallback (original path) */
-            for (size_t out_col = 0; out_col < linear->out_features; ++out_col) {
+            for (size_t j = 0; j < out_f; ++j) {
                 int32_t acc = 0;
-                for (size_t k = 0; k < linear->in_features; ++k) {
+                for (size_t k = 0; k < in_f; ++k) {
                     acc += (int32_t)row_quant[k] *
-                           (int32_t)linear->weights_data[k * linear->out_features + out_col];
+                           (int32_t)linear->weights_data[k * out_f + j];
                 }
-                out[row * linear->out_features + out_col] =
-                    (float)acc * row_scale * linear->scales.data[out_col];
+                out[row * out_f + j] =
+                    (float)acc * row_scale * linear->scales.data[j];
             }
         }
     }
