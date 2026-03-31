@@ -13,14 +13,29 @@ WiFi-connected HTTP inference server running on ESP32-P4 with embedded LEWM worl
 - 32 MB PSRAM detected, ~33.5 MB free after model load
 - Smoke tests run on boot: predict_next, rollout, encode, encode+predict
 
-### Benchmark Results (PSRAM @ 200 MHz, scalar C, no PIE)
+### Benchmark Results
+
+**Slim model (96d latent, 4 encoder + 4 predictor layers, PIE + dual-core):**
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| predict_next | 3,009 ms | 6 adaLN layers, 3 tokens, Q4 GEMV |
-| rollout (3 steps) | 9,028 ms | ~3,009 ms/step |
-| encode(image) | 70,913 ms | 6 ViT layers, 257 tokens, INT8 GEMV |
-| encode + predict | 73,921 ms | End-to-end |
+| predict_next | **583 ms** | 4 adaLN layers, Q4 PIE GEMV |
+| rollout (3 steps) | **1,748 ms** | ~583 ms/step |
+| encode(image) | **6,416 ms** | 4 ViT layers, dual-core attention, PIE INT8 |
+
+**Full model (192d, 6+6 layers, PIE + dual-core):**
+
+| Operation | Latency | Speedup vs scalar baseline |
+|-----------|---------|---------------------------|
+| predict_next | 828 ms | 3.7x (was 3,037 ms) |
+| encode(image) | ~10,000 ms | 8.2x (was 81,818 ms) |
+
+**Scalar baseline (200 MHz PSRAM, no PIE):**
+
+| Operation | Latency |
+|-----------|---------|
+| predict_next | 3,009 ms |
+| encode(image) | 70,913 ms |
 
 ### Parity (board vs Rust host reference)
 

@@ -1,12 +1,12 @@
 # ESP32-P4 Porting Status
 
-Last updated: 2026-03-30
+Last updated: 2026-03-31
 
 ## Board
 
 - **Board**: Waveshare ESP32-P4-WiFi6 (https://www.waveshare.com/esp32-p4-wifi6.htm)
 - **Chip**: ESP32-P4, revision v1.3 (eco2), dual-core RISC-V RV32IMAFC @ 400 MHz
-- **PSRAM**: 32 MB, AP vendor, generation 4, X16 (HEX) mode, detected at 20 MHz despite 200 MHz config
+- **PSRAM**: 32 MB, AP vendor, generation 4, X16 (HEX) mode, running at 200 MHz (requires `CONFIG_IDF_EXPERIMENTAL_FEATURES=y`)
 - **Flash**: 32 MB NOR, SPI DIO @ 80 MHz
 - **USB**: Single USB-C port — USB-JTAG/Serial (native, no CH340/CP2102). Shows as `/dev/cu.usbmodem*` on macOS
 - **WiFi**: Via companion ESP32-C6 chip over SDIO (WiFi 6 + BLE 5)
@@ -22,8 +22,14 @@ Last updated: 2026-03-30
    - "esp32p4 chip with 2 CPU core(s), silicon revision v1.3, 32MB external flash"
    - "Minimum free heap size: 608568 bytes"
    - Restarts every 10 seconds as designed
-4. **Host testing**: `cargo test -p synapse-esp32` (28 tests) all pass on macOS
+4. **Host testing**: `cargo test -p synapse-esp32` (31 tests) all pass on macOS
 5. **LQ40 binary loading**: `QuantizedQ4LeWM::from_lq40_bytes()` implemented and tested
+6. **ESP-IDF C app** (`esp-idf-app/`): production path for ESP32-P4 hardware
+   - WiFi HTTP inference server (esp_hosted + esp_wifi_remote)
+   - PIE SIMD kernels (esp.vmulas.s8.xacc, 16-wide INT8 MAC)
+   - Dual-core attention (Core 1 worker for query token parallelism)
+   - GELU LUT (1024 entries), tiled GEMV, PSRAM 200 MHz
+   - Slim-96d-full: predict 583ms, encode 6,416ms (12.8x vs scalar baseline)
 
 ## What Does NOT Work
 
@@ -63,9 +69,9 @@ python -m esptool --port /dev/cu.usbmodem* --chip esp32p4 --baud 921600 \
   0x10000 /tmp/synapse-esp32.bin
 ```
 
-### PSRAM speed stuck at 20 MHz
+### PSRAM speed stuck at 20 MHz (FIXED)
 
-Despite `CONFIG_SPIRAM_SPEED_200M=y` in sdkconfig.defaults, the boot log shows `esp_psram: Speed: 20MHz`. The Kconfig choice mechanism may require explicit `CONFIG_SPIRAM_SPEED_20M=n` to deselect the default.
+**Root cause**: `SPIRAM_SPEED_200M` depends on `CONFIG_IDF_EXPERIMENTAL_FEATURES=y` in ESP-IDF v5.4. Without it, the Kconfig choice silently falls back to 20 MHz. **Fix**: add `CONFIG_IDF_EXPERIMENTAL_FEATURES=y` to `sdkconfig.defaults`.
 
 ### Serial monitoring from non-TTY
 

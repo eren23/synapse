@@ -15,34 +15,51 @@
 - **PSRAM at 200 MHz** (requires `CONFIG_IDF_EXPERIMENTAL_FEATURES=y`).
 - Endpoints: `POST /predict`, `POST /rollout`, `POST /encode`, `GET /status`.
 
-### Baseline benchmarks (PSRAM @ 200 MHz, scalar C, no PIE)
+### Benchmarks
 
-| Operation | Latency |
-|-----------|---------|
-| predict_next | 3,009 ms |
-| rollout (3 steps) | 9,028 ms |
-| encode(image) | 70,913 ms |
-| encode + predict | 73,921 ms |
+**Full model (192d, 6 encoder + 6 predictor layers):**
+
+| Stage | predict_next | encode(image) |
+|-------|-------------|---------------|
+| Scalar C, PSRAM 20 MHz | 3,037 ms | 81,818 ms |
+| Scalar C, PSRAM 200 MHz | 3,009 ms | 70,913 ms |
+| +PIE INT8/Q4 GEMV | 774 ms | 20,524 ms |
+| +PIE attention + GELU LUT | 828 ms | 13,538 ms |
+| +Tiled GEMV (weights-outer) | 828 ms | 12,482 ms |
+
+**Slim model (96d latent, 4 encoder + 4 predictor layers):**
+
+| Stage | predict_next | encode(image) |
+|-------|-------------|---------------|
+| All PIE optimizations | 583 ms | 7,950 ms |
+| **+Dual-core attention** | **583 ms** | **6,416 ms** |
+
+**Encoder layer breakdown (slim, dual-core, per layer):**
+
+| Component | Time | % |
+|-----------|------|---|
+| LayerNorm | 12 ms | 1.2% |
+| QKV projections (PIE INT8) | 105 ms | 10.5% |
+| Attention (dual-core PIE QK^T) | 457 ms | 45.8% |
+| O projection (PIE INT8) | 40 ms | 4.0% |
+| FFN (PIE INT8 tiled + GELU LUT) | 384 ms | 38.5% |
+| **Layer total** | **998 ms** | |
 
 ### What is not working yet
 
-- The full encoder path is close to, but not exactly, numerically identical to the Rust host reference.
-  - Drift starts in encoder layer 0 after exact patch embedding.
-  - This currently looks like scalar C vs host pure-Rust math drift inside encoder compute, not a loader bug.
-- There are no PIE kernels yet; all verified timings so far are scalar C reference timings.
+- Encoder parity is near-match vs Rust host (scalar float drift, not a loader bug).
 - Camera/real image input not yet connected (test image is deterministic).
+- 48d/2e/2p slim model not yet exported and tested on hardware.
 
-### Corrected priority order
+### What was done (2026-03-31)
 
-The repo should not jump to PIE first. The right order is:
-
-1. Get end-to-end functional parity on device:
-   - `encode(image)`
-   - `encode(image) + predict_next(action)`
-2. Add a usable board I/O path:
-   - serial command protocol first
-   - camera or WiFi only after the compute path is correct
-3. Then accelerate the hot kernels with PIE.
+1. End-to-end parity confirmed (encoder near-match, predictor exact). DONE.
+2. WiFi HTTP server with companion web dashboard. DONE.
+3. PIE SIMD kernels: INT8 GEMV, Q4 GEMV, attention QK^T, GELU LUT. DONE.
+4. Dual-core attention (Core 1 handles second half of query tokens). DONE.
+5. Tiled GEMV (weights-outer loop for PSRAM cache reuse). DONE.
+6. PSRAM 200 MHz (`CONFIG_IDF_EXPERIMENTAL_FEATURES`). DONE.
+7. Slim model support (any variant works via dynamic config parsing). DONE.
 
 ## Hardware Overview
 
@@ -240,22 +257,38 @@ pub fn forward(&self, x: &[f32], m: usize) -> Vec<f32> {
 
 ### Done (2026-03-31)
 
-- WiFi HTTP server live with all inference endpoints
-- PSRAM at 200 MHz (was stuck at 20 MHz due to missing `CONFIG_IDF_EXPERIMENTAL_FEATURES`)
-- Companion web dashboard embedded and served from flash
-- Baseline benchmarks captured (predict: 3009ms, encode: 70913ms at 200MHz PSRAM)
+- WiFi HTTP server + companion web dashboard
+- PSRAM 200 MHz (`CONFIG_IDF_EXPERIMENTAL_FEATURES=y`)
+- PIE SIMD: INT8 GEMV (`esp.vmulas.s8.xacc`), Q4 GEMV, attention QK^T
+- GELU LUT (1024-entry table replacing `tanhf()`)
+- Tiled GEMV (weights-outer loop for PSRAM cache reuse)
+- Dual-core attention (Core 1 handles second half of 257 query tokens)
+- Slim model support (96d/4e/4p tested, any variant works dynamically)
+- 4 PIE self-tests on boot + per-component encoder profiling
 
-### Next: PIE SIMD kernels
+### Performance Roadmap: Further Kernel Optimizations
 
-The scalar end-to-end path is stable and profiled. The bottleneck is compute (GEMV inner loops), not memory bandwidth. PIE is the next step:
+Current slim-96d encoder layer: **998 ms** (attn 457ms + FFN 384ms + QKV/O 145ms + norm 12ms)
 
-1. Write `pie_gemv.c` with INT8 GEMV using `esp.vmac.s8` (16-wide MAC)
-2. Replace scalar `int8_gemv_row()` in encoder path
-3. Replace scalar `q4_gemv_row()` in predictor path (Q4→INT8 dequant + PIE MAC)
-4. Benchmark each change against 200MHz PSRAM baseline
+| Optimization | Target savings/layer | Complexity | Description |
+|-------------|---------------------|------------|-------------|
+| **FFN dual-core** | -150 ms | Easy | Same fork-join pattern as attention. Split 768 output features across cores. |
+| **V weighting PIE** | -100 ms | Medium | Quantize V per head to INT8, PIE dot for `scores × V` weighted sum. |
+| **Compiler -O2** | -50 ms | Easy | `CONFIG_COMPILER_OPTIMIZATION_PERF=y`. Currently building with `-Og`. |
+| **DMA weight prefetch** | -50 ms | Hard | GDMA-AXI prefetch next layer weights while computing current layer. |
+| **Shared QKV quantization** | -10 ms | Easy | Q/K/V all use same input; quantize once, not three times. |
+| **Combined** | **-360 ms/layer** | | **~5,000 ms encode (projected)** |
+
+### Model-Level Optimizations
+
+| Optimization | Target | Description |
+|-------------|--------|-------------|
+| **48d/2e/2p slim** | ~3s encode, ~300ms predict | Half the layers. Needs W&B export. |
+| **Patch pruning** | 4x fewer attention ops | Keep 128 of 256 patches. Needs quality evaluation. |
+| **Linear attention** | Eliminate O(n²) bottleneck | Research: replace full attention. Needs retraining. |
 
 ### Later
 
-- Camera or real image input (currently deterministic test image)
-- Slim model (48d/2e2p) testing for smallest possible inference
+- Camera or real image input
 - Encoder parity tolerance codification
+- Rust esp-idf-svc path (blocked on esp-rs P4 runtime fix)

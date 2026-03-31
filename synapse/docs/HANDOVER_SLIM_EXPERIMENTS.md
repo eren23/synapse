@@ -201,14 +201,24 @@ Done on real hardware:
 - **WiFi HTTP inference server** live via esp_hosted (ESP32-C6 companion over SDIO).
 - **Companion web dashboard** with predict/rollout/encode controls and trajectory visualization.
 - **PSRAM at 200 MHz** (`CONFIG_IDF_EXPERIMENTAL_FEATURES=y` required in sdkconfig).
-- Baseline benchmarks: predict 3009ms, encode 70913ms (scalar C, no PIE).
+- **PIE SIMD kernels**: INT8 GEMV, Q4 GEMV, attention QK^T dot products (esp.vmulas.s8.xacc).
+- **Dual-core attention**: Core 1 worker handles second half of 257 query tokens.
+- **GELU LUT**: 1024-entry lookup table replacing tanhf().
+- **Tiled GEMV**: weights-outer loop order for PSRAM cache reuse.
+- **4 on-boot PIE self-tests** (32, 192, 768 elements + Q4 block).
+
+Final benchmarks with slim-96d-full model (4 encoder + 4 predictor layers):
+
+| Operation | Scalar baseline | With all PIE + dual-core | Speedup |
+|-----------|----------------|-------------------------|---------|
+| predict_next | 3,037 ms | **583 ms** | 5.2x |
+| encode(image) | 81,818 ms | **6,416 ms** | 12.8x |
 
 What is still not done on ESP32-P4:
 
-- Encoder parity is still near-match rather than exact-match (scalar C math drift).
-- No PIE SIMD kernels yet -- this is the next step for 5-8x speedup.
+- Encoder parity is near-match rather than exact-match (acceptable for INT8 quantized path).
 - No camera or real image input (test image is deterministic).
-- No slim model (48d/2e2p) tested on hardware yet.
+- No 48d/2e2p slim model tested on hardware yet (code supports it, needs checkpoint export).
 
 ---
 
