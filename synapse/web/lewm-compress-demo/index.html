@@ -568,6 +568,22 @@ h1 {
           <div class="meta">INT8 encoder + Q4 predictor</div>
         </label>
       </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-slim96d" value="slim96d">
+        <label for="model-slim96d">
+          <div class="name">Slim 96d Q4<span class="new-badge" style="background:var(--green);">SLIM</span></div>
+          <div class="meta">14 MB (f32 enc + Q4 pred)</div>
+          <div class="meta">96d latent, 4e/4p</div>
+        </label>
+      </div>
+      <div class="model-option">
+        <input type="radio" name="model" id="model-slim96d-full" value="slim96d-full">
+        <label for="model-slim96d-full">
+          <div class="name">Slim 96d Full<span class="new-badge" style="background:var(--green);">9MB</span></div>
+          <div class="meta">9 MB (INT8 enc + Q4 pred)</div>
+          <div class="meta">96d latent, smallest model</div>
+        </label>
+      </div>
     </div>
 
     <button class="btn" id="load-btn">Load &amp; Benchmark</button>
@@ -774,6 +790,74 @@ h1 {
     </ul>
   </div>
 
+  <div class="card" id="slim-comparison">
+    <h2>Architecture Comparison: Slim vs Baseline</h2>
+    <p class="description" style="margin-bottom:1rem;">
+      Slim LEWM variants compress the <strong>latent space</strong> (96d vs 192d) with fewer
+      encoder/predictor layers, using projection layers to bridge dimensions. All variants
+      share the same 192d ViT encoder internals &mdash; the bottleneck is in the latent
+      representation, not the compute path.
+    </p>
+    <table style="width:100%; border-collapse:collapse; font-family:var(--mono); font-size:0.82rem; margin-bottom:1rem;">
+      <thead>
+        <tr style="border-bottom:2px solid var(--border); color:var(--text-dim); text-align:left;">
+          <th style="padding:0.5rem;">Model</th>
+          <th style="padding:0.5rem; text-align:right;">Latent</th>
+          <th style="padding:0.5rem; text-align:right;">Layers</th>
+          <th style="padding:0.5rem; text-align:right;">f32</th>
+          <th style="padding:0.5rem; text-align:right;">Q4</th>
+          <th style="padding:0.5rem; text-align:right;">Q4-full</th>
+          <th style="padding:0.5rem; text-align:right;">Speed</th>
+          <th style="padding:0.5rem; text-align:right;">Q4 cos</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:0.5rem; color:var(--text-dim);">Baseline</td>
+          <td style="padding:0.5rem; text-align:right;">192d</td>
+          <td style="padding:0.5rem; text-align:right;">6e/6p</td>
+          <td style="padding:0.5rem; text-align:right;">54.6 MB</td>
+          <td style="padding:0.5rem; text-align:right;">18.3 MB</td>
+          <td style="padding:0.5rem; text-align:right;">9.8 MB</td>
+          <td style="padding:0.5rem; text-align:right;">30 ms</td>
+          <td style="padding:0.5rem; text-align:right;">0.9957</td>
+        </tr>
+        <tr style="border-bottom:1px solid var(--border); color:var(--green);">
+          <td style="padding:0.5rem;"><strong>Slim 96d</strong></td>
+          <td style="padding:0.5rem; text-align:right;">96d</td>
+          <td style="padding:0.5rem; text-align:right;">4e/4p</td>
+          <td style="padding:0.5rem; text-align:right;">36.8 MB</td>
+          <td style="padding:0.5rem; text-align:right;">12.6 MB</td>
+          <td style="padding:0.5rem; text-align:right;">6.5 MB</td>
+          <td style="padding:0.5rem; text-align:right;">18 ms</td>
+          <td style="padding:0.5rem; text-align:right;">0.9982</td>
+        </tr>
+      </tbody>
+    </table>
+    <div style="display:flex; gap:1rem; flex-wrap:wrap; margin-bottom:0.75rem;">
+      <div style="flex:1; min-width:140px; background:var(--bg-input); border-radius:6px; padding:0.75rem; text-align:center;">
+        <div style="font-size:1.5rem; font-weight:700; color:var(--green);">1.9x</div>
+        <div style="font-size:0.75rem; color:var(--text-dim);">faster (f32)</div>
+      </div>
+      <div style="flex:1; min-width:140px; background:var(--bg-input); border-radius:6px; padding:0.75rem; text-align:center;">
+        <div style="font-size:1.5rem; font-weight:700; color:var(--green);">31%</div>
+        <div style="font-size:0.75rem; color:var(--text-dim);">smaller (Q4)</div>
+      </div>
+      <div style="flex:1; min-width:140px; background:var(--bg-input); border-radius:6px; padding:0.75rem; text-align:center;">
+        <div style="font-size:1.5rem; font-weight:700; color:var(--green);">6.5 MB</div>
+        <div style="font-size:0.75rem; color:var(--text-dim);">Q4-full size</div>
+      </div>
+      <div style="flex:1; min-width:140px; background:var(--bg-input); border-radius:6px; padding:0.75rem; text-align:center;">
+        <div style="font-size:1.5rem; font-weight:700; color:var(--accent);">0.998</div>
+        <div style="font-size:0.75rem; color:var(--text-dim);">Q4 cosine sim</div>
+      </div>
+    </div>
+    <p style="font-size:0.8rem; color:var(--text-dim);">
+      More variants training: 48d/2e2p, 64d/3e3p, 96d/2e3p, 128d/4e4p, 192d/4e4p.
+      Run locally: <code style="background:var(--bg-input); padding:0.15rem 0.4rem; border-radius:3px;">cargo run --release --example lewm_slim_vs_baseline -- --models-dir ../weights/</code>
+    </p>
+  </div>
+
   <div class="footer">
     Powered by <strong>Synapse</strong> &mdash; 491 KB WASM engine, zero server dependencies
     <br><a href="../" style="color:var(--accent);">Main Hub</a> · <span style="color:var(--accent);">Compression Demo</span> · <a href="../ssm-demo/" style="color:var(--accent);">SSM Chat</a>
@@ -819,6 +903,7 @@ let wasmReady = false;
 let currentModel = null;
 let currentFormat = null;
 let refModel = null;       // f32 reference (always created)
+let currentLatentDim = 192; // default baseline; updated on model load
 let z0Ref = null;          // f32 encoded latent
 let z0Quant = null;        // quantized encoded latent
 let trajectoryPairs = [];  // [{ref, quant, label, color}]
@@ -1106,7 +1191,9 @@ async function loadModel() {
       'q4':   './lewm-q4-pred.bin',
       'wanda20-q4': './lewm-wanda20-q4.bin',
       'wanda40-q4': './lewm-wanda40-q4.bin',
-      'fullq4': './lewm-full.bin'
+      'fullq4': './lewm-full.bin',
+      'slim96d': './lewm-slim-96d-q4.bin',
+      'slim96d-full': './lewm-slim-96d-full.bin'
     };
 
     if (!urls[format]) {
@@ -1131,28 +1218,49 @@ async function loadModel() {
 
     showProgress(false);
     var sizeMb = (data.length / 1048576).toFixed(1);
-    setStatus('Downloaded ' + sizeMb + ' MB. Loading pre-quantized model...');
+
+    // For slim models, also download f32 reference for real comparison
+    var isSlim = format.startsWith('slim');
+    var f32RefData = null;
+    if (isSlim) {
+      setStatus('Downloaded Q4 (' + sizeMb + ' MB). Now downloading f32 reference for comparison...');
+      showProgress(true);
+      try {
+        f32RefData = await fetchWithProgress('./lewm-slim-96d-f32.bin');
+      } catch (e) {
+        showProgress(false);
+        setStatus('f32 reference download failed, using self-comparison: ' + e.message, 'err');
+      }
+      showProgress(false);
+    }
+
+    setStatus('Loading model...');
 
     // Load pre-quantized LQ40 model directly
     var model;
     var tc = performance.now();
-    if (format === 'fullq4') {
+    if (format === 'fullq4' || format === 'slim96d-full') {
       model = RealLeWMFullQ4.from_lq40_data(data);
     } else {
       model = RealLeWMQ4.from_lq40_data(data);
     }
     var constructMs = (performance.now() - tc).toFixed(1);
 
-    // Use loaded model as its own reference (no separate f32 baseline)
-    refModel = model;
+    // Load f32 reference for slim models (real f32 vs Q4 comparison)
+    if (isSlim && f32RefData) {
+      refModel = new RealLeWM(f32RefData);
+    } else {
+      refModel = model;
+    }
 
     currentModel = model;
     currentFormat = format;
+    currentLatentDim = (model.latent_dim && model.latent_dim()) ? model.latent_dim() : 192;
 
     // Encode test image on both models
     var testImg = makeTestImage();
     z0Ref = refModel.encode_image(testImg, 224, 224);
-    z0Quant = (format === 'f32') ? z0Ref : model.encode_image(testImg, 224, 224);
+    z0Quant = model.encode_image(testImg, 224, 224);
 
     // Reset explore state
     trajectoryPairs = [];
@@ -1161,7 +1269,7 @@ async function loadModel() {
     document.getElementById('run-compare-btn').disabled = false;
 
     // Show which model is loaded in the header
-    var modelNames = { 'q4': 'Q4 pred (' + sizeMb + ' MB)', 'wanda20-q4': 'Wanda 20%+Q4 (' + sizeMb + ' MB)', 'wanda40-q4': 'Wanda 40%+Q4 (' + sizeMb + ' MB)', 'fullq4': 'Full Q4 (' + sizeMb + ' MB)' };
+    var modelNames = { 'q4': 'Q4 pred (' + sizeMb + ' MB)', 'wanda20-q4': 'Wanda 20%+Q4 (' + sizeMb + ' MB)', 'wanda40-q4': 'Wanda 40%+Q4 (' + sizeMb + ' MB)', 'fullq4': 'Full Q4 (' + sizeMb + ' MB)', 'slim96d': 'Slim 96d Q4 (' + sizeMb + ' MB)', 'slim96d-full': 'Slim 96d Full (' + sizeMb + ' MB)' };
     var labelEl = document.getElementById('active-model-label');
     while (labelEl.firstChild) labelEl.removeChild(labelEl.firstChild);
     if (format === 'f32') {
@@ -1285,8 +1393,8 @@ function drawTrajectories() {
   for (var p = 0; p < trajectoryPairs.length; p++) {
     var pair = trajectoryPairs[p];
     for (var s = 0; s < COMPARE_STEPS; s++) {
-      var rx = pair.ref[s * 192], ry = pair.ref[s * 192 + 1];
-      var qx = pair.quant[s * 192], qy = pair.quant[s * 192 + 1];
+      var rx = pair.ref[s * currentLatentDim], ry = pair.ref[s * currentLatentDim + 1];
+      var qx = pair.quant[s * currentLatentDim], qy = pair.quant[s * currentLatentDim + 1];
       minX = Math.min(minX, rx, qx); maxX = Math.max(maxX, rx, qx);
       minY = Math.min(minY, ry, qy); maxY = Math.max(maxY, ry, qy);
     }
@@ -1319,7 +1427,7 @@ function drawTrajectories() {
     ctx.beginPath();
     ctx.moveTo(toX(z0Ref[0]), toY(z0Ref[1]));
     for (var sr = 0; sr < COMPARE_STEPS; sr++) {
-      ctx.lineTo(toX(tp.ref[sr * 192]), toY(tp.ref[sr * 192 + 1]));
+      ctx.lineTo(toX(tp.ref[sr * currentLatentDim]), toY(tp.ref[sr * currentLatentDim + 1]));
     }
     ctx.stroke();
     ctx.setLineDash([]);
@@ -1330,7 +1438,7 @@ function drawTrajectories() {
     ctx.beginPath();
     ctx.moveTo(toX(z0Quant[0]), toY(z0Quant[1]));
     for (var sq = 0; sq < COMPARE_STEPS; sq++) {
-      ctx.lineTo(toX(tp.quant[sq * 192]), toY(tp.quant[sq * 192 + 1]));
+      ctx.lineTo(toX(tp.quant[sq * currentLatentDim]), toY(tp.quant[sq * currentLatentDim + 1]));
     }
     ctx.stroke();
 
@@ -1340,14 +1448,14 @@ function drawTrajectories() {
       ctx.globalAlpha = alpha * dotAlpha;
       ctx.fillStyle = tp.color;
       ctx.beginPath();
-      ctx.arc(toX(tp.quant[sd * 192]), toY(tp.quant[sd * 192 + 1]), 2.5, 0, Math.PI * 2);
+      ctx.arc(toX(tp.quant[sd * currentLatentDim]), toY(tp.quant[sd * currentLatentDim + 1]), 2.5, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.globalAlpha = alpha;
 
     // Glowing endpoint (quantized)
-    var ex = toX(tp.quant[(COMPARE_STEPS - 1) * 192]);
-    var ey = toY(tp.quant[(COMPARE_STEPS - 1) * 192 + 1]);
+    var ex = toX(tp.quant[(COMPARE_STEPS - 1) * currentLatentDim]);
+    var ey = toY(tp.quant[(COMPARE_STEPS - 1) * currentLatentDim + 1]);
     ctx.shadowColor = tp.color;
     ctx.shadowBlur = 8;
     ctx.fillStyle = '#fff';
@@ -1357,8 +1465,8 @@ function drawTrajectories() {
     ctx.shadowBlur = 0;
 
     // Gray endpoint (reference)
-    var rex = toX(tp.ref[(COMPARE_STEPS - 1) * 192]);
-    var rey = toY(tp.ref[(COMPARE_STEPS - 1) * 192 + 1]);
+    var rex = toX(tp.ref[(COMPARE_STEPS - 1) * currentLatentDim]);
+    var rey = toY(tp.ref[(COMPARE_STEPS - 1) * currentLatentDim + 1]);
     ctx.fillStyle = '#484f58';
     ctx.beginPath();
     ctx.arc(rex, rey, 3.5, 0, Math.PI * 2);
@@ -1372,8 +1480,8 @@ function drawTrajectories() {
   for (var li = 0; li < trajectoryPairs.length; li++) {
     var lp = trajectoryPairs[li];
     var lAlpha = 0.3 + 0.7 * ((li + 1) / trajectoryPairs.length);
-    var lx = toX(lp.quant[(COMPARE_STEPS - 1) * 192]);
-    var ly = toY(lp.quant[(COMPARE_STEPS - 1) * 192 + 1]);
+    var lx = toX(lp.quant[(COMPARE_STEPS - 1) * currentLatentDim]);
+    var ly = toY(lp.quant[(COMPARE_STEPS - 1) * currentLatentDim + 1]);
 
     // Find a non-overlapping y position
     var labelY = ly - 4;

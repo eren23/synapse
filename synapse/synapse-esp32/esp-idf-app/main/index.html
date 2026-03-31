@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Synapse ESP32-P4</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 12px;
+}
+h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+h2 { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #e6edf3; }
+.header {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 8px;
+}
+.header-title { display: flex; align-items: center; gap: 10px; }
+.header-title h1 { color: #58a6ff; }
+.header-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; font-size: 12px; color: #8b949e; }
+.header-meta span { white-space: nowrap; }
+.mode-bar {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mode-bar label { color: #8b949e; font-size: 12px; margin-right: 4px; }
+.mode-btn {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+.mode-btn:hover { background: #30363d; }
+.mode-btn.active { background: #1f6feb; border-color: #1f6feb; }
+.mode-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.hybrid-input {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 12px;
+  flex: 1;
+  min-width: 180px;
+  display: none;
+}
+.hybrid-input.show { display: block; }
+#hybrid-status { font-size: 11px; color: #8b949e; display: none; }
+#hybrid-status.show { display: inline; }
+.main-grid {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.col-left {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.col-right {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+}
+button {
+  background: #21262d;
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  transition: background 0.15s;
+}
+button:hover { background: #30363d; }
+button:active { background: #1f6feb; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+button.primary {
+  background: #1f6feb;
+  border-color: #1f6feb;
+}
+button.primary:hover { background: #388bfd; }
+button.primary:disabled { background: #1f6feb; opacity: 0.5; }
+#scene-preview {
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  image-rendering: pixelated;
+  display: block;
+  margin: 8px auto 0;
+}
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.slider-row label {
+  width: 50px;
+  color: #8b949e;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: #58a6ff;
+  height: 4px;
+}
+.slider-row .val {
+  width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: #58a6ff;
+  flex-shrink: 0;
+}
+.preset-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 4px;
+  margin-top: 8px;
+  margin-bottom: 10px;
+}
+.preset-grid button { font-size: 11px; padding: 5px 4px; }
+.action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.action-buttons button { width: 100%; text-align: center; }
+#heatmap {
+  display: flex;
+  gap: 1px;
+  height: 20px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+#heatmap .cell { flex: 1; min-width: 1px; }
+#heatmap-stats {
+  display: flex;
+  gap: 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #8b949e;
+  flex-wrap: wrap;
+}
+.timing-line {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #8b949e;
+}
+.timing-line span { color: #3fb950; }
+#traj-canvas {
+  width: 100%;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  display: block;
+  background: #0d1117;
+}
+.cos-line {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #8b949e;
+}
+.cos-line span { color: #58a6ff; }
+.log-card {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 16px;
+}
+#log {
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 12px;
+  color: #8b949e;
+  line-height: 1.6;
+}
+#log div { white-space: pre-wrap; word-break: break-all; }
+#log::-webkit-scrollbar { width: 6px; }
+#log::-webkit-scrollbar-track { background: #0d1117; border-radius: 3px; }
+#log::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+@media (max-width: 640px) {
+  .main-grid { flex-direction: column; }
+  .col-left { flex: none; }
+  #traj-canvas { height: 200px; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-title">
+    <h1>Synapse ESP32-P4</h1>
+  </div>
+  <div class="header-meta">
+    <span>IP: <strong id="status-ip">--</strong></span>
+    <span>Model: <strong id="status-model">--</strong></span>
+    <span id="status-heap">Heap: --</span>
+  </div>
+</div>
+
+<div class="mode-bar">
+  <label>Mode:</label>
+  <button class="mode-btn active" id="mode-esp32" onclick="selectMode('esp32')">Full ESP32</button>
+  <button class="mode-btn" id="mode-hybrid" onclick="selectMode('hybrid')">Hybrid WASM+ESP32</button>
+  <input type="text" id="wasm-url" class="hybrid-input" placeholder="WASM package URL (e.g. /pkg)" />
+  <button class="mode-btn" id="btn-load-wasm" style="display:none" onclick="initHybridMode()">Load</button>
+  <span id="hybrid-status"></span>
+</div>
+
+<div class="main-grid">
+  <div class="col-left">
+    <div class="card">
+      <h2>Input</h2>
+      <button onclick="generateAndPreview()" style="width:100%">Generate Test Image</button>
+      <canvas id="scene-preview" width="112" height="112"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>Actions</h2>
+      <div class="slider-row">
+        <label>dx:</label>
+        <input type="range" id="action-dx" min="-100" max="100" value="50" />
+        <span class="val" id="dx-val">0.50</span>
+      </div>
+      <div class="slider-row">
+        <label>dy:</label>
+        <input type="range" id="action-dy" min="-100" max="100" value="0" />
+        <span class="val" id="dy-val">0.00</span>
+      </div>
+      <div class="slider-row">
+        <label>Steps:</label>
+        <input type="range" id="rollout-steps" min="1" max="20" value="5" />
+        <span class="val" id="steps-val">5</span>
+      </div>
+
+      <div class="preset-grid">
+        <button onclick="setAction(50, 0)">Right</button>
+        <button onclick="setAction(-50, 0)">Left</button>
+        <button onclick="setAction(0, 50)">Up</button>
+        <button onclick="setAction(0, -50)">Down</button>
+        <button onclick="setAction(0, 0)">Stay</button>
+        <button onclick="initTestLatent()">Zero Lat</button>
+      </div>
+
+      <div class="action-buttons">
+        <button class="primary" id="btn-predict" onclick="runPredict()">Run Predict</button>
+        <button class="primary" id="btn-rollout" onclick="runRollout()">Run Rollout</button>
+        <button id="btn-encode" onclick="runEncode()">Run Encode (slow)</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-right">
+    <div class="card">
+      <h2>Latent Output</h2>
+      <div id="heatmap"></div>
+      <div id="heatmap-stats"></div>
+      <div class="timing-line" id="timing-line">Timing: <span id="timing-val">--</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Trajectory</h2>
+      <canvas id="traj-canvas" width="400" height="300"></canvas>
+      <div class="cos-line">cos: <span id="cos-val">--</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="log-card">
+  <h2>Log</h2>
+  <div id="log"></div>
+</div>
+
+<script>
+var API = window.location.origin;
+var currentLatent = null;
+var trajectoryHistory = [];
+var wasmModel = null;
+
+// --- Status & Connection ---
+async function fetchStatus() {
+  try {
+    var resp = await fetch(API + '/status');
+    var data = await resp.json();
+    document.getElementById('status-ip').textContent = data.wifi_ip;
+    document.getElementById('status-model').textContent = data.mode + ' (latent=' + data.latent_dim + ')';
+    document.getElementById('status-heap').textContent =
+      'Heap: ' + (data.heap_free / 1024).toFixed(0) + 'KB | PSRAM: ' + (data.psram_free / 1024 / 1024).toFixed(1) + 'MB';
+    window._latentDim = data.latent_dim;
+    window._actionDim = data.action_dim;
+    window._hasEncoder = data.has_encoder;
+    addLog('Connected: ' + data.mode + ', latent_dim=' + data.latent_dim);
+  } catch (e) {
+    addLog('Connection failed: ' + e.message, true);
+  }
+}
+
+// --- Mode Selection ---
+function selectMode(mode) {
+  var espBtn = document.getElementById('mode-esp32');
+  var hybBtn = document.getElementById('mode-hybrid');
+  var wasmInput = document.getElementById('wasm-url');
+  var loadBtn = document.getElementById('btn-load-wasm');
+  var hybStatus = document.getElementById('hybrid-status');
+  if (mode === 'esp32') {
+    espBtn.classList.add('active');
+    hybBtn.classList.remove('active');
+    wasmInput.classList.remove('show');
+    loadBtn.style.display = 'none';
+    hybStatus.classList.remove('show');
+  } else {
+    hybBtn.classList.add('active');
+    espBtn.classList.remove('active');
+    wasmInput.classList.add('show');
+    loadBtn.style.display = '';
+    hybStatus.classList.add('show');
+  }
+}
+
+// --- Test Image Generation ---
+function makeTestImage() {
+  var h = 224, w = 224;
+  var pixels = new Float32Array(h * w * 3);
+  var mean = [0.485, 0.456, 0.406];
+  var std = [0.229, 0.224, 0.225];
+  for (var y = 0; y < h; y++) {
+    for (var x = 0; x < w; x++) {
+      var idx = (y * w + x) * 3;
+      var inT = (y > h * 0.2 && y < h * 0.35 && x > w * 0.2 && x < w * 0.8) ||
+                (y >= h * 0.35 && y < h * 0.7 && x > w * 0.35 && x < w * 0.65);
+      var cx = w * 0.7, cy = h * 0.75, radius = w * 0.06;
+      var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+      var inPusher = dist < radius;
+      var r, g, b;
+      if (inPusher) { r = 0.2; g = 0.6; b = 0.9; }
+      else if (inT) { r = 0.9; g = 0.3; b = 0.2; }
+      else { r = 0.85; g = 0.85; b = 0.82; }
+      pixels[idx]     = (r - mean[0]) / std[0];
+      pixels[idx + 1] = (g - mean[1]) / std[1];
+      pixels[idx + 2] = (b - mean[2]) / std[2];
+    }
+  }
+  return pixels;
+}
+
+// --- Image Preview ---
+function renderTestImagePreview() {
+  var canvas = document.getElementById('scene-preview');
+  var ctx = canvas.getContext('2d');
+  var s = canvas.width;
+  var imgData = ctx.createImageData(s, s);
+  for (var y = 0; y < s; y++) {
+    for (var x = 0; x < s; x++) {
+      var inT = (y > s * 0.2 && y < s * 0.35 && x > s * 0.2 && x < s * 0.8) ||
+                (y >= s * 0.35 && y < s * 0.7 && x > s * 0.35 && x < s * 0.65);
+      var cx = s * 0.7, cy = s * 0.75, radius = s * 0.06;
+      var dist = Math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+      var inPusher = dist < radius;
+      var r, g, b;
+      if (inPusher) { r = 51; g = 153; b = 230; }
+      else if (inT) { r = 230; g = 77; b = 51; }
+      else { r = 217; g = 217; b = 209; }
+      var i = (y * s + x) * 4;
+      imgData.data[i] = r; imgData.data[i+1] = g; imgData.data[i+2] = b; imgData.data[i+3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+function generateAndPreview() {
+  renderTestImagePreview();
+  addLog('Test image generated (224x224x3, T-shape + pusher).');
+}
+
+// --- Heatmap Rendering ---
+function renderHeatmap(latent) {
+  var bar = document.getElementById('heatmap');
+  var stats = document.getElementById('heatmap-stats');
+  while (bar.firstChild) bar.removeChild(bar.firstChild);
+  while (stats.firstChild) stats.removeChild(stats.firstChild);
+
+  var min = Infinity, max = -Infinity, sum = 0;
+  for (var i = 0; i < latent.length; i++) {
+    if (latent[i] < min) min = latent[i];
+    if (latent[i] > max) max = latent[i];
+    sum += latent[i];
+  }
+  var mean = sum / latent.length;
+  var range = max - min || 1;
+
+  for (var i = 0; i < latent.length; i++) {
+    var cell = document.createElement('div');
+    cell.className = 'cell';
+    var norm = (latent[i] - min) / range;
+    var r, g, b;
+    if (norm < 0.5) {
+      var t = norm * 2;
+      r = Math.round(30 + t * 225); g = Math.round(60 + t * 195); b = Math.round(220 - t * 60);
+    } else {
+      var t = (norm - 0.5) * 2;
+      r = Math.round(255 - t * 15); g = Math.round(255 - t * 180); b = Math.round(160 - t * 120);
+    }
+    cell.style.background = 'rgb(' + r + ',' + g + ',' + b + ')';
+    bar.appendChild(cell);
+  }
+
+  var labels = ['dim: ' + latent.length, 'min: ' + min.toFixed(3), 'max: ' + max.toFixed(3),
+                'mean: ' + mean.toFixed(3), 'range: ' + range.toFixed(3)];
+  for (var s = 0; s < labels.length; s++) {
+    var span = document.createElement('span');
+    span.textContent = labels[s];
+    stats.appendChild(span);
+  }
+}
+
+// --- Trajectory Drawing ---
+function drawTrajectories(latentDim) {
+  var canvas = document.getElementById('traj-canvas');
+  var ctx = canvas.getContext('2d');
+  var W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  for (var gx = 0; gx <= W; gx += 40) { ctx.beginPath(); ctx.moveTo(gx, 0); ctx.lineTo(gx, H); ctx.stroke(); }
+  for (var gy = 0; gy <= H; gy += 40) { ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(W, gy); ctx.stroke(); }
+
+  if (trajectoryHistory.length === 0) return;
+
+  // Compute bounds
+  var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (var p = 0; p < trajectoryHistory.length; p++) {
+    var traj = trajectoryHistory[p].data;
+    var steps = trajectoryHistory[p].steps;
+    for (var s = 0; s < steps; s++) {
+      var x = traj[s * latentDim], y = traj[s * latentDim + 1];
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    }
+  }
+  var rangeX = (maxX - minX) || 1, rangeY = (maxY - minY) || 1;
+  var pad = 30;
+  var toX = function(v) { return pad + ((v - minX) / rangeX) * (W - 2 * pad); };
+  var toY = function(v) { return pad + ((v - minY) / rangeY) * (H - 2 * pad); };
+
+  var colors = ['#58a6ff', '#3fb950', '#d29922', '#f85149', '#bc8cff'];
+
+  for (var pi = 0; pi < trajectoryHistory.length; pi++) {
+    var entry = trajectoryHistory[pi];
+    var alpha = 0.3 + 0.7 * ((pi + 1) / trajectoryHistory.length);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = colors[pi % colors.length];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(toX(entry.data[0]), toY(entry.data[1]));
+    for (var sr = 1; sr < entry.steps; sr++) {
+      ctx.lineTo(toX(entry.data[sr * latentDim]), toY(entry.data[sr * latentDim + 1]));
+    }
+    ctx.stroke();
+
+    // Draw points
+    ctx.fillStyle = colors[pi % colors.length];
+    for (var sp = 0; sp < entry.steps; sp++) {
+      ctx.beginPath();
+      ctx.arc(toX(entry.data[sp * latentDim]), toY(entry.data[sp * latentDim + 1]), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+
+// --- Cosine Similarity ---
+function cosineSimilarity(a, b) {
+  if (!a || !b || a.length !== b.length) return null;
+  var dot = 0, magA = 0, magB = 0;
+  for (var i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  magA = Math.sqrt(magA);
+  magB = Math.sqrt(magB);
+  if (magA === 0 || magB === 0) return 0;
+  return dot / (magA * magB);
+}
+
+// --- API Call Functions ---
+function updateTiming(text) {
+  var el = document.getElementById('timing-val');
+  el.textContent = text;
+}
+
+async function runPredict() {
+  if (!currentLatent) { addLog('No latent state. Run encode first or use Zero Lat.', true); return; }
+  var dx = parseFloat(document.getElementById('action-dx').value) / 100;
+  var dy = parseFloat(document.getElementById('action-dy').value) / 100;
+  var action = new Array(window._actionDim || 10).fill(0);
+  action[0] = dx; action[1] = dy;
+
+  addLog('Running predict_next...');
+  disableButtons(true);
+  var prevLatent = currentLatent.slice ? currentLatent.slice() : Array.from(currentLatent);
+  try {
+    var resp = await fetch(API + '/predict', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({latent: Array.from(currentLatent), action: action})
+    });
+    var data = await resp.json();
+    if (data.error) { addLog('Error: ' + data.error, true); return; }
+    currentLatent = data.next_latent;
+    renderHeatmap(currentLatent);
+    updateTiming(data.latency_ms.toFixed(0) + 'ms');
+    var cos = cosineSimilarity(prevLatent, currentLatent);
+    if (cos !== null) {
+      document.getElementById('cos-val').textContent = cos.toFixed(4);
+    }
+    addLog('predict_next: ' + data.latency_ms.toFixed(0) + 'ms');
+  } catch (e) {
+    addLog('Predict failed: ' + e.message, true);
+  } finally {
+    disableButtons(false);
+  }
+}
+
+async function runRollout() {
+  if (!currentLatent) { addLog('No latent state.', true); return; }
+  var dx = parseFloat(document.getElementById('action-dx').value) / 100;
+  var dy = parseFloat(document.getElementById('action-dy').value) / 100;
+  var steps = parseInt(document.getElementById('rollout-steps').value);
+  var actions = [];
+  for (var i = 0; i < steps; i++) {
+    var a = new Array(window._actionDim || 10).fill(0);
+    a[0] = dx; a[1] = dy;
+    actions.push(a);
+  }
+
+  addLog('Running rollout (' + steps + ' steps)...');
+  disableButtons(true);
+  var prevLatent = currentLatent.slice ? currentLatent.slice() : Array.from(currentLatent);
+  try {
+    var resp = await fetch(API + '/rollout', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({latent: Array.from(currentLatent), actions: actions})
+    });
+    var data = await resp.json();
+    if (data.error) { addLog('Error: ' + data.error, true); return; }
+    // data.trajectory is array of arrays
+    var flat = [];
+    for (var t = 0; t < data.trajectory.length; t++) {
+      for (var d = 0; d < data.trajectory[t].length; d++) flat.push(data.trajectory[t][d]);
+    }
+    trajectoryHistory.push({data: flat, steps: data.trajectory.length, label: 'dx=' + dx.toFixed(2) + ' dy=' + dy.toFixed(2)});
+    if (trajectoryHistory.length > 5) trajectoryHistory.shift();
+    drawTrajectories(window._latentDim || 96);
+    // Update current latent to last step
+    currentLatent = data.trajectory[data.trajectory.length - 1];
+    renderHeatmap(currentLatent);
+    updateTiming(data.latency_ms.toFixed(0) + 'ms (' + (data.latency_ms / steps).toFixed(0) + 'ms/step)');
+    var cos = cosineSimilarity(prevLatent, currentLatent);
+    if (cos !== null) {
+      document.getElementById('cos-val').textContent = cos.toFixed(4);
+    }
+    addLog('rollout: ' + steps + ' steps in ' + data.latency_ms.toFixed(0) + 'ms (' + (data.latency_ms / steps).toFixed(0) + 'ms/step)');
+  } catch (e) {
+    addLog('Rollout failed: ' + e.message, true);
+  } finally {
+    disableButtons(false);
+  }
+}
+
+async function runEncode() {
+  addLog('Generating test image (224x224x3)...');
+  var image = makeTestImage();
+  addLog('Uploading image to ESP32 (602KB binary)... this will take ~71s on scalar.');
+  disableButtons(true);
+  try {
+    var resp = await fetch(API + '/encode?height=224&width=224', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/octet-stream'},
+      body: new Float32Array(image).buffer
+    });
+    var data = await resp.json();
+    if (data.error) { addLog('Error: ' + data.error, true); return; }
+    currentLatent = data.latent;
+    renderHeatmap(currentLatent);
+    updateTiming(data.latency_ms.toFixed(0) + 'ms');
+    addLog('encode: ' + data.latency_ms.toFixed(0) + 'ms');
+  } catch (e) {
+    addLog('Encode failed: ' + e.message, true);
+  } finally {
+    disableButtons(false);
+  }
+}
+
+// --- Initialize Test Latent ---
+function initTestLatent() {
+  var dim = window._latentDim || 96;
+  currentLatent = new Array(dim).fill(0);
+  renderHeatmap(currentLatent);
+  addLog('Initialized zero latent (dim=' + dim + '). Run encode for a real latent.');
+}
+
+// --- Utility Functions ---
+function addLog(msg, isError) {
+  var log = document.getElementById('log');
+  var line = document.createElement('div');
+  line.textContent = '> ' + msg;
+  if (isError) line.style.color = '#f85149';
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+  // Keep last 50 lines
+  while (log.children.length > 50) log.removeChild(log.firstChild);
+}
+
+function disableButtons(disabled) {
+  var btns = document.querySelectorAll('button');
+  for (var i = 0; i < btns.length; i++) btns[i].disabled = disabled;
+}
+
+// Action preset buttons
+function setAction(dx, dy) {
+  document.getElementById('action-dx').value = dx;
+  document.getElementById('action-dy').value = dy;
+  document.getElementById('dx-val').textContent = (dx / 100).toFixed(2);
+  document.getElementById('dy-val').textContent = (dy / 100).toFixed(2);
+}
+
+// --- Hybrid WASM Mode ---
+async function initHybridMode() {
+  var wasmUrl = document.getElementById('wasm-url').value;
+  if (!wasmUrl) { addLog('Enter WASM package URL to enable hybrid mode', true); return; }
+  try {
+    addLog('Loading WASM module from ' + wasmUrl + '...');
+    var module = await import(wasmUrl + '/synapse_wasm.js');
+    await module.default(wasmUrl + '/synapse_wasm_bg.wasm');
+    addLog('WASM module loaded. Hybrid mode: browser encode + ESP32 predict.');
+    document.getElementById('hybrid-status').textContent = 'WASM Ready';
+    document.getElementById('hybrid-status').style.color = '#3fb950';
+  } catch (e) {
+    addLog('WASM load failed: ' + e.message, true);
+  }
+}
+
+// --- Initialization ---
+window.addEventListener('load', function() {
+  renderTestImagePreview();
+  fetchStatus();
+
+  // Slider event listeners
+  document.getElementById('action-dx').addEventListener('input', function() {
+    document.getElementById('dx-val').textContent = (this.value / 100).toFixed(2);
+  });
+  document.getElementById('action-dy').addEventListener('input', function() {
+    document.getElementById('dy-val').textContent = (this.value / 100).toFixed(2);
+  });
+  document.getElementById('rollout-steps').addEventListener('input', function() {
+    document.getElementById('steps-val').textContent = this.value;
+  });
+
+  drawTrajectories(96); // Draw empty grid
+  addLog('Synapse ESP32-P4 companion UI loaded.');
+});
+</script>
+</body>
+</html>

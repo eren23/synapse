@@ -3,27 +3,31 @@ name = "synapse-esp32"
 version = "0.1.0"
 edition = "2021"
 
-# ESP32-P4 is RISC-V, uses ESP-IDF framework
-# Build with: cargo build --target riscv32imc-esp-espidf --release
+# ESP32-P4 is dual-core RISC-V RV32IMAFC @ 400 MHz
+# Host testing:  cargo test -p synapse-esp32
+# Real hardware: cargo build --target riscv32imafc-esp-espidf --features esp32 --release
 # Requires: espup install, . $HOME/export-esp.sh
 
 [dependencies]
-# ESP-IDF framework bindings
-# esp-idf-hal = "0.44"
-# esp-idf-svc = "0.49"
-# esp-idf-sys = { version = "0.35", features = ["binstart"] }
-
-# For now, use pure-Rust synapse-inference for host testing
+# Pure-Rust synapse-inference (no Zig FFI on ESP32)
 synapse-inference = { path = "../crates/synapse-inference", default-features = false, features = ["pure-rust"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 
+# ESP-IDF bindings (only used when targeting real hardware)
+[target.'cfg(target_os = "espidf")'.dependencies]
+esp-idf-svc = "0.52"
+
+
+[build-dependencies]
+embuild = { version = "0.33", features = ["espidf"] }
+
 [features]
 default = ["host-test"]
 host-test = []  # Build for host (Mac/Linux) for testing without ESP32 hardware
-esp32 = []      # Build for actual ESP32-P4 target (uncomment esp-idf deps above)
+esp32 = []      # Build for actual ESP32-P4 target
 
 [profile.release]
 opt-level = "z"     # Smallest binary

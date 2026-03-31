@@ -1,10 +1,14 @@
 pub mod converter;
+#[cfg(not(target_os = "espidf"))]
 pub mod gguf;
+#[cfg(not(target_os = "espidf"))]
 pub mod safetensors;
 pub mod weight_map;
 
 pub use converter::{bf16_to_f32, f16_to_f32, transpose};
+#[cfg(not(target_os = "espidf"))]
 pub use gguf::{load_gguf, parse_gguf};
+#[cfg(not(target_os = "espidf"))]
 pub use safetensors::{load_safetensors, load_safetensors_sharded, parse_safetensors};
 pub use weight_map::WeightMapper;
 

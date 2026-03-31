@@ -49,6 +49,11 @@ jobs:
         working-directory: synapse
         run: mdbook build docs/
 
+      - name: Install Git LFS and pull binary weights
+        run: |
+          git lfs install
+          git lfs pull
+
       - name: Restore weight files from git history
         run: |
           git show f00068a:synapse/web/lewm_weights.bin > synapse/web/lewm_weights.bin
@@ -57,12 +62,21 @@ jobs:
       - name: Assemble Pages site
         run: |
           rm -rf site
-          mkdir -p site/docs site/synapse-wasm
+          mkdir -p site/docs site/synapse-wasm-pkg
           cp synapse/web/index.html site/index.html
           cp synapse/web/lewm_weights.bin site/lewm_weights.bin
           cp synapse/web/neo_unify_weights.bin site/neo_unify_weights.bin
           cp -R synapse/docs/book/. site/docs/
+          cp -R synapse/synapse-wasm/pkg/. site/synapse-wasm-pkg/
           cp -R synapse/synapse-wasm/pkg site/synapse-wasm/
+          cp -R synapse/web/lewm-compress-demo site/lewm-compress-demo
+          mkdir -p site/ssm-demo
+          cp synapse/web/ssm-demo/index.html site/ssm-demo/
+          cp synapse/web/ssm-demo/config.json site/ssm-demo/
+          cp synapse/web/ssm-demo/tokenizer.json site/ssm-demo/
+          if [ -d synapse/web/trajectories ]; then
+            cp -R synapse/web/trajectories site/trajectories
+          fi
           touch site/.nojekyll
 
       - name: Upload artifact

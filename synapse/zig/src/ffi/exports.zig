@@ -36,6 +36,7 @@ const qmatmul_ops = synapse.ops.qmatmul;
 const kvcache_ops = synapse.ops.kvcache;
 const selective_scan_ops = synapse.ops.selective_scan;
 const wkv7_ops = synapse.ops.wkv7;
+const projection_ops = synapse.ops.projection;
 
 // --- Allocator modules (separate named modules, no file overlap with synapse) ---
 const ArenaAllocator = @import("arena").ArenaAllocator;
@@ -1782,5 +1783,27 @@ pub export fn syn_wkv7_seq(
     const sp = state orelse return SYN_ERR_NULL_PTR;
     const op = out orelse return SYN_ERR_NULL_PTR;
     wkv7_ops.wkv7Seq(rp, kp, vp, wp, ap, sp, op, seq_len, head_size);
+    return SYN_OK;
+}
+
+// ============================================================
+// Projection GEMV with fused bias
+// ============================================================
+
+pub export fn syn_projection_gemv_bias(
+    m: usize,
+    n: usize,
+    k: usize,
+    input: ?[*]const f32,
+    weight: ?[*]const f32,
+    bias: ?[*]const f32,
+    output: ?[*]f32,
+) c_int {
+    const inp = input orelse return SYN_ERR_NULL_PTR;
+    const wp = weight orelse return SYN_ERR_NULL_PTR;
+    const op = output orelse return SYN_ERR_NULL_PTR;
+    if (m == 0 or n == 0 or k == 0) return SYN_OK;
+
+    projection_ops.projectionGemvBias(m, n, k, inp, wp, bias, op);
     return SYN_OK;
 }
