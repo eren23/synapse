@@ -1245,14 +1245,15 @@ static void bidirectional_attention_separate(
 
                 softmax_inplace(scores, seq_len);
 
-                /* Value weighting stays f32 (V is not quantized) */
-                for (size_t d = 0; d < head_dim; ++d) {
-                    float value = 0.0f;
-                    for (size_t k_token = 0; k_token < seq_len; ++k_token) {
-                        value += scores[k_token] *
-                                 v[k_token * inner_dim + head * head_dim + d];
+                /* Value weighting: k_token outer for contiguous V access */
+                float *out_head = out + q_token * inner_dim + head * head_dim;
+                memset(out_head, 0, head_dim * sizeof(float));
+                for (size_t k_token = 0; k_token < seq_len; ++k_token) {
+                    float s = scores[k_token];
+                    const float *v_row = v + k_token * inner_dim + head * head_dim;
+                    for (size_t d = 0; d < head_dim; ++d) {
+                        out_head[d] += s * v_row[d];
                     }
-                    out[q_token * inner_dim + head * head_dim + d] = value;
                 }
             }
         }
