@@ -876,10 +876,43 @@ static void layernorm_into(
     }
 }
 
-static inline float gelu_scalar(float x) {
+/*
+ * GELU lookup table: 1024 entries over [-8, 8].
+ * gelu(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+ *
+ * For |x| > 8, gelu(x) ≈ x (positive) or 0 (negative).
+ * Linear interpolation between table entries gives <0.001 max error.
+ *
+ * Built once at startup, stored in internal SRAM for fast access.
+ */
+#define GELU_LUT_SIZE 1024
+#define GELU_LUT_MIN  (-8.0f)
+#define GELU_LUT_MAX  (8.0f)
+#define GELU_LUT_STEP ((GELU_LUT_MAX - GELU_LUT_MIN) / (float)(GELU_LUT_SIZE - 1))
+
+static float s_gelu_lut[GELU_LUT_SIZE];
+static bool s_gelu_lut_ready = false;
+
+static void gelu_lut_init(void) {
+    if (s_gelu_lut_ready) return;
     const float pi = 3.14159265358979323846f;
     const float alpha = sqrtf(2.0f / pi);
-    return 0.5f * x * (1.0f + tanhf(alpha * (x + 0.044715f * x * x * x)));
+    for (int i = 0; i < GELU_LUT_SIZE; i++) {
+        float x = GELU_LUT_MIN + (float)i * GELU_LUT_STEP;
+        s_gelu_lut[i] = 0.5f * x * (1.0f + tanhf(alpha * (x + 0.044715f * x * x * x)));
+    }
+    s_gelu_lut_ready = true;
+}
+
+static inline float gelu_scalar(float x) {
+    if (x <= GELU_LUT_MIN) return 0.0f;
+    if (x >= GELU_LUT_MAX) return x;
+
+    float idx_f = (x - GELU_LUT_MIN) / GELU_LUT_STEP;
+    int idx = (int)idx_f;
+    if (idx >= GELU_LUT_SIZE - 1) return s_gelu_lut[GELU_LUT_SIZE - 1];
+    float frac = idx_f - (float)idx;
+    return s_gelu_lut[idx] + frac * (s_gelu_lut[idx + 1] - s_gelu_lut[idx]);
 }
 
 static void quantize_row_int8(const float *input, size_t len, int8_t *out, float *scale_out);
@@ -1114,28 +1147,99 @@ static void bidirectional_attention_separate(
     float *out
 ) {
     size_t inner_dim = num_heads * head_dim;
+    size_t head_dim_padded = (head_dim + 15U) & ~15U; /* round up to 16 for PIE */
+    float inv_sqrt_hd = 1.0f / sqrtf((float)head_dim);
+
     memset(out, 0, seq_len * inner_dim * sizeof(float));
-    for (size_t head = 0; head < num_heads; ++head) {
-        for (size_t q_token = 0; q_token < seq_len; ++q_token) {
-            for (size_t k_token = 0; k_token < seq_len; ++k_token) {
-                float dot = 0.0f;
-                for (size_t d = 0; d < head_dim; ++d) {
-                    dot += q[q_token * inner_dim + head * head_dim + d] *
-                           k[k_token * inner_dim + head * head_dim + d];
-                }
-                scores[k_token] = dot / sqrtf((float)head_dim);
+
+    /* Pre-quantize Q and K to INT8 for PIE-accelerated dot products.
+     * Layout: [seq_len][num_heads][head_dim_padded] INT8 + per-row scales.
+     * Total: seq_len * num_heads * head_dim_padded * 2 (Q + K) bytes. */
+    size_t row_bytes = num_heads * head_dim_padded;
+    int8_t *q_i8 = (int8_t *)heap_caps_aligned_alloc(
+        16, seq_len * row_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    int8_t *k_i8 = (int8_t *)heap_caps_aligned_alloc(
+        16, seq_len * row_bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    float *q_scales = (float *)malloc(seq_len * num_heads * sizeof(float));
+    float *k_scales = (float *)malloc(seq_len * num_heads * sizeof(float));
+
+    bool use_pie = q_i8 && k_i8 && q_scales && k_scales;
+
+    if (use_pie) {
+        /* Quantize each (token, head) slice to INT8 */
+        for (size_t token = 0; token < seq_len; ++token) {
+            for (size_t head = 0; head < num_heads; ++head) {
+                const float *q_src = q + token * inner_dim + head * head_dim;
+                const float *k_src = k + token * inner_dim + head * head_dim;
+                int8_t *q_dst = q_i8 + token * row_bytes + head * head_dim_padded;
+                int8_t *k_dst = k_i8 + token * row_bytes + head * head_dim_padded;
+
+                quantize_row_int8(q_src, head_dim, q_dst,
+                                  &q_scales[token * num_heads + head]);
+                quantize_row_int8(k_src, head_dim, k_dst,
+                                  &k_scales[token * num_heads + head]);
+                /* Zero pad */
+                memset(q_dst + head_dim, 0, head_dim_padded - head_dim);
+                memset(k_dst + head_dim, 0, head_dim_padded - head_dim);
             }
-            softmax_inplace(scores, seq_len);
-            for (size_t d = 0; d < head_dim; ++d) {
-                float value = 0.0f;
+        }
+
+        /* PIE attention: QK^T via INT8 dot products */
+        for (size_t head = 0; head < num_heads; ++head) {
+            for (size_t q_token = 0; q_token < seq_len; ++q_token) {
+                int8_t *qi = q_i8 + q_token * row_bytes + head * head_dim_padded;
+                float q_sc = q_scales[q_token * num_heads + head];
+
                 for (size_t k_token = 0; k_token < seq_len; ++k_token) {
-                    value += scores[k_token] *
-                             v[k_token * inner_dim + head * head_dim + d];
+                    int8_t *ki = k_i8 + k_token * row_bytes + head * head_dim_padded;
+                    float k_sc = k_scales[k_token * num_heads + head];
+
+                    int32_t dot_i32 = pie_dot_int8(qi, ki, head_dim_padded);
+                    scores[k_token] = (float)dot_i32 * q_sc * k_sc * inv_sqrt_hd;
                 }
-                out[q_token * inner_dim + head * head_dim + d] = value;
+
+                softmax_inplace(scores, seq_len);
+
+                /* Value weighting stays f32 (V is not quantized) */
+                for (size_t d = 0; d < head_dim; ++d) {
+                    float value = 0.0f;
+                    for (size_t k_token = 0; k_token < seq_len; ++k_token) {
+                        value += scores[k_token] *
+                                 v[k_token * inner_dim + head * head_dim + d];
+                    }
+                    out[q_token * inner_dim + head * head_dim + d] = value;
+                }
+            }
+        }
+    } else {
+        /* Scalar fallback */
+        for (size_t head = 0; head < num_heads; ++head) {
+            for (size_t q_token = 0; q_token < seq_len; ++q_token) {
+                for (size_t k_token = 0; k_token < seq_len; ++k_token) {
+                    float dot = 0.0f;
+                    for (size_t d = 0; d < head_dim; ++d) {
+                        dot += q[q_token * inner_dim + head * head_dim + d] *
+                               k[k_token * inner_dim + head * head_dim + d];
+                    }
+                    scores[k_token] = dot * inv_sqrt_hd;
+                }
+                softmax_inplace(scores, seq_len);
+                for (size_t d = 0; d < head_dim; ++d) {
+                    float value = 0.0f;
+                    for (size_t k_token = 0; k_token < seq_len; ++k_token) {
+                        value += scores[k_token] *
+                                 v[k_token * inner_dim + head * head_dim + d];
+                    }
+                    out[q_token * inner_dim + head * head_dim + d] = value;
+                }
             }
         }
     }
+
+    free(q_i8);
+    free(k_i8);
+    free(q_scales);
+    free(k_scales);
 }
 
 static bool allocate_scratch(PredictorModel *model) {
@@ -1629,9 +1733,14 @@ static void encoder_layer_forward(
     size_t seq_len = model->encoder_seq_len;
     size_t hidden = model->encoder_hidden;
     size_t head_dim = hidden / model->encoder_heads;
+    static int layer_idx = 0;
+
+    int64_t t0 = esp_timer_get_time();
 
     layernorm_into(seq, layer->attn_norm_weight.data, seq_len, hidden, scratch->normed);
     add_bias_inplace(scratch->normed, layer->attn_norm_bias.data, seq_len, hidden);
+
+    int64_t t_norm1 = esp_timer_get_time();
 
     int8linear_forward_into(&layer->w_q, scratch->normed, seq_len, scratch->row_quant, scratch->q);
     add_bias_inplace(scratch->q, layer->q_bias.data, seq_len, hidden);
@@ -1639,6 +1748,8 @@ static void encoder_layer_forward(
     add_bias_inplace(scratch->k, layer->k_bias.data, seq_len, hidden);
     int8linear_forward_into(&layer->w_v, scratch->normed, seq_len, scratch->row_quant, scratch->v);
     add_bias_inplace(scratch->v, layer->v_bias.data, seq_len, hidden);
+
+    int64_t t_qkv = esp_timer_get_time();
 
     bidirectional_attention_separate(
         scratch->q,
@@ -1651,6 +1762,8 @@ static void encoder_layer_forward(
         scratch->attn_out
     );
 
+    int64_t t_attn = esp_timer_get_time();
+
     int8linear_forward_into(
         &layer->w_o,
         scratch->attn_out,
@@ -1662,6 +1775,8 @@ static void encoder_layer_forward(
     for (size_t i = 0; i < seq_len * hidden; ++i) {
         seq[i] += scratch->proj[i];
     }
+
+    int64_t t_oproj = esp_timer_get_time();
 
     layernorm_into(seq, layer->ffn_norm_weight.data, seq_len, hidden, scratch->normed);
     add_bias_inplace(scratch->normed, layer->ffn_norm_bias.data, seq_len, hidden);
@@ -1687,6 +1802,18 @@ static void encoder_layer_forward(
     for (size_t i = 0; i < seq_len * hidden; ++i) {
         seq[i] += scratch->proj[i];
     }
+
+    int64_t t_ffn = esp_timer_get_time();
+
+    ESP_LOGI(TAG, "enc.layer%d breakdown: norm=%.0fms qkv=%.0fms attn=%.0fms oproj=%.0fms ffn=%.0fms total=%.0fms",
+        layer_idx,
+        (double)(t_norm1 - t0) / 1000.0,
+        (double)(t_qkv - t_norm1) / 1000.0,
+        (double)(t_attn - t_qkv) / 1000.0,
+        (double)(t_oproj - t_attn) / 1000.0,
+        (double)(t_ffn - t_oproj) / 1000.0,
+        (double)(t_ffn - t0) / 1000.0);
+    layer_idx++;
 }
 
 bool encode_image(
@@ -2231,6 +2358,11 @@ void app_main(void) {
         ESP_LOGE(TAG, "PIE self-test FAILED -- halting.");
         return;
     }
+
+    /* Initialize GELU lookup table */
+    gelu_lut_init();
+    ESP_LOGI(TAG, "GELU LUT initialized (%d entries, [%.1f, %.1f])",
+             GELU_LUT_SIZE, GELU_LUT_MIN, GELU_LUT_MAX);
 
     /* Run smoke tests to get baseline timing */
     run_predictor_smoke(&model);
