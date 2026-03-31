@@ -188,6 +188,28 @@ cargo run --release --example export_lewm_q4 -- \
 
 The ESP32 inference code in `synapse-esp32/` uses the same LQ40 loading path.
 
+### ESP32-P4 status as of 2026-03-31
+
+Done on real hardware:
+
+- ESP-IDF C app boots, loads model, connects WiFi, serves HTTP on ESP32-P4 with 32 MB PSRAM @ 200 MHz.
+- Slim `q4-pred` predictor parity is confirmed against the Rust host reference.
+- Full `INT8+Q4` predictor parity is confirmed against the Rust host reference.
+- Full `INT8+Q4` `encode(image)` and `encode(image) + predict_next(action)` execute on-device.
+- Deterministic patch embedding matches the Rust host probe at the printed precision.
+- Short rollout smoke tests complete on-board without the task watchdog firing.
+- **WiFi HTTP inference server** live via esp_hosted (ESP32-C6 companion over SDIO).
+- **Companion web dashboard** with predict/rollout/encode controls and trajectory visualization.
+- **PSRAM at 200 MHz** (`CONFIG_IDF_EXPERIMENTAL_FEATURES=y` required in sdkconfig).
+- Baseline benchmarks: predict 3009ms, encode 70913ms (scalar C, no PIE).
+
+What is still not done on ESP32-P4:
+
+- Encoder parity is still near-match rather than exact-match (scalar C math drift).
+- No PIE SIMD kernels yet -- this is the next step for 5-8x speedup.
+- No camera or real image input (test image is deterministic).
+- No slim model (48d/2e2p) tested on hardware yet.
+
 ---
 
 ## Key Files
@@ -244,7 +266,7 @@ WASM demo comparison (slim Q4-full vs slim f32): cos ~0.94 (the INT8 encoder add
 
 1. **Download and benchmark ALL variants** — the 48d, 64d, 128d, 192d models are training. Download each, convert, benchmark, find the Pareto curve.
 
-2. **ESP32-P4 deployment** — target the smallest models (48d/2e2p) for ESP32. Q4-full should be ~3MB. Test on real hardware.
+2. **ESP32-P4 end-to-end path** — predictor-only parity and scalar end-to-end encoder execution are done. The next milestone is tightening encoder parity, then replacing the built-in smoke image with a real input path.
 
 3. **FPGA hardwired weights** — the existing `fpga/` experiment can use slim model Q4 weights. Fewer layers = fewer LUTs = fits smaller FPGAs.
 
@@ -253,3 +275,30 @@ WASM demo comparison (slim Q4-full vs slim f32): cos ~0.94 (the INT8 encoder add
 5. **Cross-architecture comparison** — compare slim LEWM vs other architectures (SSMs, DeltaNet) at similar parameter counts.
 
 6. **Pruning + slim** — combine Wanda pruning with slim architectures for maximum compression. The 48d/2e2p + Q4 + Wanda40% could be under 2MB.
+
+---
+
+## ESP32-P4 Remaining Work Checklist
+
+- Tighten `encode(image)` parity against the Rust host reference or codify an acceptable tolerance.
+- Keep the stage probes for:
+  - `patch0_embed`
+  - `patch0_with_pos`
+  - `layer0_cls`
+  - `cls_norm`
+- Add a board-side transport for inputs and outputs:
+  - serial command protocol first
+  - optional WiFi/HTTP after parity is stable
+- Replace the built-in deterministic smoke image with that transport-fed input path.
+- Export and test the smallest actual target model locally:
+  - `48d/2e2p`
+  - likely `full` or heavily-pruned `q4-pred`
+- Benchmark current scalar board latency and memory for:
+  - slim `q4-pred`
+  - slim `full`
+  - full `INT8+Q4`
+  - current `full` scalar end-to-end is about `71.1 s` for `encode(image)` and `74.1 s` for `encode(image) + predict_next(action)`
+- Only after the above, add PIE kernels for:
+  - Q4/INT8 GEMV hot loops
+  - layernorm / vecops
+  - optional activation LUTs

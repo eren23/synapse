@@ -289,12 +289,19 @@ impl QuantizedQ4LeWM {
         // 4. Apply projections if bottleneck architecture
         let (mut seq, conditioning) = if has_proj {
             let projected_seq = super::apply_input_proj(
-                &self.input_proj_weight, &self.input_proj_bias,
-                &seq, seq_len, latent, hidden,
+                &self.input_proj_weight,
+                &self.input_proj_bias,
+                &seq,
+                seq_len,
+                latent,
+                hidden,
             );
             let projected_cond = super::apply_cond_proj(
-                &self.cond_proj_weight, &self.cond_proj_bias,
-                &a_embed, latent, hidden,
+                &self.cond_proj_weight,
+                &self.cond_proj_bias,
+                &a_embed,
+                latent,
+                hidden,
             );
             (projected_seq, projected_cond)
         } else {
@@ -303,7 +310,15 @@ impl QuantizedQ4LeWM {
 
         // 5. Run through Q4-quantized predictor layers
         for layer in &self.predictor_layers {
-            seq = layer.forward(&seq, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
+            seq = layer.forward(
+                &seq,
+                &conditioning,
+                seq_len,
+                hidden,
+                num_heads,
+                inner_dim,
+                inter,
+            );
         }
 
         // 6. Final norm
@@ -422,10 +437,26 @@ impl QuantizedQ4LeWM {
         let pred_proj = lq40_read_projection_head(data, &mut off);
 
         // --- Input/Cond projections (optional, for slim models) ---
-        let input_proj_weight = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
-        let input_proj_bias = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
-        let cond_proj_weight = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
-        let cond_proj_bias = if off < data.len() { lq40_read_f32(data, &mut off) } else { vec![] };
+        let input_proj_weight = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+        let input_proj_bias = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+        let cond_proj_weight = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+        let cond_proj_bias = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
 
         Ok(QuantizedQ4LeWM {
             config,
@@ -514,7 +545,6 @@ pub fn quantize_lewm_q4(model: &LeWorldModel) -> QuantizedQ4LeWM {
         cond_proj_bias: model.cond_proj_bias.to_vec(),
     }
 }
-
 
 // ---------------------------------------------------------------------------
 // CachedQ4Linear: dequant-at-load for BLAS-speed Q4 inference
@@ -842,12 +872,19 @@ impl CachedQ4LeWM {
         // 4. Apply projections if bottleneck architecture
         let (mut seq, conditioning) = if has_proj {
             let projected_seq = super::apply_input_proj(
-                &self.input_proj_weight, &self.input_proj_bias,
-                &seq, seq_len, latent, hidden,
+                &self.input_proj_weight,
+                &self.input_proj_bias,
+                &seq,
+                seq_len,
+                latent,
+                hidden,
             );
             let projected_cond = super::apply_cond_proj(
-                &self.cond_proj_weight, &self.cond_proj_bias,
-                &a_embed, latent, hidden,
+                &self.cond_proj_weight,
+                &self.cond_proj_bias,
+                &a_embed,
+                latent,
+                hidden,
             );
             (projected_seq, projected_cond)
         } else {
@@ -856,7 +893,15 @@ impl CachedQ4LeWM {
 
         // 5. Run through CachedQ4 predictor layers
         for layer in &self.predictor_layers {
-            seq = layer.forward(&seq, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
+            seq = layer.forward(
+                &seq,
+                &conditioning,
+                seq_len,
+                hidden,
+                num_heads,
+                inner_dim,
+                inter,
+            );
         }
 
         // 6. Final norm
@@ -904,13 +949,11 @@ pub fn cached_q4_lewm(model: &LeWorldModel) -> CachedQ4LeWM {
         .iter()
         .map(|layer| {
             // adaLN modulation: [6*hidden, hidden]
-            let adaln_linear =
-                CachedQ4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden);
+            let adaln_linear = CachedQ4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden);
             // Fused QKV: [3*inner_dim, hidden]
             let to_qkv = CachedQ4Linear::from_f32(&layer.to_qkv, 3 * inner_dim, hidden);
             // Output projection: [hidden, inner_dim]
-            let attn_out =
-                CachedQ4Linear::from_f32(&layer.attn_out_weight, hidden, inner_dim);
+            let attn_out = CachedQ4Linear::from_f32(&layer.attn_out_weight, hidden, inner_dim);
             // MLP up: [inter, hidden]
             let mlp_up = CachedQ4Linear::from_f32(&layer.mlp_up_weight, inter, hidden);
             // MLP down: [hidden, inter]
@@ -1099,14 +1142,12 @@ mod tests {
         model.pred_proj.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 505));
 
         // Action encoder
-        model.action_conv_weight =
-            AlignedBuffer::from_slice(&gen_weights(act_dim * act_dim, 600));
+        model.action_conv_weight = AlignedBuffer::from_slice(&gen_weights(act_dim * act_dim, 600));
         model.action_conv_bias = AlignedBuffer::from_slice(&gen_weights(act_dim, 601));
         model.action_mlp1_weight =
             AlignedBuffer::from_slice(&gen_weights(enc_inter * act_dim, 602));
         model.action_mlp1_bias = AlignedBuffer::from_slice(&gen_weights(enc_inter, 603));
-        model.action_mlp2_weight =
-            AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 604));
+        model.action_mlp2_weight = AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 604));
         model.action_mlp2_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, 605));
 
         // Predictor pos embed: [3, pred_h]
@@ -1122,8 +1163,7 @@ mod tests {
             layer.adaln_weight =
                 AlignedBuffer::from_slice(&gen_weights(6 * pred_h * pred_h, s + 1));
             layer.adaln_bias = AlignedBuffer::from_slice(&gen_weights(6 * pred_h, s + 2));
-            layer.to_qkv =
-                AlignedBuffer::from_slice(&gen_weights(3 * pred_inner * pred_h, s + 3));
+            layer.to_qkv = AlignedBuffer::from_slice(&gen_weights(3 * pred_inner * pred_h, s + 3));
             layer.attn_out_weight =
                 AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inner, s + 4));
             layer.attn_out_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 5));
@@ -1163,7 +1203,9 @@ mod tests {
         let model = build_test_lewm(&cfg);
         let quantized = quantize_lewm_q4(&model);
         let z = gen_weights(cfg.latent_dim, 42);
-        let actions: Vec<Vec<f32>> = (0..5).map(|i| gen_weights(cfg.action_dim, 100 + i)).collect();
+        let actions: Vec<Vec<f32>> = (0..5)
+            .map(|i| gen_weights(cfg.action_dim, 100 + i))
+            .collect();
         let trajectory = quantized.rollout(&z, &actions);
         assert_eq!(trajectory.len(), 5);
         for (i, state) in trajectory.iter().enumerate() {
@@ -1286,7 +1328,9 @@ mod tests {
         let model = build_test_lewm(&cfg);
         let cached = cached_q4_lewm(&model);
         let z = gen_weights(cfg.latent_dim, 42);
-        let actions: Vec<Vec<f32>> = (0..5).map(|i| gen_weights(cfg.action_dim, 100 + i)).collect();
+        let actions: Vec<Vec<f32>> = (0..5)
+            .map(|i| gen_weights(cfg.action_dim, 100 + i))
+            .collect();
         let traj = cached.rollout(&z, &actions);
         assert_eq!(traj.len(), 5);
     }
@@ -1314,31 +1358,40 @@ mod tests {
 // LQ40 binary reader helpers
 // ---------------------------------------------------------------------------
 
-fn lq40_read_u32(data: &[u8], off: usize) -> u32 {
+pub(crate) fn lq40_read_u32(data: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
 }
 
 /// Read a length-prefixed f32 vector.
-fn lq40_read_f32(data: &[u8], off: &mut usize) -> Vec<f32> {
+pub(crate) fn lq40_read_f32(data: &[u8], off: &mut usize) -> Vec<f32> {
     let len = lq40_read_u32(data, *off) as usize;
     *off += 4;
     let mut v = Vec::with_capacity(len);
     for i in 0..len {
         let base = *off + i * 4;
-        v.push(f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]));
+        v.push(f32::from_le_bytes([
+            data[base],
+            data[base + 1],
+            data[base + 2],
+            data[base + 3],
+        ]));
     }
     *off += len * 4;
     v
 }
 
 /// Read a Q4Linear from LQ40 binary (sparse format with bitmap).
-fn lq40_read_q4_linear(data: &[u8], off: &mut usize) -> Result<Q4Linear, String> {
+pub(crate) fn lq40_read_q4_linear(data: &[u8], off: &mut usize) -> Result<Q4Linear, String> {
     use crate::quantization::Q4Block;
 
-    let out_features = lq40_read_u32(data, *off) as usize; *off += 4;
-    let in_features = lq40_read_u32(data, *off) as usize; *off += 4;
-    let total_blocks = lq40_read_u32(data, *off) as usize; *off += 4;
-    let nonzero_count = lq40_read_u32(data, *off) as usize; *off += 4;
+    let out_features = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let in_features = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let total_blocks = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let nonzero_count = lq40_read_u32(data, *off) as usize;
+    *off += 4;
 
     let bitmap_bytes = (total_blocks + 7) / 8;
     let bitmap = &data[*off..*off + bitmap_bytes];
@@ -1351,22 +1404,33 @@ fn lq40_read_q4_linear(data: &[u8], off: &mut usize) -> Result<Q4Linear, String>
         let is_nonzero = (bitmap[i / 8] >> (i % 8)) & 1 == 1;
         if is_nonzero {
             let base = *off + nz_idx * 20;
-            let scale = f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]);
+            let scale =
+                f32::from_le_bytes([data[base], data[base + 1], data[base + 2], data[base + 3]]);
             let mut nibbles = [0u8; 16];
             nibbles.copy_from_slice(&data[base + 4..base + 20]);
             blocks.push(Q4Block { scale, nibbles });
             nz_idx += 1;
         } else {
-            blocks.push(Q4Block { scale: 0.0, nibbles: [0u8; 16] });
+            blocks.push(Q4Block {
+                scale: 0.0,
+                nibbles: [0u8; 16],
+            });
         }
     }
     *off += nonzero_count * 20;
 
-    Ok(Q4Linear { blocks, out_features, in_features })
+    Ok(Q4Linear {
+        blocks,
+        out_features,
+        in_features,
+    })
 }
 
 /// Read a Q4 adaLN predictor layer from LQ40 format.
-fn lq40_read_q4_adaln_layer(data: &[u8], off: &mut usize) -> Result<QuantizedQ4AdaLNLayer, String> {
+pub(crate) fn lq40_read_q4_adaln_layer(
+    data: &[u8],
+    off: &mut usize,
+) -> Result<QuantizedQ4AdaLNLayer, String> {
     let adaln_linear = lq40_read_q4_linear(data, off)?;
     let adaln_bias = lq40_read_f32(data, off);
     let to_qkv = lq40_read_q4_linear(data, off)?;
@@ -1382,16 +1446,27 @@ fn lq40_read_q4_adaln_layer(data: &[u8], off: &mut usize) -> Result<QuantizedQ4A
     let mlp_down_bias = lq40_read_f32(data, off);
 
     Ok(QuantizedQ4AdaLNLayer {
-        adaln_linear, adaln_bias, to_qkv, attn_out, attn_out_bias,
-        attn_norm_weight, attn_norm_bias, mlp_norm_weight, mlp_norm_bias,
-        mlp_up, mlp_up_bias, mlp_down, mlp_down_bias,
+        adaln_linear,
+        adaln_bias,
+        to_qkv,
+        attn_out,
+        attn_out_bias,
+        attn_norm_weight,
+        attn_norm_bias,
+        mlp_norm_weight,
+        mlp_norm_bias,
+        mlp_up,
+        mlp_up_bias,
+        mlp_down,
+        mlp_down_bias,
     })
 }
 
 /// Read a ProjectionHead: [u32 num_layers] then (weight, bias) f32 pairs.
-fn lq40_read_projection_head(data: &[u8], off: &mut usize) -> ProjectionHead {
+pub(crate) fn lq40_read_projection_head(data: &[u8], off: &mut usize) -> ProjectionHead {
     use crate::weight_loading::AlignedBuffer;
-    let n = lq40_read_u32(data, *off) as usize; *off += 4;
+    let n = lq40_read_u32(data, *off) as usize;
+    *off += 4;
     let mut layers = Vec::with_capacity(n);
     for _ in 0..n {
         let w = lq40_read_f32(data, off);
@@ -1402,7 +1477,7 @@ fn lq40_read_projection_head(data: &[u8], off: &mut usize) -> ProjectionHead {
 }
 
 /// Parse LeWMConfig from LQ40 JSON header.
-fn lq40_config_from_json(v: &serde_json::Value) -> Result<LeWMConfig, String> {
+pub(crate) fn lq40_config_from_json(v: &serde_json::Value) -> Result<LeWMConfig, String> {
     let get_usize = |key: &str| -> Result<usize, String> {
         v.get(key)
             .and_then(|v| v.as_u64())

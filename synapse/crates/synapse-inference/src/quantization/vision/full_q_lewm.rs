@@ -7,6 +7,10 @@
 //!
 //! Target deployment: ESP32-P4 (32MB PSRAM) and WASM browser.
 
+use super::q4_lewm::{
+    lq40_config_from_json, lq40_read_f32, lq40_read_projection_head, lq40_read_q4_adaln_layer,
+    lq40_read_u32,
+};
 use crate::models::vision::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
 use crate::models::vision::vit::ViTConfig;
 use crate::ops::activation::gelu;
@@ -16,8 +20,8 @@ use crate::ops::norm::layernorm;
 use crate::ops::patch_embed::patch_embed;
 use crate::ops::vector::{add_vecs, add_vecs_inplace};
 use crate::quantization::Q4Linear;
-use crate::quantization::QuantizedQ4AdaLNLayer;
 use crate::quantization::QuantizedLinear;
+use crate::quantization::QuantizedQ4AdaLNLayer;
 
 /// INT8-quantized ViT encoder layer.
 pub struct QuantizedEncoderLayer {
@@ -46,7 +50,9 @@ pub struct QuantizedEncoderLayer {
 
 impl QuantizedEncoderLayer {
     fn add_bias(x: &mut [f32], bias: &[f32], m: usize, n: usize) {
-        if bias.is_empty() { return; }
+        if bias.is_empty() {
+            return;
+        }
         for row in 0..m {
             for col in 0..n.min(bias.len()) {
                 x[row * n + col] += bias[col];
@@ -83,7 +89,9 @@ impl QuantizedEncoderLayer {
 
         let mut up = self.ffn_up.forward(&normed2, seq_len);
         Self::add_bias(&mut up, &self.ffn_up_bias, seq_len, inter);
-        for val in up.iter_mut() { *val = gelu(*val); }
+        for val in up.iter_mut() {
+            *val = gelu(*val);
+        }
 
         let mut down = self.ffn_down.forward(&up, seq_len);
         Self::add_bias(&mut down, &self.ffn_down_bias, seq_len, h);
@@ -93,13 +101,23 @@ impl QuantizedEncoderLayer {
     }
 
     pub fn memory_bytes(&self) -> usize {
-        self.w_q.memory_bytes() + self.w_k.memory_bytes()
-            + self.w_v.memory_bytes() + self.w_o.memory_bytes()
-            + self.ffn_up.memory_bytes() + self.ffn_down.memory_bytes()
-            + (self.q_bias.len() + self.k_bias.len() + self.v_bias.len()
-                + self.o_bias.len() + self.ffn_up_bias.len() + self.ffn_down_bias.len()
-                + self.attn_norm_weight.len() + self.attn_norm_bias.len()
-                + self.ffn_norm_weight.len() + self.ffn_norm_bias.len()) * 4
+        self.w_q.memory_bytes()
+            + self.w_k.memory_bytes()
+            + self.w_v.memory_bytes()
+            + self.w_o.memory_bytes()
+            + self.ffn_up.memory_bytes()
+            + self.ffn_down.memory_bytes()
+            + (self.q_bias.len()
+                + self.k_bias.len()
+                + self.v_bias.len()
+                + self.o_bias.len()
+                + self.ffn_up_bias.len()
+                + self.ffn_down_bias.len()
+                + self.attn_norm_weight.len()
+                + self.attn_norm_bias.len()
+                + self.ffn_norm_weight.len()
+                + self.ffn_norm_bias.len())
+                * 4
     }
 }
 
@@ -138,6 +156,143 @@ pub struct FullyQuantizedLeWM {
 }
 
 impl FullyQuantizedLeWM {
+    /// Load from LQ40 binary format (as produced by `export_lewm_q4 --mode full`).
+    pub fn from_lq40_bytes(data: &[u8]) -> Result<Self, String> {
+        if data.len() < 8 {
+            return Err("LQ40 data too short".into());
+        }
+        if &data[0..4] != b"LQ40" {
+            return Err("Not LQ40 format".into());
+        }
+
+        let config_len = lq40_read_u32(data, 4) as usize;
+        if data.len() < 8 + config_len {
+            return Err("LQ40 config truncated".into());
+        }
+        let config_json: serde_json::Value = serde_json::from_slice(&data[8..8 + config_len])
+            .map_err(|e| format!("LQ40 config parse error: {}", e))?;
+        match config_json.get("mode").and_then(|v| v.as_str()) {
+            Some("full") => {}
+            Some(other) => {
+                return Err(format!(
+                    "LQ40 mode '{other}' is not supported by FullyQuantizedLeWM"
+                ))
+            }
+            None => return Err("LQ40 config missing mode".into()),
+        }
+
+        let config = lq40_config_from_json(&config_json)?;
+        let mut off = 8 + config_len;
+        let vit_config = ViTConfig {
+            image_size: config.image_size,
+            patch_size: config.patch_size,
+            hidden_size: config.encoder_hidden,
+            num_layers: config.encoder_layers,
+            num_heads: config.encoder_heads,
+            intermediate_size: config.encoder_inter,
+            channels: config.channels,
+            num_classes: 0,
+        };
+
+        let patch_proj = lq40_read_f32(data, &mut off);
+        let patch_proj_bias = lq40_read_f32(data, &mut off);
+        let cls_token = lq40_read_f32(data, &mut off);
+        let pos_embed = lq40_read_f32(data, &mut off);
+
+        let mut encoder_layers = Vec::with_capacity(config.encoder_layers);
+        for _ in 0..config.encoder_layers {
+            encoder_layers.push(QuantizedEncoderLayer {
+                hidden_size: vit_config.hidden_size,
+                num_heads: vit_config.num_heads,
+                head_dim: vit_config.head_dim(),
+                attn_norm_weight: lq40_read_f32(data, &mut off),
+                attn_norm_bias: lq40_read_f32(data, &mut off),
+                w_q: lq40_read_quantized_linear(data, &mut off)?,
+                q_bias: lq40_read_f32(data, &mut off),
+                w_k: lq40_read_quantized_linear(data, &mut off)?,
+                k_bias: lq40_read_f32(data, &mut off),
+                w_v: lq40_read_quantized_linear(data, &mut off)?,
+                v_bias: lq40_read_f32(data, &mut off),
+                w_o: lq40_read_quantized_linear(data, &mut off)?,
+                o_bias: lq40_read_f32(data, &mut off),
+                ffn_norm_weight: lq40_read_f32(data, &mut off),
+                ffn_norm_bias: lq40_read_f32(data, &mut off),
+                ffn_up: lq40_read_quantized_linear(data, &mut off)?,
+                ffn_up_bias: lq40_read_f32(data, &mut off),
+                ffn_down: lq40_read_quantized_linear(data, &mut off)?,
+                ffn_down_bias: lq40_read_f32(data, &mut off),
+            });
+        }
+
+        let final_norm_weight = lq40_read_f32(data, &mut off);
+        let final_norm_bias = lq40_read_f32(data, &mut off);
+        let predictor_pos_embed = lq40_read_f32(data, &mut off);
+
+        let mut predictor_layers = Vec::with_capacity(config.predictor_layers);
+        for _ in 0..config.predictor_layers {
+            predictor_layers.push(lq40_read_q4_adaln_layer(data, &mut off)?);
+        }
+
+        let predictor_norm_weight = lq40_read_f32(data, &mut off);
+        let predictor_norm_bias = lq40_read_f32(data, &mut off);
+        let action_conv_weight = lq40_read_f32(data, &mut off);
+        let action_conv_bias = lq40_read_f32(data, &mut off);
+        let action_mlp1_weight = lq40_read_f32(data, &mut off);
+        let action_mlp1_bias = lq40_read_f32(data, &mut off);
+        let action_mlp2_weight = lq40_read_f32(data, &mut off);
+        let action_mlp2_bias = lq40_read_f32(data, &mut off);
+        let projector = lq40_read_projection_head(data, &mut off);
+        let pred_proj = lq40_read_projection_head(data, &mut off);
+        let input_proj_weight = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+        let input_proj_bias = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+        let cond_proj_weight = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+        let cond_proj_bias = if off < data.len() {
+            lq40_read_f32(data, &mut off)
+        } else {
+            vec![]
+        };
+
+        Ok(FullyQuantizedLeWM {
+            config,
+            encoder_layers,
+            patch_proj,
+            patch_proj_bias,
+            cls_token,
+            pos_embed,
+            final_norm_weight,
+            final_norm_bias,
+            vit_config,
+            predictor_layers,
+            predictor_pos_embed,
+            predictor_norm_weight,
+            predictor_norm_bias,
+            action_conv_weight,
+            action_conv_bias,
+            action_mlp1_weight,
+            action_mlp1_bias,
+            action_mlp2_weight,
+            action_mlp2_bias,
+            projector,
+            pred_proj,
+            input_proj_weight,
+            input_proj_bias,
+            cond_proj_weight,
+            cond_proj_bias,
+        })
+    }
+
     /// Encode an image using the INT8 ViT encoder.
     pub fn encode(&self, image: &[f32], h: usize, w: usize) -> Vec<f32> {
         let cfg = &self.vit_config;
@@ -145,7 +300,15 @@ impl FullyQuantizedLeWM {
         let seq_len = cfg.seq_len();
 
         // Patch embedding (f32, small computation)
-        let patches = patch_embed(image, h, w, cfg.channels, cfg.patch_size, &self.patch_proj, hidden);
+        let patches = patch_embed(
+            image,
+            h,
+            w,
+            cfg.channels,
+            cfg.patch_size,
+            &self.patch_proj,
+            hidden,
+        );
         let num_patches = cfg.num_patches();
 
         // Prepend CLS + add pos embed
@@ -198,12 +361,19 @@ impl FullyQuantizedLeWM {
         // Apply projections if bottleneck architecture
         let (mut x, conditioning) = if has_proj {
             let projected_seq = super::apply_input_proj(
-                &self.input_proj_weight, &self.input_proj_bias,
-                &seq, seq_len, latent, hidden,
+                &self.input_proj_weight,
+                &self.input_proj_bias,
+                &seq,
+                seq_len,
+                latent,
+                hidden,
             );
             let projected_cond = super::apply_cond_proj(
-                &self.cond_proj_weight, &self.cond_proj_bias,
-                &a_embed, latent, hidden,
+                &self.cond_proj_weight,
+                &self.cond_proj_bias,
+                &a_embed,
+                latent,
+                hidden,
             );
             (projected_seq, projected_cond)
         } else {
@@ -212,7 +382,15 @@ impl FullyQuantizedLeWM {
 
         // Q4 predictor layers
         for layer in &self.predictor_layers {
-            x = layer.forward(&x, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
+            x = layer.forward(
+                &x,
+                &conditioning,
+                seq_len,
+                hidden,
+                num_heads,
+                inner_dim,
+                inter,
+            );
         }
 
         let normed = layernorm(&x, &self.predictor_norm_weight, 1e-6, hidden);
@@ -247,46 +425,121 @@ impl FullyQuantizedLeWM {
 
         let inter = if !self.action_mlp1_weight.is_empty() {
             self.action_mlp1_weight.len() / act_dim
-        } else { hidden * 4 };
+        } else {
+            hidden * 4
+        };
 
         let mut h1 = if !self.action_mlp1_weight.is_empty() {
             matmul_t(&conv_out, &self.action_mlp1_weight, 1, act_dim, inter)
-        } else { vec![0.0f32; inter] };
-        for j in 0..inter.min(self.action_mlp1_bias.len()) { h1[j] += self.action_mlp1_bias[j]; }
-        for v in h1.iter_mut() { *v = gelu(*v); }
+        } else {
+            vec![0.0f32; inter]
+        };
+        for j in 0..inter.min(self.action_mlp1_bias.len()) {
+            h1[j] += self.action_mlp1_bias[j];
+        }
+        for v in h1.iter_mut() {
+            *v = gelu(*v);
+        }
 
         let mut out = if !self.action_mlp2_weight.is_empty() {
             matmul_t(&h1, &self.action_mlp2_weight, 1, inter, hidden)
-        } else { vec![0.0f32; hidden] };
-        for j in 0..hidden.min(self.action_mlp2_bias.len()) { out[j] += self.action_mlp2_bias[j]; }
+        } else {
+            vec![0.0f32; hidden]
+        };
+        for j in 0..hidden.min(self.action_mlp2_bias.len()) {
+            out[j] += self.action_mlp2_bias[j];
+        }
         out
     }
 
     /// Total model size in bytes.
     pub fn model_size_bytes(&self) -> usize {
         let enc: usize = self.encoder_layers.iter().map(|l| l.memory_bytes()).sum();
-        let enc_misc = (self.patch_proj.len() + self.patch_proj_bias.len()
-            + self.cls_token.len() + self.pos_embed.len()
-            + self.final_norm_weight.len() + self.final_norm_bias.len()) * 4;
+        let enc_misc = (self.patch_proj.len()
+            + self.patch_proj_bias.len()
+            + self.cls_token.len()
+            + self.pos_embed.len()
+            + self.final_norm_weight.len()
+            + self.final_norm_bias.len())
+            * 4;
 
-        let pred: usize = self.predictor_layers.iter().map(|l| {
-            l.adaln_linear.memory_bytes() + l.to_qkv.memory_bytes()
-                + l.attn_out.memory_bytes() + l.mlp_up.memory_bytes()
-                + l.mlp_down.memory_bytes()
-                + (l.adaln_bias.len() + l.attn_out_bias.len()
-                    + l.attn_norm_weight.len() + l.attn_norm_bias.len()
-                    + l.mlp_norm_weight.len() + l.mlp_norm_bias.len()
-                    + l.mlp_up_bias.len() + l.mlp_down_bias.len()) * 4
-        }).sum();
+        let pred: usize = self
+            .predictor_layers
+            .iter()
+            .map(|l| {
+                l.adaln_linear.memory_bytes()
+                    + l.to_qkv.memory_bytes()
+                    + l.attn_out.memory_bytes()
+                    + l.mlp_up.memory_bytes()
+                    + l.mlp_down.memory_bytes()
+                    + (l.adaln_bias.len()
+                        + l.attn_out_bias.len()
+                        + l.attn_norm_weight.len()
+                        + l.attn_norm_bias.len()
+                        + l.mlp_norm_weight.len()
+                        + l.mlp_norm_bias.len()
+                        + l.mlp_up_bias.len()
+                        + l.mlp_down_bias.len())
+                        * 4
+            })
+            .sum();
         let pred_misc = (self.predictor_pos_embed.len()
-            + self.predictor_norm_weight.len() + self.predictor_norm_bias.len()) * 4;
+            + self.predictor_norm_weight.len()
+            + self.predictor_norm_bias.len())
+            * 4;
 
-        let action = (self.action_conv_weight.len() + self.action_conv_bias.len()
-            + self.action_mlp1_weight.len() + self.action_mlp1_bias.len()
-            + self.action_mlp2_weight.len() + self.action_mlp2_bias.len()) * 4;
+        let action = (self.action_conv_weight.len()
+            + self.action_conv_bias.len()
+            + self.action_mlp1_weight.len()
+            + self.action_mlp1_bias.len()
+            + self.action_mlp2_weight.len()
+            + self.action_mlp2_bias.len())
+            * 4;
 
         enc + enc_misc + pred + pred_misc + action
     }
+}
+
+fn lq40_read_quantized_linear(data: &[u8], off: &mut usize) -> Result<QuantizedLinear, String> {
+    let out_features = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let in_features = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+
+    let weights_len = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    if *off + weights_len > data.len() {
+        return Err("LQ40 INT8 weights truncated".into());
+    }
+    let weights_int8 = data[*off..*off + weights_len]
+        .iter()
+        .map(|&b| b as i8)
+        .collect();
+    *off += weights_len;
+
+    let scales_len = lq40_read_u32(data, *off) as usize;
+    *off += 4;
+    let mut scales = Vec::with_capacity(scales_len);
+    for _ in 0..scales_len {
+        let base = *off;
+        if base + 4 > data.len() {
+            return Err("LQ40 INT8 scales truncated".into());
+        }
+        scales.push(f32::from_le_bytes([
+            data[base],
+            data[base + 1],
+            data[base + 2],
+            data[base + 3],
+        ]));
+        *off += 4;
+    }
+
+    Ok(QuantizedLinear {
+        weights_int8,
+        scales,
+        out_features,
+        in_features,
+    })
 }
 
 /// Quantize a full LeWorldModel to INT8 encoder + Q4 predictor.
@@ -303,8 +556,11 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
     let enc_head_dim = vit_cfg.head_dim();
     let enc_inter = vit_cfg.intermediate_size;
 
-    let encoder_layers: Vec<QuantizedEncoderLayer> = model.encoder.layers.iter().map(|layer| {
-        QuantizedEncoderLayer {
+    let encoder_layers: Vec<QuantizedEncoderLayer> = model
+        .encoder
+        .layers
+        .iter()
+        .map(|layer| QuantizedEncoderLayer {
             hidden_size: enc_h,
             num_heads: enc_heads,
             head_dim: enc_head_dim,
@@ -324,12 +580,14 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
             attn_norm_bias: layer.attn_norm_bias.to_vec(),
             ffn_norm_weight: layer.ffn_norm_weight.to_vec(),
             ffn_norm_bias: layer.ffn_norm_bias.to_vec(),
-        }
-    }).collect();
+        })
+        .collect();
 
     // Quantize predictor layers to Q4 (reuse existing quantize_lewm_q4 logic)
-    let predictor_layers: Vec<QuantizedQ4AdaLNLayer> = model.predictor_layers.iter().map(|layer| {
-        QuantizedQ4AdaLNLayer {
+    let predictor_layers: Vec<QuantizedQ4AdaLNLayer> = model
+        .predictor_layers
+        .iter()
+        .map(|layer| QuantizedQ4AdaLNLayer {
             adaln_linear: Q4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden),
             adaln_bias: layer.adaln_bias.to_vec(),
             to_qkv: Q4Linear::from_f32(&layer.to_qkv, 3 * inner_dim, hidden),
@@ -343,8 +601,8 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
             mlp_up_bias: layer.mlp_up_bias.to_vec(),
             mlp_down: Q4Linear::from_f32(&layer.mlp_down_weight, hidden, inter),
             mlp_down_bias: layer.mlp_down_bias.to_vec(),
-        }
-    }).collect();
+        })
+        .collect();
 
     use super::int8_lewm::clone_projection_head;
 
@@ -377,7 +635,6 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
     }
 }
 
-
 // ── Q4 encoder layer ──────────────────────────────────────────────
 
 /// Q4-quantized ViT encoder layer (more aggressive than INT8).
@@ -405,7 +662,9 @@ pub struct Q4EncoderLayer {
 
 impl Q4EncoderLayer {
     fn add_bias(x: &mut [f32], bias: &[f32], m: usize, n: usize) {
-        if bias.is_empty() { return; }
+        if bias.is_empty() {
+            return;
+        }
         for row in 0..m {
             for col in 0..n.min(bias.len()) {
                 x[row * n + col] += bias[col];
@@ -440,7 +699,9 @@ impl Q4EncoderLayer {
 
         let mut up = self.ffn_up.forward(&normed2, seq_len);
         Self::add_bias(&mut up, &self.ffn_up_bias, seq_len, inter);
-        for val in up.iter_mut() { *val = gelu(*val); }
+        for val in up.iter_mut() {
+            *val = gelu(*val);
+        }
 
         let mut down = self.ffn_down.forward(&up, seq_len);
         Self::add_bias(&mut down, &self.ffn_down_bias, seq_len, h);
@@ -450,13 +711,23 @@ impl Q4EncoderLayer {
     }
 
     pub fn memory_bytes(&self) -> usize {
-        self.w_q.memory_bytes() + self.w_k.memory_bytes()
-            + self.w_v.memory_bytes() + self.w_o.memory_bytes()
-            + self.ffn_up.memory_bytes() + self.ffn_down.memory_bytes()
-            + (self.q_bias.len() + self.k_bias.len() + self.v_bias.len()
-                + self.o_bias.len() + self.ffn_up_bias.len() + self.ffn_down_bias.len()
-                + self.attn_norm_weight.len() + self.attn_norm_bias.len()
-                + self.ffn_norm_weight.len() + self.ffn_norm_bias.len()) * 4
+        self.w_q.memory_bytes()
+            + self.w_k.memory_bytes()
+            + self.w_v.memory_bytes()
+            + self.w_o.memory_bytes()
+            + self.ffn_up.memory_bytes()
+            + self.ffn_down.memory_bytes()
+            + (self.q_bias.len()
+                + self.k_bias.len()
+                + self.v_bias.len()
+                + self.o_bias.len()
+                + self.ffn_up_bias.len()
+                + self.ffn_down_bias.len()
+                + self.attn_norm_weight.len()
+                + self.attn_norm_bias.len()
+                + self.ffn_norm_weight.len()
+                + self.ffn_norm_bias.len())
+                * 4
     }
 }
 
@@ -495,13 +766,25 @@ impl Q4FullLeWM {
         let cfg = &self.vit_config;
         let hidden = cfg.hidden_size;
         let seq_len = cfg.seq_len();
-        let patches = patch_embed(image, h, w, cfg.channels, cfg.patch_size, &self.patch_proj, hidden);
+        let patches = patch_embed(
+            image,
+            h,
+            w,
+            cfg.channels,
+            cfg.patch_size,
+            &self.patch_proj,
+            hidden,
+        );
         let num_patches = cfg.num_patches();
         let mut x = vec![0.0f32; seq_len * hidden];
         x[..hidden].copy_from_slice(&self.cls_token);
         x[hidden..hidden + num_patches * hidden].copy_from_slice(&patches);
-        for i in 0..seq_len * hidden { x[i] += self.pos_embed[i]; }
-        for layer in &self.encoder_layers { x = layer.forward(&x, seq_len); }
+        for i in 0..seq_len * hidden {
+            x[i] += self.pos_embed[i];
+        }
+        for layer in &self.encoder_layers {
+            x = layer.forward(&x, seq_len);
+        }
         let cls = &x[..hidden];
         let normed = layernorm(cls, &self.final_norm_weight, 1e-6, hidden);
         self.projector.forward(&normed)
@@ -535,12 +818,19 @@ impl Q4FullLeWM {
         // Apply projections if bottleneck architecture
         let (mut x, conditioning) = if has_proj {
             let projected_seq = super::apply_input_proj(
-                &self.input_proj_weight, &self.input_proj_bias,
-                &seq, seq_len, latent, hidden,
+                &self.input_proj_weight,
+                &self.input_proj_bias,
+                &seq,
+                seq_len,
+                latent,
+                hidden,
             );
             let projected_cond = super::apply_cond_proj(
-                &self.cond_proj_weight, &self.cond_proj_bias,
-                &a_embed, latent, hidden,
+                &self.cond_proj_weight,
+                &self.cond_proj_bias,
+                &a_embed,
+                latent,
+                hidden,
             );
             (projected_seq, projected_cond)
         } else {
@@ -548,7 +838,15 @@ impl Q4FullLeWM {
         };
 
         for layer in &self.predictor_layers {
-            x = layer.forward(&x, &conditioning, seq_len, hidden, num_heads, inner_dim, inter);
+            x = layer.forward(
+                &x,
+                &conditioning,
+                seq_len,
+                hidden,
+                num_heads,
+                inner_dim,
+                inter,
+            );
         }
         let normed = layernorm(&x, &self.predictor_norm_weight, 1e-6, hidden);
         let target = &normed[2 * hidden..3 * hidden];
@@ -558,42 +856,78 @@ impl Q4FullLeWM {
     pub fn rollout(&self, z_start: &[f32], actions: &[Vec<f32>]) -> Vec<Vec<f32>> {
         let mut states = Vec::with_capacity(actions.len());
         let mut z = z_start.to_vec();
-        for action in actions { z = self.predict_next(&z, action); states.push(z.clone()); }
+        for action in actions {
+            z = self.predict_next(&z, action);
+            states.push(z.clone());
+        }
         states
     }
 
     fn encode_action(&self, action: &[f32], hidden: usize) -> Vec<f32> {
         let act_dim = self.config.action_dim;
         let mut conv_out = matmul_t(action, &self.action_conv_weight, 1, act_dim, act_dim);
-        for j in 0..act_dim.min(self.action_conv_bias.len()) { conv_out[j] += self.action_conv_bias[j]; }
-        let inter = if !self.action_mlp1_weight.is_empty() { self.action_mlp1_weight.len() / act_dim } else { hidden * 4 };
+        for j in 0..act_dim.min(self.action_conv_bias.len()) {
+            conv_out[j] += self.action_conv_bias[j];
+        }
+        let inter = if !self.action_mlp1_weight.is_empty() {
+            self.action_mlp1_weight.len() / act_dim
+        } else {
+            hidden * 4
+        };
         let mut h1 = matmul_t(&conv_out, &self.action_mlp1_weight, 1, act_dim, inter);
-        for j in 0..inter.min(self.action_mlp1_bias.len()) { h1[j] += self.action_mlp1_bias[j]; }
-        for v in h1.iter_mut() { *v = gelu(*v); }
+        for j in 0..inter.min(self.action_mlp1_bias.len()) {
+            h1[j] += self.action_mlp1_bias[j];
+        }
+        for v in h1.iter_mut() {
+            *v = gelu(*v);
+        }
         let mut out = matmul_t(&h1, &self.action_mlp2_weight, 1, inter, hidden);
-        for j in 0..hidden.min(self.action_mlp2_bias.len()) { out[j] += self.action_mlp2_bias[j]; }
+        for j in 0..hidden.min(self.action_mlp2_bias.len()) {
+            out[j] += self.action_mlp2_bias[j];
+        }
         out
     }
 
     pub fn model_size_bytes(&self) -> usize {
         let enc: usize = self.encoder_layers.iter().map(|l| l.memory_bytes()).sum();
-        let enc_misc = (self.patch_proj.len() + self.patch_proj_bias.len()
-            + self.cls_token.len() + self.pos_embed.len()
-            + self.final_norm_weight.len() + self.final_norm_bias.len()) * 4;
-        let pred: usize = self.predictor_layers.iter().map(|l| {
-            l.adaln_linear.memory_bytes() + l.to_qkv.memory_bytes()
-                + l.attn_out.memory_bytes() + l.mlp_up.memory_bytes()
-                + l.mlp_down.memory_bytes()
-                + (l.adaln_bias.len() + l.attn_out_bias.len()
-                    + l.attn_norm_weight.len() + l.attn_norm_bias.len()
-                    + l.mlp_norm_weight.len() + l.mlp_norm_bias.len()
-                    + l.mlp_up_bias.len() + l.mlp_down_bias.len()) * 4
-        }).sum();
+        let enc_misc = (self.patch_proj.len()
+            + self.patch_proj_bias.len()
+            + self.cls_token.len()
+            + self.pos_embed.len()
+            + self.final_norm_weight.len()
+            + self.final_norm_bias.len())
+            * 4;
+        let pred: usize = self
+            .predictor_layers
+            .iter()
+            .map(|l| {
+                l.adaln_linear.memory_bytes()
+                    + l.to_qkv.memory_bytes()
+                    + l.attn_out.memory_bytes()
+                    + l.mlp_up.memory_bytes()
+                    + l.mlp_down.memory_bytes()
+                    + (l.adaln_bias.len()
+                        + l.attn_out_bias.len()
+                        + l.attn_norm_weight.len()
+                        + l.attn_norm_bias.len()
+                        + l.mlp_norm_weight.len()
+                        + l.mlp_norm_bias.len()
+                        + l.mlp_up_bias.len()
+                        + l.mlp_down_bias.len())
+                        * 4
+            })
+            .sum();
         let pred_misc = (self.predictor_pos_embed.len()
-            + self.predictor_norm_weight.len() + self.predictor_norm_bias.len()) * 4;
-        let action = (self.action_conv_weight.len() + self.action_conv_bias.len()
-            + self.action_mlp1_weight.len() + self.action_mlp1_bias.len()
-            + self.action_mlp2_weight.len() + self.action_mlp2_bias.len()) * 4;
+            + self.predictor_norm_weight.len()
+            + self.predictor_norm_bias.len())
+            * 4;
+        let action = (self.action_conv_weight.len()
+            + self.action_conv_bias.len()
+            + self.action_mlp1_weight.len()
+            + self.action_mlp1_bias.len()
+            + self.action_mlp2_weight.len()
+            + self.action_mlp2_bias.len())
+            * 4;
         enc + enc_misc + pred + pred_misc + action
     }
 }
@@ -610,25 +944,37 @@ pub fn quantize_lewm_q4_full(model: &LeWorldModel) -> Q4FullLeWM {
     let enc_head_dim = vit_cfg.head_dim();
     let enc_inter = vit_cfg.intermediate_size;
 
-    let encoder_layers: Vec<Q4EncoderLayer> = model.encoder.layers.iter().map(|layer| {
-        Q4EncoderLayer {
-            hidden_size: enc_h, num_heads: enc_heads, head_dim: enc_head_dim,
+    let encoder_layers: Vec<Q4EncoderLayer> = model
+        .encoder
+        .layers
+        .iter()
+        .map(|layer| Q4EncoderLayer {
+            hidden_size: enc_h,
+            num_heads: enc_heads,
+            head_dim: enc_head_dim,
             w_q: Q4Linear::from_f32(&layer.w_q, enc_heads * enc_head_dim, enc_h),
             w_k: Q4Linear::from_f32(&layer.w_k, enc_heads * enc_head_dim, enc_h),
             w_v: Q4Linear::from_f32(&layer.w_v, enc_heads * enc_head_dim, enc_h),
             w_o: Q4Linear::from_f32(&layer.w_o, enc_h, enc_heads * enc_head_dim),
             ffn_up: Q4Linear::from_f32(&layer.ffn_up, enc_inter, enc_h),
             ffn_down: Q4Linear::from_f32(&layer.ffn_down, enc_h, enc_inter),
-            q_bias: layer.q_bias.to_vec(), k_bias: layer.k_bias.to_vec(),
-            v_bias: layer.v_bias.to_vec(), o_bias: layer.o_bias.to_vec(),
-            ffn_up_bias: layer.ffn_up_bias.to_vec(), ffn_down_bias: layer.ffn_down_bias.to_vec(),
-            attn_norm_weight: layer.attn_norm_weight.to_vec(), attn_norm_bias: layer.attn_norm_bias.to_vec(),
-            ffn_norm_weight: layer.ffn_norm_weight.to_vec(), ffn_norm_bias: layer.ffn_norm_bias.to_vec(),
-        }
-    }).collect();
+            q_bias: layer.q_bias.to_vec(),
+            k_bias: layer.k_bias.to_vec(),
+            v_bias: layer.v_bias.to_vec(),
+            o_bias: layer.o_bias.to_vec(),
+            ffn_up_bias: layer.ffn_up_bias.to_vec(),
+            ffn_down_bias: layer.ffn_down_bias.to_vec(),
+            attn_norm_weight: layer.attn_norm_weight.to_vec(),
+            attn_norm_bias: layer.attn_norm_bias.to_vec(),
+            ffn_norm_weight: layer.ffn_norm_weight.to_vec(),
+            ffn_norm_bias: layer.ffn_norm_bias.to_vec(),
+        })
+        .collect();
 
-    let predictor_layers = model.predictor_layers.iter().map(|layer| {
-        QuantizedQ4AdaLNLayer {
+    let predictor_layers = model
+        .predictor_layers
+        .iter()
+        .map(|layer| QuantizedQ4AdaLNLayer {
             adaln_linear: Q4Linear::from_f32(&layer.adaln_weight, 6 * hidden, hidden),
             adaln_bias: layer.adaln_bias.to_vec(),
             to_qkv: Q4Linear::from_f32(&layer.to_qkv, 3 * inner_dim, hidden),
@@ -642,8 +988,8 @@ pub fn quantize_lewm_q4_full(model: &LeWorldModel) -> Q4FullLeWM {
             mlp_up_bias: layer.mlp_up_bias.to_vec(),
             mlp_down: Q4Linear::from_f32(&layer.mlp_down_weight, hidden, inter),
             mlp_down_bias: layer.mlp_down_bias.to_vec(),
-        }
-    }).collect();
+        })
+        .collect();
 
     use super::int8_lewm::clone_projection_head;
 

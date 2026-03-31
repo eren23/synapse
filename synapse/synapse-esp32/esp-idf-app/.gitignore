@@ -1,0 +1,7 @@
+build/
+sdkconfig
+sdkconfig.old
+sdkconfig.bak
+managed_components/
+dependencies.lock
+main/model.bin

@@ -1,5 +1,49 @@
 # ESP32-P4 PIE Hardware Accelerator — Research & Alignment Plan
 
+## Current Status
+
+### What is already working on real ESP32-P4 hardware
+
+- The ESP-IDF C app in `synapse-esp32/esp-idf-app/` boots, loads model, connects WiFi, and serves HTTP.
+- Slim `q4-pred` predictor parity matches the Rust host reference.
+- Full `INT8+Q4` predictor parity also matches the Rust host reference.
+- Full `INT8+Q4` encoder + predictor runs end-to-end on device from a deterministic image tensor.
+- Patch embedding is bit-for-bit aligned with the Rust host probe at the printed precision.
+- Short rollout smoke tests complete on-device for both paths.
+- **WiFi HTTP inference server** live on port 80 via ESP32-C6 companion (esp_hosted over SDIO).
+- **Companion web dashboard** served from embedded flash at `GET /`.
+- **PSRAM at 200 MHz** (requires `CONFIG_IDF_EXPERIMENTAL_FEATURES=y`).
+- Endpoints: `POST /predict`, `POST /rollout`, `POST /encode`, `GET /status`.
+
+### Baseline benchmarks (PSRAM @ 200 MHz, scalar C, no PIE)
+
+| Operation | Latency |
+|-----------|---------|
+| predict_next | 3,009 ms |
+| rollout (3 steps) | 9,028 ms |
+| encode(image) | 70,913 ms |
+| encode + predict | 73,921 ms |
+
+### What is not working yet
+
+- The full encoder path is close to, but not exactly, numerically identical to the Rust host reference.
+  - Drift starts in encoder layer 0 after exact patch embedding.
+  - This currently looks like scalar C vs host pure-Rust math drift inside encoder compute, not a loader bug.
+- There are no PIE kernels yet; all verified timings so far are scalar C reference timings.
+- Camera/real image input not yet connected (test image is deterministic).
+
+### Corrected priority order
+
+The repo should not jump to PIE first. The right order is:
+
+1. Get end-to-end functional parity on device:
+   - `encode(image)`
+   - `encode(image) + predict_next(action)`
+2. Add a usable board I/O path:
+   - serial command protocol first
+   - camera or WiFi only after the compute path is correct
+3. Then accelerate the hot kernels with PIE.
+
 ## Hardware Overview
 
 ### ESP32-P4 Core Specs
@@ -106,6 +150,20 @@ Uses GDMA-AXI channels for PSRAM-to-SRAM concurrent with CPU.
 
 ## Implementation Plan
 
+### Phase 0: Finish the non-PIE functional path
+
+Before any PIE work, the board still needs:
+
+- Tighten encoder parity from "very close" to the Rust host reference, or explicitly define the acceptable tolerance.
+- Keep the deterministic host-vs-board parity fixtures for:
+  - patch embedding
+  - layer-0 encoder output
+  - final encoder output
+  - encoder + predictor end-to-end
+- Replace the deterministic smoke image with a real board input path.
+
+Only after those are green should the project move into PIE kernel work.
+
 ### Phase 1: C Kernels with PIE Assembly
 ```
 synapse-esp32/pie_kernels/
@@ -177,3 +235,27 @@ pub fn forward(&self, x: &[f32], m: usize) -> Vec<f32> {
 3. **Rust inline asm for custom ISA** — Use C kernels + FFI (mature toolchain)
 4. **PSRAM bandwidth** — DMA double-buffering + sequential access patterns
 5. **768 KB SRAM budget** — Attention (264 KB) + DMA (64 KB) + activations (50 KB) = 378 KB, fits
+
+## Concrete Remaining Work
+
+### Done (2026-03-31)
+
+- WiFi HTTP server live with all inference endpoints
+- PSRAM at 200 MHz (was stuck at 20 MHz due to missing `CONFIG_IDF_EXPERIMENTAL_FEATURES`)
+- Companion web dashboard embedded and served from flash
+- Baseline benchmarks captured (predict: 3009ms, encode: 70913ms at 200MHz PSRAM)
+
+### Next: PIE SIMD kernels
+
+The scalar end-to-end path is stable and profiled. The bottleneck is compute (GEMV inner loops), not memory bandwidth. PIE is the next step:
+
+1. Write `pie_gemv.c` with INT8 GEMV using `esp.vmac.s8` (16-wide MAC)
+2. Replace scalar `int8_gemv_row()` in encoder path
+3. Replace scalar `q4_gemv_row()` in predictor path (Q4→INT8 dequant + PIE MAC)
+4. Benchmark each change against 200MHz PSRAM baseline
+
+### Later
+
+- Camera or real image input (currently deterministic test image)
+- Slim model (48d/2e2p) testing for smallest possible inference
+- Encoder parity tolerance codification
