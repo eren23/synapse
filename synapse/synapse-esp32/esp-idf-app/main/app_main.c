@@ -15,6 +15,8 @@
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
 
+#include "pie_gemv.h"
+
 static const char *TAG = "synapse-lewm";
 
 extern const uint8_t _binary_model_bin_start[] asm("_binary_model_bin_start");
@@ -49,7 +51,9 @@ typedef struct {
 typedef struct {
     size_t out_features;
     size_t in_features;
+    size_t in_features_padded; /* rounded up to multiple of 16 for PIE */
     const int8_t *weights_data;
+    int8_t *weights_t;         /* transposed: [out][in_padded], PIE-friendly */
     FloatBuffer scales;
 } Int8LinearRef;
 
@@ -463,7 +467,23 @@ static bool cursor_read_int8_linear(
     }
     bool ok = copy_f32_payload(&linear->scales, data + *off, scales_len, caps);
     *off += (size_t)scales_len * 4;
-    return ok;
+    if (!ok) return false;
+
+    /* Transpose weights for PIE SIMD: [in][out] -> [out][in_padded] */
+    linear->in_features_padded = (linear->in_features + 15U) & ~15U;
+    size_t t_size = linear->out_features * linear->in_features_padded;
+    linear->weights_t = (int8_t *)heap_caps_malloc(
+        t_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (linear->weights_t) {
+        transpose_int8_weights(
+            linear->weights_data,
+            linear->in_features,
+            linear->out_features,
+            linear->in_features_padded,
+            linear->weights_t);
+    }
+
+    return true;
 }
 
 static bool cursor_skip_projection_head(const uint8_t *data, size_t data_len, size_t *off) {
@@ -862,6 +882,8 @@ static inline float gelu_scalar(float x) {
     return 0.5f * x * (1.0f + tanhf(alpha * (x + 0.044715f * x * x * x)));
 }
 
+static void quantize_row_int8(const float *input, size_t len, int8_t *out, float *scale_out);
+
 static void softmax_inplace(float *x, size_t len) {
     float max_value = -INFINITY;
     for (size_t i = 0; i < len; ++i) {
@@ -891,6 +913,26 @@ static void q4linear_forward_into(
 ) {
     memset(out, 0, m * linear->out_features * sizeof(float));
 
+    /* Quantize each input row to INT8 once upfront */
+    size_t in_padded = (linear->in_features + 31U) & ~31U;
+    int8_t *x_i8 = (int8_t *)heap_caps_malloc(
+        m * in_padded, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    float *x_scales = (float *)heap_caps_malloc(
+        m * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+
+    if (x_i8 && x_scales) {
+        for (size_t batch = 0; batch < m; ++batch) {
+            quantize_row_int8(
+                x + batch * linear->in_features,
+                linear->in_features,
+                x_i8 + batch * in_padded,
+                &x_scales[batch]);
+            /* Zero-pad */
+            memset(x_i8 + batch * in_padded + linear->in_features, 0,
+                   in_padded - linear->in_features);
+        }
+    }
+
     for (size_t row = 0; row < linear->out_features; ++row) {
         uint32_t nz_index = linear->row_nz_starts[row];
 
@@ -901,37 +943,57 @@ static void q4linear_forward_into(
             }
 
             const uint8_t *block_ptr = linear->blocks_data + (size_t)nz_index * 20U;
-            float scale = read_f32_le(block_ptr);
+            float w_scale = read_f32_le(block_ptr);
             const uint8_t *nibbles = block_ptr + 4U;
             nz_index++;
 
-            for (size_t nibble = 0; nibble < 16U; ++nibble) {
-                uint8_t packed = nibbles[nibble];
-                size_t col0 = block * 32U + nibble * 2U;
-                size_t col1 = col0 + 1U;
-                float v0 = ((float)((int)(packed & 0x0FU) - 8)) * scale;
-                float v1 = ((float)((int)(packed >> 4U) - 8)) * scale;
-
-                if (col0 < linear->in_features) {
-                    for (size_t batch = 0; batch < m; ++batch) {
-                        out[batch * linear->out_features + row] +=
-                            x[batch * linear->in_features + col0] * v0;
-                    }
+            if (x_i8 && x_scales) {
+                /* PIE path: unpack Q4 → INT8, dot with pre-quantized input */
+                int8_t w_i8[32] __attribute__((aligned(16)));
+                for (size_t i = 0; i < 16; i++) {
+                    uint8_t packed = nibbles[i];
+                    w_i8[i * 2]     = (int8_t)((packed & 0x0FU) - 8U);
+                    w_i8[i * 2 + 1] = (int8_t)((packed >> 4U) - 8U);
                 }
-                if (col1 < linear->in_features) {
-                    for (size_t batch = 0; batch < m; ++batch) {
-                        out[batch * linear->out_features + row] +=
-                            x[batch * linear->in_features + col1] * v1;
+
+                size_t col_start = block * 32U;
+                for (size_t batch = 0; batch < m; ++batch) {
+                    int32_t dot = pie_dot_int8(
+                        w_i8, x_i8 + batch * in_padded + col_start, 32);
+                    out[batch * linear->out_features + row] +=
+                        (float)dot * x_scales[batch] * w_scale;
+                }
+            } else {
+                /* Scalar fallback */
+                for (size_t nibble = 0; nibble < 16U; ++nibble) {
+                    uint8_t packed = nibbles[nibble];
+                    size_t col0 = block * 32U + nibble * 2U;
+                    size_t col1 = col0 + 1U;
+                    float v0 = ((float)((int)(packed & 0x0FU) - 8)) * w_scale;
+                    float v1 = ((float)((int)(packed >> 4U) - 8)) * w_scale;
+                    if (col0 < linear->in_features) {
+                        for (size_t batch = 0; batch < m; ++batch) {
+                            out[batch * linear->out_features + row] +=
+                                x[batch * linear->in_features + col0] * v0;
+                        }
+                    }
+                    if (col1 < linear->in_features) {
+                        for (size_t batch = 0; batch < m; ++batch) {
+                            out[batch * linear->out_features + row] +=
+                                x[batch * linear->in_features + col1] * v1;
+                        }
                     }
                 }
             }
         }
 
-        // Keep the task watchdog happy during long sparse GEMV sweeps.
         if ((row & 0xFFU) == 0xFFU) {
             vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
+
+    if (x_i8) free(x_i8);
+    if (x_scales) free(x_scales);
 }
 
 static void bidirectional_attention_from_qkv(
@@ -1014,14 +1076,29 @@ static void int8linear_forward_into(
         float row_scale = 1.0f;
         const float *src = x + row * linear->in_features;
         quantize_row_int8(src, linear->in_features, row_quant, &row_scale);
-        for (size_t out_col = 0; out_col < linear->out_features; ++out_col) {
-            int32_t acc = 0;
-            for (size_t k = 0; k < linear->in_features; ++k) {
-                acc += (int32_t)row_quant[k] *
-                       (int32_t)linear->weights_data[k * linear->out_features + out_col];
+
+        if (linear->weights_t != NULL) {
+            /* PIE path: use transposed weights [out][in_padded] */
+            /* Allocate int32 accumulator on stack (out_features <= 768) */
+            int32_t acc_buf[768];
+            pie_int8_gemv(row_quant, linear->weights_t,
+                          linear->out_features, linear->in_features_padded,
+                          acc_buf);
+            for (size_t out_col = 0; out_col < linear->out_features; ++out_col) {
+                out[row * linear->out_features + out_col] =
+                    (float)acc_buf[out_col] * row_scale * linear->scales.data[out_col];
             }
-            out[row * linear->out_features + out_col] =
-                (float)acc * row_scale * linear->scales.data[out_col];
+        } else {
+            /* Scalar fallback (original path) */
+            for (size_t out_col = 0; out_col < linear->out_features; ++out_col) {
+                int32_t acc = 0;
+                for (size_t k = 0; k < linear->in_features; ++k) {
+                    acc += (int32_t)row_quant[k] *
+                           (int32_t)linear->weights_data[k * linear->out_features + out_col];
+                }
+                out[row * linear->out_features + out_col] =
+                    (float)acc * row_scale * linear->scales.data[out_col];
+            }
         }
     }
 }
@@ -2146,6 +2223,12 @@ void app_main(void) {
     size_t model_len = (size_t)(_binary_model_bin_end - _binary_model_bin_start);
     if (!load_model(_binary_model_bin_start, model_len, &model)) {
         ESP_LOGE(TAG, "Model load failed -- halting.");
+        return;
+    }
+
+    /* PIE SIMD self-test */
+    if (pie_self_test() != 0) {
+        ESP_LOGE(TAG, "PIE self-test FAILED -- halting.");
         return;
     }
 

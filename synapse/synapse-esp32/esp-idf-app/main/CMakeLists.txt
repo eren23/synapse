@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "app_main.c" "wifi.c" "http_server.c"
+    SRCS "app_main.c" "wifi.c" "http_server.c" "pie_gemv.c"
     INCLUDE_DIRS "."
     REQUIRES esp_wifi esp_http_server esp_event nvs_flash json esp_timer
 )
