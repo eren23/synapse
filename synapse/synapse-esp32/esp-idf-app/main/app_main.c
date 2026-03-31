@@ -49,9 +49,51 @@ typedef struct {
     float *scores;
 } AttnWorkItem;
 
-static volatile AttnWorkItem s_core1_work;
+/* Generic Core 1 work dispatch: function pointer + argument */
+typedef void (*core1_fn_t)(void *arg);
+static volatile core1_fn_t s_core1_fn = NULL;
+static volatile void *s_core1_arg = NULL;
 static SemaphoreHandle_t s_core1_start = NULL;
 static SemaphoreHandle_t s_core1_done = NULL;
+
+/* Dispatch a function to Core 1 and wait for completion */
+static void core1_dispatch(core1_fn_t fn, void *arg) {
+    s_core1_fn = fn;
+    s_core1_arg = arg;
+    xSemaphoreGive(s_core1_start);
+}
+static void core1_wait(void) {
+    xSemaphoreTake(s_core1_done, portMAX_DELAY);
+}
+
+/* INT8 GEMV work item for dual-core FFN */
+typedef struct {
+    const int8_t *all_i8;
+    const int8_t *weights_t;
+    const float *scales;
+    const float *w_scales;
+    float *out;
+    size_t m;
+    size_t in_pad;
+    size_t out_f;
+    size_t j_start;
+    size_t j_end;
+} GemvWorkItem;
+
+static void gemv_compute_range(void *arg) {
+    const GemvWorkItem *w = (const GemvWorkItem *)arg;
+    for (size_t j = w->j_start; j < w->j_end; ++j) {
+        const int8_t *wj = w->weights_t + j * w->in_pad;
+        float ws = w->w_scales[j];
+        for (size_t row = 0; row < w->m; ++row) {
+            int32_t dot = pie_dot_int8(
+                w->all_i8 + row * w->in_pad, wj, w->in_pad);
+            w->out[row * w->out_f + j] = (float)dot * w->scales[row] * ws;
+        }
+    }
+}
+
+static volatile AttnWorkItem s_core1_attn_work;
 
 static void attn_compute_range(const AttnWorkItem *w) {
     for (size_t head = 0; head < w->num_heads; ++head) {
@@ -81,21 +123,27 @@ static void attn_compute_range(const AttnWorkItem *w) {
     }
 }
 
-static void core1_attn_worker(void *arg) {
+static void attn_compute_range_wrapper(void *arg) {
+    attn_compute_range((const AttnWorkItem *)arg);
+}
+
+static void core1_worker(void *arg) {
     (void)arg;
     for (;;) {
         xSemaphoreTake(s_core1_start, portMAX_DELAY);
-        attn_compute_range((const AttnWorkItem *)&s_core1_work);
+        if (s_core1_fn) {
+            s_core1_fn((void *)s_core1_arg);
+        }
         xSemaphoreGive(s_core1_done);
     }
 }
 
 static void dual_core_init(void) {
-    if (s_core1_start) return; /* already initialized */
+    if (s_core1_start) return;
     s_core1_start = xSemaphoreCreateBinary();
     s_core1_done = xSemaphoreCreateBinary();
-    xTaskCreatePinnedToCore(core1_attn_worker, "attn_c1", 4096, NULL, 5, NULL, 1);
-    ESP_LOGI(TAG, "Dual-core attention worker started on Core 1");
+    xTaskCreatePinnedToCore(core1_worker, "core1", 8192, NULL, 5, NULL, 1);
+    ESP_LOGI(TAG, "Dual-core worker started on Core 1");
 }
 
 extern const uint8_t _binary_model_bin_start[] asm("_binary_model_bin_start");
@@ -1213,15 +1261,38 @@ static void int8linear_forward_into(
                 }
             }
 
-            /* Weights outer, rows inner: each weight row loaded once */
-            for (size_t j = 0; j < out_f; ++j) {
-                const int8_t *wj = linear->weights_t + j * in_pad;
-                float w_scale = linear->scales.data[j];
-                for (size_t row = 0; row < m; ++row) {
-                    int32_t dot = pie_dot_int8(
-                        all_i8 + row * in_pad, wj, in_pad);
-                    out[row * out_f + j] =
-                        (float)dot * scales[row] * w_scale;
+            /* Dual-core GEMV: split output features across cores */
+            if (s_core1_start && out_f >= 64) {
+                size_t mid_j = out_f / 2;
+                static GemvWorkItem s_gemv_c1;
+                s_gemv_c1 = (GemvWorkItem){
+                    .all_i8 = all_i8, .weights_t = linear->weights_t,
+                    .scales = scales, .w_scales = linear->scales.data,
+                    .out = out, .m = m, .in_pad = in_pad, .out_f = out_f,
+                    .j_start = mid_j, .j_end = out_f,
+                };
+                core1_dispatch(gemv_compute_range, &s_gemv_c1);
+
+                /* Core 0: first half */
+                GemvWorkItem c0_work = {
+                    .all_i8 = all_i8, .weights_t = linear->weights_t,
+                    .scales = scales, .w_scales = linear->scales.data,
+                    .out = out, .m = m, .in_pad = in_pad, .out_f = out_f,
+                    .j_start = 0, .j_end = mid_j,
+                };
+                gemv_compute_range(&c0_work);
+                core1_wait();
+            } else {
+                /* Single-core: weights outer, rows inner */
+                for (size_t j = 0; j < out_f; ++j) {
+                    const int8_t *wj = linear->weights_t + j * in_pad;
+                    float w_scale = linear->scales.data[j];
+                    for (size_t row = 0; row < m; ++row) {
+                        int32_t dot = pie_dot_int8(
+                            all_i8 + row * in_pad, wj, in_pad);
+                        out[row * out_f + j] =
+                            (float)dot * scales[row] * w_scale;
+                    }
                 }
             }
 
@@ -1316,7 +1387,7 @@ static void bidirectional_attention_separate(
             float *scores1 = (float *)malloc(seq_len * sizeof(float));
             if (scores1) {
                 /* Set up Core 1 work: second half of q_tokens */
-                s_core1_work = (AttnWorkItem){
+                s_core1_attn_work = (AttnWorkItem){
                     .q_i8 = q_i8, .k_i8 = k_i8,
                     .q_scales = q_scales, .k_scales = k_scales,
                     .v = v, .out = out,
@@ -1327,7 +1398,8 @@ static void bidirectional_attention_separate(
                     .q_start = mid, .q_end = seq_len,
                     .scores = scores1,
                 };
-                xSemaphoreGive(s_core1_start);
+                core1_dispatch(attn_compute_range_wrapper,
+                               (void *)&s_core1_attn_work);
 
                 /* Core 0: first half of q_tokens */
                 AttnWorkItem w0 = {
@@ -1344,7 +1416,7 @@ static void bidirectional_attention_separate(
                 attn_compute_range(&w0);
 
                 /* Wait for Core 1 */
-                xSemaphoreTake(s_core1_done, portMAX_DELAY);
+                core1_wait();
                 free(scores1);
             } else {
                 /* Fallback: single-core */
@@ -2554,7 +2626,8 @@ void app_main(void) {
         .predictor_layers = model.predictor_layers,
         .has_encoder      = model.has_full_encoder,
     };
-    strncpy(cfg.mode, model.mode, sizeof(cfg.mode) - 1);
+    memcpy(cfg.mode, model.mode, sizeof(cfg.mode));
+    cfg.mode[sizeof(cfg.mode) - 1] = '\0';
 
     httpd_handle_t server = start_inference_server(&cfg);
     if (!server) {
