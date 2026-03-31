@@ -16,8 +16,87 @@
 #include "esp_timer.h"
 
 #include "pie_gemv.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "synapse-lewm";
+
+/* Forward declarations for functions used in dual-core code */
+static void softmax_inplace(float *x, size_t len);
+
+/* ------------------------------------------------------------------ */
+/* Dual-core attention: Core 1 worker for parallel attention compute    */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    /* Shared read-only inputs */
+    const int8_t *q_i8;
+    const int8_t *k_i8;
+    const float *q_scales;
+    const float *k_scales;
+    const float *v;
+    float *out;
+    float inv_sqrt_hd;
+    size_t seq_len;
+    size_t num_heads;
+    size_t head_dim;
+    size_t head_dim_padded;
+    size_t inner_dim;
+    size_t row_bytes;
+    /* Per-core range */
+    size_t q_start;
+    size_t q_end;
+    /* Per-core scratch (scores buffer) */
+    float *scores;
+} AttnWorkItem;
+
+static volatile AttnWorkItem s_core1_work;
+static SemaphoreHandle_t s_core1_start = NULL;
+static SemaphoreHandle_t s_core1_done = NULL;
+
+static void attn_compute_range(const AttnWorkItem *w) {
+    for (size_t head = 0; head < w->num_heads; ++head) {
+        for (size_t q_token = w->q_start; q_token < w->q_end; ++q_token) {
+            const int8_t *qi = w->q_i8 + q_token * w->row_bytes + head * w->head_dim_padded;
+            float q_sc = w->q_scales[q_token * w->num_heads + head];
+
+            for (size_t k_token = 0; k_token < w->seq_len; ++k_token) {
+                const int8_t *ki = w->k_i8 + k_token * w->row_bytes + head * w->head_dim_padded;
+                float k_sc = w->k_scales[k_token * w->num_heads + head];
+                int32_t dot_i32 = pie_dot_int8(qi, ki, w->head_dim_padded);
+                w->scores[k_token] = (float)dot_i32 * q_sc * k_sc * w->inv_sqrt_hd;
+            }
+
+            softmax_inplace(w->scores, w->seq_len);
+
+            float *out_head = w->out + q_token * w->inner_dim + head * w->head_dim;
+            memset(out_head, 0, w->head_dim * sizeof(float));
+            for (size_t k_token = 0; k_token < w->seq_len; ++k_token) {
+                float s = w->scores[k_token];
+                const float *v_row = w->v + k_token * w->inner_dim + head * w->head_dim;
+                for (size_t d = 0; d < w->head_dim; ++d) {
+                    out_head[d] += s * v_row[d];
+                }
+            }
+        }
+    }
+}
+
+static void core1_attn_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        xSemaphoreTake(s_core1_start, portMAX_DELAY);
+        attn_compute_range((const AttnWorkItem *)&s_core1_work);
+        xSemaphoreGive(s_core1_done);
+    }
+}
+
+static void dual_core_init(void) {
+    if (s_core1_start) return; /* already initialized */
+    s_core1_start = xSemaphoreCreateBinary();
+    s_core1_done = xSemaphoreCreateBinary();
+    xTaskCreatePinnedToCore(core1_attn_worker, "attn_c1", 4096, NULL, 5, NULL, 1);
+    ESP_LOGI(TAG, "Dual-core attention worker started on Core 1");
+}
 
 extern const uint8_t _binary_model_bin_start[] asm("_binary_model_bin_start");
 extern const uint8_t _binary_model_bin_end[] asm("_binary_model_bin_end");
@@ -1229,33 +1308,73 @@ static void bidirectional_attention_separate(
             }
         }
 
-        /* PIE attention: QK^T via INT8 dot products */
-        for (size_t head = 0; head < num_heads; ++head) {
-            for (size_t q_token = 0; q_token < seq_len; ++q_token) {
-                int8_t *qi = q_i8 + q_token * row_bytes + head * head_dim_padded;
-                float q_sc = q_scales[q_token * num_heads + head];
+        /* PIE attention: QK^T via INT8 dot products.
+         * Split query tokens across Core 0 and Core 1 for parallelism. */
+        if (s_core1_start && seq_len > 16) {
+            size_t mid = seq_len / 2;
+            /* Core 1 scores buffer (separate from core 0's) */
+            float *scores1 = (float *)malloc(seq_len * sizeof(float));
+            if (scores1) {
+                /* Set up Core 1 work: second half of q_tokens */
+                s_core1_work = (AttnWorkItem){
+                    .q_i8 = q_i8, .k_i8 = k_i8,
+                    .q_scales = q_scales, .k_scales = k_scales,
+                    .v = v, .out = out,
+                    .inv_sqrt_hd = inv_sqrt_hd,
+                    .seq_len = seq_len, .num_heads = num_heads,
+                    .head_dim = head_dim, .head_dim_padded = head_dim_padded,
+                    .inner_dim = inner_dim, .row_bytes = row_bytes,
+                    .q_start = mid, .q_end = seq_len,
+                    .scores = scores1,
+                };
+                xSemaphoreGive(s_core1_start);
 
-                for (size_t k_token = 0; k_token < seq_len; ++k_token) {
-                    int8_t *ki = k_i8 + k_token * row_bytes + head * head_dim_padded;
-                    float k_sc = k_scales[k_token * num_heads + head];
+                /* Core 0: first half of q_tokens */
+                AttnWorkItem w0 = {
+                    .q_i8 = q_i8, .k_i8 = k_i8,
+                    .q_scales = q_scales, .k_scales = k_scales,
+                    .v = v, .out = out,
+                    .inv_sqrt_hd = inv_sqrt_hd,
+                    .seq_len = seq_len, .num_heads = num_heads,
+                    .head_dim = head_dim, .head_dim_padded = head_dim_padded,
+                    .inner_dim = inner_dim, .row_bytes = row_bytes,
+                    .q_start = 0, .q_end = mid,
+                    .scores = scores,
+                };
+                attn_compute_range(&w0);
 
-                    int32_t dot_i32 = pie_dot_int8(qi, ki, head_dim_padded);
-                    scores[k_token] = (float)dot_i32 * q_sc * k_sc * inv_sqrt_hd;
-                }
-
-                softmax_inplace(scores, seq_len);
-
-                /* Value weighting: k_token outer for contiguous V access */
-                float *out_head = out + q_token * inner_dim + head * head_dim;
-                memset(out_head, 0, head_dim * sizeof(float));
-                for (size_t k_token = 0; k_token < seq_len; ++k_token) {
-                    float s = scores[k_token];
-                    const float *v_row = v + k_token * inner_dim + head * head_dim;
-                    for (size_t d = 0; d < head_dim; ++d) {
-                        out_head[d] += s * v_row[d];
-                    }
-                }
+                /* Wait for Core 1 */
+                xSemaphoreTake(s_core1_done, portMAX_DELAY);
+                free(scores1);
+            } else {
+                /* Fallback: single-core */
+                AttnWorkItem w = {
+                    .q_i8 = q_i8, .k_i8 = k_i8,
+                    .q_scales = q_scales, .k_scales = k_scales,
+                    .v = v, .out = out,
+                    .inv_sqrt_hd = inv_sqrt_hd,
+                    .seq_len = seq_len, .num_heads = num_heads,
+                    .head_dim = head_dim, .head_dim_padded = head_dim_padded,
+                    .inner_dim = inner_dim, .row_bytes = row_bytes,
+                    .q_start = 0, .q_end = seq_len,
+                    .scores = scores,
+                };
+                attn_compute_range(&w);
             }
+        } else {
+            /* Small seq_len: single-core is fine */
+            AttnWorkItem w = {
+                .q_i8 = q_i8, .k_i8 = k_i8,
+                .q_scales = q_scales, .k_scales = k_scales,
+                .v = v, .out = out,
+                .inv_sqrt_hd = inv_sqrt_hd,
+                .seq_len = seq_len, .num_heads = num_heads,
+                .head_dim = head_dim, .head_dim_padded = head_dim_padded,
+                .inner_dim = inner_dim, .row_bytes = row_bytes,
+                .q_start = 0, .q_end = seq_len,
+                .scores = scores,
+            };
+            attn_compute_range(&w);
         }
     } else {
         /* Scalar fallback */
@@ -2404,6 +2523,9 @@ void app_main(void) {
         ESP_LOGE(TAG, "PIE self-test FAILED -- halting.");
         return;
     }
+
+    /* Initialize dual-core attention worker on Core 1 */
+    dual_core_init();
 
     /* Initialize GELU lookup table */
     gelu_lut_init();
