@@ -287,8 +287,31 @@ Current slim-96d encoder layer: **998 ms** (attn 457ms + FFN 384ms + QKV/O 145ms
 | **Patch pruning** | 4x fewer attention ops | Keep 128 of 256 patches. Needs quality evaluation. |
 | **Linear attention** | Eliminate O(n²) bottleneck | Research: replace full attention. Needs retraining. |
 
+### Research Directions: Attention Bottleneck
+
+The 257×257 bidirectional attention is O(n²) in sequence length and dominates encoder time. Two research paths could fundamentally change this:
+
+**Patch Pruning (reduce n)**
+- The ViT encoder processes 256 patches (16×16 grid from 224×224 image at patch_size=14) + 1 CLS token = 257 tokens.
+- Many patches carry little information (e.g., uniform background regions in PushT).
+- Approach: after patch embedding, score each patch by L2 norm or attention weight from a lightweight first layer. Keep top-K patches (e.g., K=64 or K=128) + CLS.
+- Attention drops from 257² = 66K dot products to 65² = 4.2K (16x fewer) or 129² = 16.6K (4x fewer).
+- Can be done post-hoc (no retraining) with quality degradation check, or with fine-tuning to recover quality.
+- Implementation: add a `patch_select` step between patch embedding and encoder layers. The rest of the pipeline stays the same since it's variable-length.
+- Risk: quality degrades if important spatial information is in "boring" patches. Need per-task evaluation.
+
+**Linear Attention (reduce O(n²) to O(n))**
+- Replace softmax(QK^T)V with a kernel approximation: φ(Q)·(φ(K)^T·V) where φ is a feature map.
+- This changes the computation order from O(n²d) to O(nd²), which is better when n > d (257 > 64 per head).
+- Variants: Random Feature Attention (Performer), cosine-similarity attention, linear recurrence (RetNet/RWKV style).
+- For the LeWM encoder: n=257, d=64 per head. Linear attention would save ~4x FLOPs per head.
+- Requires model architecture change and retraining from scratch or distillation from the existing model.
+- The synapse codebase already has RWKV-7 (linear recurrence) and DeltaNet (hybrid) implementations that could inform the design.
+- Risk: ViT encoders rely heavily on full attention for spatial reasoning. Linear approximations may degrade image understanding quality.
+
 ### Later
 
 - Camera or real image input
 - Encoder parity tolerance codification
 - Rust esp-idf-svc path (blocked on esp-rs P4 runtime fix)
+- 48d/2e/2p ultra-slim model (waiting for training run to converge)

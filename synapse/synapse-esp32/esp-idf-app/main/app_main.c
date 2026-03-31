@@ -253,6 +253,18 @@ typedef struct {
 static void log_vector_preview(const char *label, const float *values, size_t len);
 static void log_vector_stats(const char *label, const float *values, size_t len);
 
+/* Cosine similarity for parity comparison */
+static float cosine_similarity(const float *a, const float *b, size_t len) {
+    float dot = 0.0f, na = 0.0f, nb = 0.0f;
+    for (size_t i = 0; i < len; i++) {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+    }
+    float denom = sqrtf(na) * sqrtf(nb);
+    return denom > 0.0f ? dot / denom : 0.0f;
+}
+
 typedef struct {
     char mode[32];
     bool apply_final_norm_bias;
@@ -1224,6 +1236,49 @@ static void quantize_row_int8(
     *scale_out = scale;
 }
 
+/* INT8 GEMV with pre-quantized input (avoids re-quantizing for shared inputs like QKV) */
+static void int8linear_forward_prequant(
+    const Int8LinearRef *linear,
+    const int8_t *all_i8,
+    const float *scales,
+    size_t m,
+    size_t in_pad,
+    float *out
+) {
+    size_t out_f = linear->out_features;
+    memset(out, 0, m * out_f * sizeof(float));
+
+    if (linear->weights_t != NULL && s_core1_start && out_f >= 64) {
+        size_t mid_j = out_f / 2;
+        static GemvWorkItem s_gemv_pq_c1;
+        s_gemv_pq_c1 = (GemvWorkItem){
+            .all_i8 = all_i8, .weights_t = linear->weights_t,
+            .scales = scales, .w_scales = linear->scales.data,
+            .out = out, .m = m, .in_pad = in_pad, .out_f = out_f,
+            .j_start = mid_j, .j_end = out_f,
+        };
+        core1_dispatch(gemv_compute_range, &s_gemv_pq_c1);
+
+        GemvWorkItem c0 = {
+            .all_i8 = all_i8, .weights_t = linear->weights_t,
+            .scales = scales, .w_scales = linear->scales.data,
+            .out = out, .m = m, .in_pad = in_pad, .out_f = out_f,
+            .j_start = 0, .j_end = mid_j,
+        };
+        gemv_compute_range(&c0);
+        core1_wait();
+    } else if (linear->weights_t != NULL) {
+        for (size_t j = 0; j < out_f; ++j) {
+            const int8_t *wj = linear->weights_t + j * in_pad;
+            float ws = linear->scales.data[j];
+            for (size_t row = 0; row < m; ++row) {
+                int32_t dot = pie_dot_int8(all_i8 + row * in_pad, wj, in_pad);
+                out[row * out_f + j] = (float)dot * scales[row] * ws;
+            }
+        }
+    }
+}
+
 static void int8linear_forward_into(
     const Int8LinearRef *linear,
     const float *x,
@@ -1979,12 +2034,38 @@ static void encoder_layer_forward(
 
     int64_t t_norm1 = esp_timer_get_time();
 
-    int8linear_forward_into(&layer->w_q, scratch->normed, seq_len, scratch->row_quant, scratch->q);
-    add_bias_inplace(scratch->q, layer->q_bias.data, seq_len, hidden);
-    int8linear_forward_into(&layer->w_k, scratch->normed, seq_len, scratch->row_quant, scratch->k);
-    add_bias_inplace(scratch->k, layer->k_bias.data, seq_len, hidden);
-    int8linear_forward_into(&layer->w_v, scratch->normed, seq_len, scratch->row_quant, scratch->v);
-    add_bias_inplace(scratch->v, layer->v_bias.data, seq_len, hidden);
+    /* Pre-quantize normed input ONCE for Q/K/V (saves 2x redundant quantization) */
+    {
+        size_t in_pad = layer->w_q.in_features_padded;
+        int8_t *qkv_i8 = (int8_t *)heap_caps_aligned_alloc(
+            16, seq_len * in_pad, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        float *qkv_scales = (float *)malloc(seq_len * sizeof(float));
+
+        if (qkv_i8 && qkv_scales) {
+            for (size_t row = 0; row < seq_len; ++row) {
+                quantize_row_int8(scratch->normed + row * hidden, hidden,
+                                  qkv_i8 + row * in_pad, &qkv_scales[row]);
+                if (in_pad > hidden)
+                    memset(qkv_i8 + row * in_pad + hidden, 0, in_pad - hidden);
+            }
+            int8linear_forward_prequant(&layer->w_q, qkv_i8, qkv_scales, seq_len, in_pad, scratch->q);
+            add_bias_inplace(scratch->q, layer->q_bias.data, seq_len, hidden);
+            int8linear_forward_prequant(&layer->w_k, qkv_i8, qkv_scales, seq_len, in_pad, scratch->k);
+            add_bias_inplace(scratch->k, layer->k_bias.data, seq_len, hidden);
+            int8linear_forward_prequant(&layer->w_v, qkv_i8, qkv_scales, seq_len, in_pad, scratch->v);
+            add_bias_inplace(scratch->v, layer->v_bias.data, seq_len, hidden);
+            free(qkv_i8);
+            free(qkv_scales);
+        } else {
+            free(qkv_i8); free(qkv_scales);
+            int8linear_forward_into(&layer->w_q, scratch->normed, seq_len, scratch->row_quant, scratch->q);
+            add_bias_inplace(scratch->q, layer->q_bias.data, seq_len, hidden);
+            int8linear_forward_into(&layer->w_k, scratch->normed, seq_len, scratch->row_quant, scratch->k);
+            add_bias_inplace(scratch->k, layer->k_bias.data, seq_len, hidden);
+            int8linear_forward_into(&layer->w_v, scratch->normed, seq_len, scratch->row_quant, scratch->v);
+            add_bias_inplace(scratch->v, layer->v_bias.data, seq_len, hidden);
+        }
+    }
 
     int64_t t_qkv = esp_timer_get_time();
 
@@ -2468,21 +2549,21 @@ static void run_predictor_smoke(PredictorModel *model) {
     vTaskDelay(pdMS_TO_TICKS(1));
 
     memcpy(rollout_state, state, model->latent_dim * sizeof(float));
+    float *prev_step = (float *)calloc_caps(model->latent_dim, sizeof(float), MALLOC_CAP_INTERNAL);
     for (size_t step = 0; step < 3U; ++step) {
         fill_deterministic_vector(action, model->action_dim, 101U + (uint32_t)step * 17U);
         started_us = esp_timer_get_time();
         predict_next(model, rollout_state, action, next);
         elapsed_us = esp_timer_get_time() - started_us;
-        ESP_LOGI(
-            TAG,
-            "rollout step %lu latency: %.3f ms",
-            (unsigned long)step,
-            (double)elapsed_us / 1000.0
-        );
+        float cos = step > 0 ? cosine_similarity(prev_step, next, model->latent_dim) : 0.0f;
+        ESP_LOGI(TAG, "rollout step %lu: %.3f ms cos_vs_prev=%.6f",
+            (unsigned long)step, (double)elapsed_us / 1000.0, cos);
         log_vector_stats("rollout", next, model->latent_dim);
+        memcpy(prev_step, next, model->latent_dim * sizeof(float));
         memcpy(rollout_state, next, model->latent_dim * sizeof(float));
         vTaskDelay(pdMS_TO_TICKS(1));
     }
+    free(prev_step);
 
     free(state);
     free(action);
