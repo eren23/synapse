@@ -14,6 +14,8 @@
 - [Quantization](guide/quantization.md)
 - [Chat Templates](guide/chat-templates.md)
 - [Metal GPU](guide/metal-gpu.md)
+- [ESP32-P4 Deployment](guide/esp32-deployment.md)
+- [LEWM on ESP32](guide/lewm-esp32.md)
 - [Training](guide/training.md)
 
 # Architecture
@@ -21,6 +23,7 @@
 - [Overview](architecture/overview.md)
 - [Zig SIMD Kernels](architecture/zig-kernels.md)
 - [Performance](architecture/performance.md)
+- [ESP32-P4 PIE Optimizations](architecture/esp32-pie-optimizations.md)
 - [Expansion Roadmap](architecture/future.md)
 
 # Development
