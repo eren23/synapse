@@ -774,6 +774,65 @@ pub fn q4_0_gemv(n: usize, k: usize, a: &[f32], b_q4: &[u8]) -> Result<Vec<f32>,
     Ok(c)
 }
 
+/// Fused LEWM predictor layer: runs one full adaLN transformer layer in Zig SIMD.
+///
+/// Modifies `seq` in-place. All scratch buffers must be pre-allocated.
+/// This is a single FFI call that replaces 12+ individual matmul/norm/attention calls.
+#[allow(clippy::too_many_arguments)]
+pub fn lewm_predict_layer(
+    seq: &mut [f32],
+    conditioning: &[f32],
+    seq_len: usize,
+    hidden: usize,
+    num_heads: usize,
+    inner_dim: usize,
+    inter: usize,
+    adaln_weight: &[f32],
+    adaln_bias: &[f32],
+    attn_norm_weight: &[f32],
+    to_qkv: &[f32],
+    attn_out_weight: &[f32],
+    attn_out_bias: &[f32],
+    mlp_norm_weight: &[f32],
+    mlp_up_weight: &[f32],
+    mlp_up_bias: &[f32],
+    mlp_down_weight: &[f32],
+    mlp_down_bias: &[f32],
+    mod_buf: &mut [f32],
+    normed_buf: &mut [f32],
+    qkv_buf: &mut [f32],
+    attn_buf: &mut [f32],
+    proj_buf: &mut [f32],
+) -> Result<(), SynapseError> {
+    unsafe {
+        check_status(ffi::syn_lewm_predict_layer(
+            seq.as_mut_ptr(),
+            conditioning.as_ptr(),
+            seq_len,
+            hidden,
+            num_heads,
+            inner_dim,
+            inter,
+            adaln_weight.as_ptr(),
+            if adaln_bias.is_empty() { std::ptr::null() } else { adaln_bias.as_ptr() },
+            attn_norm_weight.as_ptr(),
+            to_qkv.as_ptr(),
+            attn_out_weight.as_ptr(),
+            if attn_out_bias.is_empty() { std::ptr::null() } else { attn_out_bias.as_ptr() },
+            mlp_norm_weight.as_ptr(),
+            mlp_up_weight.as_ptr(),
+            if mlp_up_bias.is_empty() { std::ptr::null() } else { mlp_up_bias.as_ptr() },
+            mlp_down_weight.as_ptr(),
+            if mlp_down_bias.is_empty() { std::ptr::null() } else { mlp_down_bias.as_ptr() },
+            mod_buf.as_mut_ptr(),
+            normed_buf.as_mut_ptr(),
+            qkv_buf.as_mut_ptr(),
+            attn_buf.as_mut_ptr(),
+            proj_buf.as_mut_ptr(),
+        ))
+    }
+}
+
 /// Projection GEMV with fused bias: output[m,n] = input[m,k] * weight[n,k]^T + bias[n].
 ///
 /// `input` is `[m * k]`, `weight` is `[n * k]` (row-major, each row = one output neuron),

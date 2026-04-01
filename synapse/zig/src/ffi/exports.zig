@@ -1621,6 +1621,61 @@ pub export fn syn_q4_0_gemv(
 }
 
 // ============================================================
+// Fused LEWM predictor layer
+// ============================================================
+
+pub export fn syn_lewm_predict_layer(
+    seq: ?[*]f32,
+    conditioning: ?[*]const f32,
+    seq_len: usize,
+    hidden: usize,
+    num_heads: usize,
+    inner_dim: usize,
+    inter: usize,
+    adaln_weight: ?[*]const f32,
+    adaln_bias: ?[*]const f32,
+    attn_norm_weight: ?[*]const f32,
+    to_qkv: ?[*]const f32,
+    attn_out_weight: ?[*]const f32,
+    attn_out_bias: ?[*]const f32,
+    mlp_norm_weight: ?[*]const f32,
+    mlp_up_weight: ?[*]const f32,
+    mlp_up_bias: ?[*]const f32,
+    mlp_down_weight: ?[*]const f32,
+    mlp_down_bias: ?[*]const f32,
+    mod_buf: ?[*]f32,
+    normed_buf: ?[*]f32,
+    qkv_buf: ?[*]f32,
+    attn_buf: ?[*]f32,
+    proj_buf: ?[*]f32,
+) c_int {
+    const seq_ptr = seq orelse return SYN_ERR_NULL_PTR;
+    const cond_ptr = conditioning orelse return SYN_ERR_NULL_PTR;
+    const adaln_w = adaln_weight orelse return SYN_ERR_NULL_PTR;
+    const anorm = attn_norm_weight orelse return SYN_ERR_NULL_PTR;
+    const qkv_w = to_qkv orelse return SYN_ERR_NULL_PTR;
+    const ao_w = attn_out_weight orelse return SYN_ERR_NULL_PTR;
+    const mnorm = mlp_norm_weight orelse return SYN_ERR_NULL_PTR;
+    const mu_w = mlp_up_weight orelse return SYN_ERR_NULL_PTR;
+    const md_w = mlp_down_weight orelse return SYN_ERR_NULL_PTR;
+    const mb = mod_buf orelse return SYN_ERR_NULL_PTR;
+    const nb = normed_buf orelse return SYN_ERR_NULL_PTR;
+    const qb = qkv_buf orelse return SYN_ERR_NULL_PTR;
+    const ab = attn_buf orelse return SYN_ERR_NULL_PTR;
+    const pb = proj_buf orelse return SYN_ERR_NULL_PTR;
+    if (seq_len == 0 or hidden == 0) return SYN_OK;
+
+    const fused = @import("synapse").ops.fused_lewm_layer;
+    fused.lewmPredictorLayer(
+        seq_ptr, cond_ptr, seq_len, hidden, num_heads, inner_dim, inter,
+        adaln_w, adaln_bias, anorm, qkv_w, ao_w, attn_out_bias,
+        mnorm, mu_w, mlp_up_bias, md_w, mlp_down_bias,
+        mb, nb, qb, ab, pb,
+    );
+    return SYN_OK;
+}
+
+// ============================================================
 // KV-Cache management
 // ============================================================
 

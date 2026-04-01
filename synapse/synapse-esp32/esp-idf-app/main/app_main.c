@@ -47,6 +47,8 @@ typedef struct {
     size_t q_end;
     /* Per-core scratch (scores buffer) */
     float *scores;
+    /* Linear attention: skip softmax, use L1 normalization */
+    bool linear_attn;
 } AttnWorkItem;
 
 /* Generic Core 1 work dispatch: function pointer + argument */
@@ -95,6 +97,97 @@ static void gemv_compute_range(void *arg) {
 
 static volatile AttnWorkItem s_core1_attn_work;
 
+static void l1_normalize_inplace(float *x, size_t len) {
+    float abs_sum = 0.0f;
+    for (size_t i = 0; i < len; ++i) abs_sum += fabsf(x[i]);
+    if (abs_sum > 1e-12f) {
+        float inv = 1.0f / abs_sum;
+        for (size_t i = 0; i < len; ++i) x[i] *= inv;
+    }
+}
+
+/* ELU+1 feature map for kernel-trick linear attention: φ(x) = elu(x) + 1 */
+static inline float elu_plus1(float x) {
+    return x >= 0.0f ? x + 1.0f : expf(x);
+}
+
+/*
+ * Kernel-trick linear attention: O(nd²) instead of O(n²d).
+ *
+ * Instead of building the full [n,n] score matrix:
+ *   1. Apply φ to K → φK [n, d]
+ *   2. Compute KV = φK^T @ V → [d, d]     (once per head)
+ *   3. Compute k_sum = Σ φK[k] → [d]       (once per head)
+ *   4. For each query: φQ @ KV / (φQ · k_sum) → [d]
+ *
+ * Uses f32 compute (φ breaks INT8 quantization).
+ */
+static void linear_attention_kernel_trick(
+    const float *q, const float *k, const float *v,
+    size_t seq_len, size_t num_heads, size_t head_dim,
+    float *out
+) {
+    size_t inner_dim = num_heads * head_dim;
+    /* Heap-allocate KV matrix (too large for ESP32 stack) */
+    float *kv_matrix = (float *)heap_caps_calloc(head_dim * head_dim, sizeof(float), MALLOC_CAP_INTERNAL);
+    float *k_sum = (float *)calloc(head_dim, sizeof(float));
+    float *phi_q = (float *)calloc(head_dim, sizeof(float));
+    if (!kv_matrix || !k_sum || !phi_q) {
+        free(kv_matrix); free(k_sum); free(phi_q);
+        /* Fallback: zero output */
+        memset(out, 0, seq_len * inner_dim * sizeof(float));
+        return;
+    }
+
+    for (size_t head = 0; head < num_heads; ++head) {
+        size_t d = head_dim;
+
+        /* 1. Compute KV = φ(K)^T @ V and k_sum = Σ φ(K) */
+        memset(kv_matrix, 0, d * d * sizeof(float));
+        memset(k_sum, 0, d * sizeof(float));
+
+        for (size_t kt = 0; kt < seq_len; ++kt) {
+            const float *k_row = k + kt * inner_dim + head * d;
+            const float *v_row = v + kt * inner_dim + head * d;
+
+            for (size_t i = 0; i < d; ++i) {
+                float phi_k = elu_plus1(k_row[i]);
+                k_sum[i] += phi_k;
+                /* KV[i][j] += φ(K[kt][i]) * V[kt][j] */
+                for (size_t j = 0; j < d; ++j) {
+                    kv_matrix[i * d + j] += phi_k * v_row[j];
+                }
+            }
+        }
+
+        /* 2. For each query: out = φ(Q) @ KV / (φ(Q) · k_sum) */
+        for (size_t qt = 0; qt < seq_len; ++qt) {
+            const float *q_row = q + qt * inner_dim + head * d;
+            float *out_row = out + qt * inner_dim + head * d;
+
+            /* Compute φ(Q) and normalization Z = φ(Q) · k_sum */
+            float z = 0.0f;
+            for (size_t i = 0; i < d; ++i) {
+                phi_q[i] = elu_plus1(q_row[i]);
+                z += phi_q[i] * k_sum[i];
+            }
+            float inv_z = (z > 1e-12f) ? 1.0f / z : 0.0f;
+
+            /* out = φ(Q) @ KV * inv_z */
+            for (size_t j = 0; j < d; ++j) {
+                float sum = 0.0f;
+                for (size_t i = 0; i < d; ++i) {
+                    sum += phi_q[i] * kv_matrix[i * d + j];
+                }
+                out_row[j] = sum * inv_z;
+            }
+        }
+    }
+    free(kv_matrix);
+    free(k_sum);
+    free(phi_q);
+}
+
 static void attn_compute_range(const AttnWorkItem *w) {
     for (size_t head = 0; head < w->num_heads; ++head) {
         for (size_t q_token = w->q_start; q_token < w->q_end; ++q_token) {
@@ -108,7 +201,11 @@ static void attn_compute_range(const AttnWorkItem *w) {
                 w->scores[k_token] = (float)dot_i32 * q_sc * k_sc * w->inv_sqrt_hd;
             }
 
-            softmax_inplace(w->scores, w->seq_len);
+            if (w->linear_attn) {
+                l1_normalize_inplace(w->scores, w->seq_len);
+            } else {
+                softmax_inplace(w->scores, w->seq_len);
+            }
 
             float *out_head = w->out + q_token * w->inner_dim + head * w->head_dim;
             memset(out_head, 0, w->head_dim * sizeof(float));
@@ -299,10 +396,18 @@ typedef struct {
     FloatBuffer cond_proj_bias;
     FloatBuffer patch_proj;
     FloatBuffer patch_proj_bias;
+    /* INT8-quantized patch_proj for PIE-accelerated batch embedding */
+    Int8LinearRef patch_proj_i8;
+    float *all_patches;   /* scratch: [num_patches * patch_dim] for batch extract */
     FloatBuffer cls_token;
     FloatBuffer pos_embed;
     FloatBuffer final_norm_weight;
     FloatBuffer final_norm_bias;
+    /* Hybrid encoder extras */
+    size_t meta_tokens;
+    FloatBuffer meta_token;
+    FloatBuffer enc_proj_weight;
+    FloatBuffer enc_proj_bias;
     ProjectionHead projector;
     ProjectionHead pred_proj;
     EncoderLayer *encoder;
@@ -1394,7 +1499,8 @@ static void bidirectional_attention_separate(
     size_t num_heads,
     size_t head_dim,
     float *scores,
-    float *out
+    float *out,
+    bool linear_attn
 ) {
     size_t inner_dim = num_heads * head_dim;
     size_t head_dim_padded = (head_dim + 15U) & ~15U; /* round up to 16 for PIE */
@@ -1452,6 +1558,7 @@ static void bidirectional_attention_separate(
                     .inner_dim = inner_dim, .row_bytes = row_bytes,
                     .q_start = mid, .q_end = seq_len,
                     .scores = scores1,
+                    .linear_attn = linear_attn,
                 };
                 core1_dispatch(attn_compute_range_wrapper,
                                (void *)&s_core1_attn_work);
@@ -1467,6 +1574,7 @@ static void bidirectional_attention_separate(
                     .inner_dim = inner_dim, .row_bytes = row_bytes,
                     .q_start = 0, .q_end = mid,
                     .scores = scores,
+                    .linear_attn = linear_attn,
                 };
                 attn_compute_range(&w0);
 
@@ -1485,6 +1593,7 @@ static void bidirectional_attention_separate(
                     .inner_dim = inner_dim, .row_bytes = row_bytes,
                     .q_start = 0, .q_end = seq_len,
                     .scores = scores,
+                    .linear_attn = linear_attn,
                 };
                 attn_compute_range(&w);
             }
@@ -1500,6 +1609,7 @@ static void bidirectional_attention_separate(
                 .inner_dim = inner_dim, .row_bytes = row_bytes,
                 .q_start = 0, .q_end = seq_len,
                 .scores = scores,
+                .linear_attn = linear_attn,
             };
             attn_compute_range(&w);
         }
@@ -1515,7 +1625,11 @@ static void bidirectional_attention_separate(
                     }
                     scores[k_token] = dot * inv_sqrt_hd;
                 }
-                softmax_inplace(scores, seq_len);
+                if (linear_attn) {
+                    l1_normalize_inplace(scores, seq_len);
+                } else {
+                    softmax_inplace(scores, seq_len);
+                }
                 for (size_t d = 0; d < head_dim; ++d) {
                     float value = 0.0f;
                     for (size_t k_token = 0; k_token < seq_len; ++k_token) {
@@ -1641,6 +1755,8 @@ static bool allocate_scratch(PredictorModel *model) {
            encoder_scratch->row_quant != NULL;
 }
 
+static bool quantize_f32_to_int8linear(const float *, size_t, size_t, Int8LinearRef *);
+
 static bool parse_predictor_model(
     const uint8_t *model_data,
     size_t model_len,
@@ -1689,7 +1805,12 @@ static bool parse_predictor_model(
     model->encoder_layers = encoder_layers;
     model->encoder_heads = encoder_heads;
     model->encoder_inter = encoder_inter;
-    model->encoder_seq_len = (image_size / patch_size) * (image_size / patch_size) + 1U;
+    /* Parse optional meta_tokens count (hybrid encoder) */
+    uint32_t meta_tokens_count = 0;
+    json_extract_u32(config_json, "meta_tokens", &meta_tokens_count);
+    model->meta_tokens = (size_t)meta_tokens_count;
+    model->encoder_seq_len = (image_size / patch_size) * (image_size / patch_size)
+                             + 1U + model->meta_tokens;
     model->latent_dim = latent_dim;
     model->action_dim = action_dim;
     model->predictor_hidden = predictor_hidden;
@@ -1821,6 +1942,20 @@ static bool parse_predictor_model(
         return false;
     }
 
+    /* Hybrid encoder extras: meta_token, enc_proj_weight, enc_proj_bias */
+    if (off < model_len &&
+        !cursor_read_f32_vector(model_data, model_len, &off, &model->meta_token, float_caps)) {
+        return false;
+    }
+    if (off < model_len &&
+        !cursor_read_f32_vector(model_data, model_len, &off, &model->enc_proj_weight, float_caps)) {
+        return false;
+    }
+    if (off < model_len &&
+        !cursor_read_f32_vector(model_data, model_len, &off, &model->enc_proj_bias, float_caps)) {
+        return false;
+    }
+
     if (!allocate_scratch(model)) {
         ESP_LOGE(
             TAG,
@@ -1831,6 +1966,32 @@ static bool parse_predictor_model(
             (unsigned long)model->pred_proj.max_dim
         );
         return false;
+    }
+
+    /* Quantize patch_proj to INT8 for PIE-accelerated batch embedding */
+    if (model->has_full_encoder && model->patch_proj.len > 0) {
+        size_t patch_dim = model->patch_size * model->patch_size * model->channels;
+        size_t enc_h = model->encoder_hidden;
+        size_t num_patches = (model->image_size / model->patch_size) *
+                             (model->image_size / model->patch_size);
+
+        memset(&model->patch_proj_i8, 0, sizeof(model->patch_proj_i8));
+        if (quantize_f32_to_int8linear(model->patch_proj.data, enc_h, patch_dim,
+                                       &model->patch_proj_i8)) {
+            ESP_LOGI(TAG, "Patch proj quantized to INT8: %lux%lu → %lu padded",
+                (unsigned long)enc_h, (unsigned long)patch_dim,
+                (unsigned long)model->patch_proj_i8.in_features_padded);
+        }
+
+        /* Allocate batch patch buffer in PSRAM */
+        model->all_patches = (float *)heap_caps_calloc(
+            num_patches * patch_dim, sizeof(float),
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (model->all_patches) {
+            ESP_LOGI(TAG, "Batch patch buffer: %lu patches × %lu dims = %luKB",
+                (unsigned long)num_patches, (unsigned long)patch_dim,
+                (unsigned long)(num_patches * patch_dim * 4 / 1024));
+        }
     }
 
     return true;
@@ -1974,6 +2135,51 @@ static void apply_cond_proj(const PredictorModel *model, const float *cond, floa
     add_bias_inplace(out, model->cond_proj_bias.data, 1U, model->predictor_hidden);
 }
 
+/* Quantize f32 weight matrix [out_f, in_f] to INT8 per-channel at runtime. */
+static bool quantize_f32_to_int8linear(
+    const float *weights, size_t out_f, size_t in_f,
+    Int8LinearRef *out_ref
+) {
+    size_t in_pad = (in_f + 15U) & ~15U;
+    out_ref->out_features = out_f;
+    out_ref->in_features = in_f;
+    out_ref->in_features_padded = in_pad;
+    out_ref->weights_data = NULL;
+
+    /* Allocate transposed weights in PSRAM */
+    out_ref->weights_t = (int8_t *)heap_caps_aligned_alloc(
+        16, out_f * in_pad, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    out_ref->scales.data = (float *)heap_caps_malloc(out_f * sizeof(float), MALLOC_CAP_SPIRAM);
+    out_ref->scales.len = out_f;
+    if (!out_ref->weights_t || !out_ref->scales.data) return false;
+
+    /* Per-channel quantization: find max abs per output row, quantize */
+    for (size_t j = 0; j < out_f; ++j) {
+        float max_abs = 0.0f;
+        for (size_t k = 0; k < in_f; ++k) {
+            float v = fabsf(weights[j * in_f + k]);
+            if (v > max_abs) max_abs = v;
+        }
+        float scale = max_abs / 127.0f;
+        out_ref->scales.data[j] = scale;
+        float inv_scale = (scale > 1e-12f) ? 1.0f / scale : 0.0f;
+
+        /* Store transposed: weights_t[j * in_pad + k] */
+        for (size_t k = 0; k < in_f; ++k) {
+            float v = weights[j * in_f + k] * inv_scale;
+            int32_t q = (int32_t)roundf(v);
+            if (q > 127) q = 127;
+            if (q < -128) q = -128;
+            out_ref->weights_t[j * in_pad + k] = (int8_t)q;
+        }
+        /* Zero pad */
+        if (in_pad > in_f) {
+            memset(out_ref->weights_t + j * in_pad + in_f, 0, in_pad - in_f);
+        }
+    }
+    return true;
+}
+
 static void patch_embed_image_into(
     PredictorModel *model,
     const float *image,
@@ -1988,30 +2194,52 @@ static void patch_embed_image_into(
     size_t patches_h = height / patch;
     size_t patches_w = width / patch;
     size_t patch_dim = patch * patch * channels;
+    size_t num_patches = patches_h * patches_w;
 
+    /* Extract ALL patches into the pre-allocated batch buffer */
+    float *all_patches = model->all_patches;
     for (size_t ph = 0; ph < patches_h; ++ph) {
         for (size_t pw = 0; pw < patches_w; ++pw) {
             size_t patch_idx = ph * patches_w + pw;
+            float *dst = all_patches + patch_idx * patch_dim;
             for (size_t c = 0; c < channels; ++c) {
                 for (size_t py = 0; py < patch; ++py) {
                     for (size_t px = 0; px < patch; ++px) {
                         size_t img_y = ph * patch + py;
                         size_t img_x = pw * patch + px;
-                        size_t img_idx = (img_y * width + img_x) * channels + c;
-                        size_t patch_pixel = c * patch * patch + py * patch + px;
-                        scratch->patch[patch_pixel] = image[img_idx];
+                        dst[c * patch * patch + py * patch + px] =
+                            image[(img_y * width + img_x) * channels + c];
                     }
                 }
             }
+        }
+    }
 
+    /* Batched INT8 GEMM: [num_patches, patch_dim] @ [hidden, patch_dim]^T → [num_patches, hidden] */
+    if (model->patch_proj_i8.weights_t != NULL) {
+        int8linear_forward_into(
+            &model->patch_proj_i8,
+            all_patches,
+            num_patches,
+            scratch->row_quant,
+            out
+        );
+        /* Add patch projection bias */
+        if (model->patch_proj_bias.len > 0) {
+            add_bias_inplace(out, model->patch_proj_bias.data, num_patches, hidden);
+        }
+    } else {
+        /* Fallback: scalar per-patch */
+        for (size_t i = 0; i < num_patches; ++i) {
             matmul_t_into(
-                scratch->patch,
+                all_patches + i * patch_dim,
                 model->patch_proj.data,
-                1U,
-                patch_dim,
-                hidden,
-                out + patch_idx * hidden
+                1U, patch_dim, hidden,
+                out + i * hidden
             );
+        }
+        if (model->patch_proj_bias.len > 0) {
+            add_bias_inplace(out, model->patch_proj_bias.data, num_patches, hidden);
         }
     }
 }
@@ -2069,16 +2297,22 @@ static void encoder_layer_forward(
 
     int64_t t_qkv = esp_timer_get_time();
 
-    bidirectional_attention_separate(
-        scratch->q,
-        scratch->k,
-        scratch->v,
-        seq_len,
-        model->encoder_heads,
-        head_dim,
-        scratch->scores,
-        scratch->attn_out
-    );
+    /* L blocks (linear attention) detected by empty Q bias */
+    bool use_linear = (layer->q_bias.len == 0);
+    if (use_linear) {
+        /* Kernel-trick O(nd²) linear attention — no score matrix */
+        linear_attention_kernel_trick(
+            scratch->q, scratch->k, scratch->v,
+            seq_len, model->encoder_heads, head_dim,
+            scratch->attn_out
+        );
+    } else {
+        bidirectional_attention_separate(
+            scratch->q, scratch->k, scratch->v,
+            seq_len, model->encoder_heads, head_dim,
+            scratch->scores, scratch->attn_out, false
+        );
+    }
 
     int64_t t_attn = esp_timer_get_time();
 
@@ -2148,17 +2382,25 @@ bool encode_image(
     EncoderScratch *scratch = &model->encoder_scratch;
     size_t hidden = model->encoder_hidden;
     size_t seq_len = model->encoder_seq_len;
-    size_t num_patches = seq_len - 1U;
+    size_t meta = model->meta_tokens;
+    size_t patch_offset = (1U + meta) * hidden;
 
+    /* Build sequence: [CLS, meta_tokens..., patches...] */
     memcpy(scratch->x, model->cls_token.data, hidden * sizeof(float));
-    patch_embed_image_into(model, image, height, width, scratch->x + hidden);
-    log_vector_preview("enc.patch0_embed", scratch->x + hidden, hidden);
-    log_vector_stats("enc.patch0_embed", scratch->x + hidden, hidden);
+    if (meta > 0 && model->meta_token.len > 0) {
+        memcpy(scratch->x + hidden, model->meta_token.data, meta * hidden * sizeof(float));
+    }
+    int64_t t_pe_start = esp_timer_get_time();
+    patch_embed_image_into(model, image, height, width, scratch->x + patch_offset);
+    int64_t t_pe_end = esp_timer_get_time();
+    ESP_LOGI(TAG, "enc.patch_embed latency: %.1f ms", (double)(t_pe_end - t_pe_start) / 1000.0);
+    log_vector_preview("enc.patch0_embed", scratch->x + patch_offset, hidden);
+    log_vector_stats("enc.patch0_embed", scratch->x + patch_offset, hidden);
     for (size_t i = 0; i < seq_len * hidden && i < model->pos_embed.len; ++i) {
         scratch->x[i] += model->pos_embed.data[i];
     }
-    log_vector_preview("enc.patch0_with_pos", scratch->x + hidden, hidden);
-    log_vector_stats("enc.patch0_with_pos", scratch->x + hidden, hidden);
+    log_vector_preview("enc.patch0_with_pos", scratch->x + patch_offset, hidden);
+    log_vector_stats("enc.patch0_with_pos", scratch->x + patch_offset, hidden);
 
     for (size_t layer_index = 0; layer_index < model->encoder_layers; ++layer_index) {
         encoder_layer_forward(model, &model->encoder[layer_index], scratch->x);
@@ -2171,11 +2413,29 @@ bool encode_image(
         }
     }
 
-    (void)num_patches;
     layernorm_into(scratch->x, model->final_norm_weight.data, 1U, hidden, scratch->cls_norm);
     log_vector_preview("enc.cls_norm", scratch->cls_norm, hidden);
     log_vector_stats("enc.cls_norm", scratch->cls_norm, hidden);
-    projection_head_forward(&model->projector, scratch->cls_norm, hidden, &model->scratch, out);
+
+    /* Hybrid encoder output projection (Linear, no activation) */
+    float *enc_out = scratch->cls_norm;
+    if (model->enc_proj_weight.len > 0) {
+        /* out = cls_norm @ weight^T + bias (reuse scratch->normed as temp) */
+        size_t out_dim = model->enc_proj_bias.len > 0 ? model->enc_proj_bias.len : hidden;
+        for (size_t j = 0; j < out_dim; ++j) {
+            float sum = 0.0f;
+            for (size_t k = 0; k < hidden; ++k) {
+                sum += scratch->cls_norm[k] * model->enc_proj_weight.data[j * hidden + k];
+            }
+            if (model->enc_proj_bias.len > 0) {
+                sum += model->enc_proj_bias.data[j];
+            }
+            scratch->normed[j] = sum;
+        }
+        enc_out = scratch->normed;
+    }
+
+    projection_head_forward(&model->projector, enc_out, hidden, &model->scratch, out);
     return true;
 }
 

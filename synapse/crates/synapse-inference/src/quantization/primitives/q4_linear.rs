@@ -5,6 +5,33 @@
 //! vs f32. Predictor weights shrink from ~43MB (f32) to ~7MB (Q4), fitting in
 //! ESP32-P4's 32MB PSRAM.
 
+/// Convert f32 to IEEE 754 half-precision (f16) bit pattern.
+fn f32_to_f16(val: f32) -> u16 {
+    let bits = val.to_bits();
+    let sign = (bits >> 16) & 0x8000;
+    let exp = ((bits >> 23) & 0xFF) as i32;
+    let man = bits & 0x7FFFFF;
+
+    if exp == 0 {
+        // Zero or subnormal → f16 zero
+        return sign as u16;
+    }
+    if exp == 0xFF {
+        // Inf/NaN
+        return (sign | 0x7C00 | if man != 0 { 0x200 } else { 0 }) as u16;
+    }
+
+    let new_exp = exp - 127 + 15;
+    if new_exp >= 31 {
+        return (sign | 0x7C00) as u16; // overflow → inf
+    }
+    if new_exp <= 0 {
+        return sign as u16; // underflow → zero
+    }
+
+    (sign | ((new_exp as u32) << 10) | (man >> 13)) as u16
+}
+
 /// A single Q4_0 block: 32 elements quantized to 4-bit with one f32 scale.
 ///
 /// Each nibble pair packs two signed 4-bit values offset by +8 into a byte:
@@ -26,6 +53,8 @@ pub struct Q4Linear {
     pub blocks: Vec<Q4Block>,
     pub out_features: usize,
     pub in_features: usize,
+    /// Cached Zig-compatible packed buffer (lazily initialized).
+    pub packed_zig_cache: std::cell::RefCell<Option<Vec<u8>>>,
 }
 
 impl Q4Linear {
@@ -66,14 +95,62 @@ impl Q4Linear {
             blocks,
             out_features,
             in_features,
+            packed_zig_cache: std::cell::RefCell::new(None),
         }
+    }
+
+    /// Pack blocks into Zig-compatible Q4_0 binary format: `[f16_scale, 16_nibble_bytes]` per block.
+    ///
+    /// Returns packed buffer for the entire `[out_features, padded_k/32]` block matrix.
+    /// Call once at load time; reuse for all forward calls.
+    pub fn pack_for_zig(&self) -> Vec<u8> {
+        let padded_k = (self.in_features + 31) / 32 * 32;
+        let blocks_per_row = padded_k / 32;
+        let block_bytes = 2 + 16; // f16 scale + 16 nibble bytes = 18
+        let mut packed = vec![0u8; self.out_features * blocks_per_row * block_bytes];
+
+        for (i, block) in self.blocks.iter().enumerate() {
+            let off = i * block_bytes;
+            // Convert f32 scale to f16 (IEEE 754 half-precision)
+            let f16_bits = f32_to_f16(block.scale);
+            packed[off] = (f16_bits & 0xFF) as u8;
+            packed[off + 1] = (f16_bits >> 8) as u8;
+            packed[off + 2..off + 18].copy_from_slice(&block.nibbles);
+        }
+        packed
     }
 
     /// Forward pass: `x [m, in_features]` -> `[m, out_features]`.
     ///
-    /// Dequantizes weights on-the-fly and accumulates dot products. This is a
-    /// pure-Rust GEMV suitable for embedded targets without SIMD requirements.
+    /// Uses Zig SIMD Q4 GEMV when available, falls back to pure Rust.
     pub fn forward(&self, x: &[f32], m: usize) -> Vec<f32> {
+        let k = self.in_features;
+        let n = self.out_features;
+
+        if m == 0 || k == 0 || n == 0 {
+            return vec![0.0f32; m * n];
+        }
+
+        // Use Zig Q4 GEMV for each row of M (cached packed buffer)
+        #[cfg(feature = "zig-ffi")]
+        {
+            let packed = self.get_packed_zig();
+            let mut out = vec![0.0f32; m * n];
+            for i in 0..m {
+                let row = &x[i * k..(i + 1) * k];
+                let row_out = synapse_core::q4_0_gemv(n, k, row, &*packed)
+                    .expect("q4_0_gemv failed");
+                out[i * n..(i + 1) * n].copy_from_slice(&row_out);
+            }
+            return out;
+        }
+
+        #[cfg(not(feature = "zig-ffi"))]
+        self.forward_scalar(x, m)
+    }
+
+    /// Pure-Rust scalar fallback for Q4 forward pass.
+    fn forward_scalar(&self, x: &[f32], m: usize) -> Vec<f32> {
         let k = self.in_features;
         let n = self.out_features;
         let padded_k = (k + 31) / 32 * 32;
@@ -144,7 +221,20 @@ impl Q4Linear {
             blocks: Vec::new(),
             out_features: 0,
             in_features: 0,
+            packed_zig_cache: std::cell::RefCell::new(None),
         }
+    }
+
+    /// Get or compute the cached Zig-compatible packed buffer.
+    fn get_packed_zig(&self) -> std::cell::Ref<'_, Vec<u8>> {
+        {
+            let cache = self.packed_zig_cache.borrow();
+            if cache.is_some() {
+                return std::cell::Ref::map(cache, |c| c.as_ref().unwrap());
+            }
+        }
+        *self.packed_zig_cache.borrow_mut() = Some(self.pack_for_zig());
+        std::cell::Ref::map(self.packed_zig_cache.borrow(), |c| c.as_ref().unwrap())
     }
 }
 

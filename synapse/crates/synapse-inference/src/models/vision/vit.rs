@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ops::activation::gelu;
-use crate::ops::attention::bidirectional_attention;
+use crate::ops::attention::{bidirectional_attention, bidirectional_linear_attention};
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::apply_norm;
 use crate::ops::patch_embed::patch_embed;
@@ -131,8 +131,14 @@ impl EncoderLayer {
         let mut v = matmul_t(x, &self.w_v, seq_len, h, q_dim);
         Self::add_bias(&mut v, &self.v_bias, seq_len, q_dim);
 
-        // Bidirectional attention (no causal mask, no RoPE)
-        let attn_out = bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
+        // Bidirectional attention (no causal mask, no RoPE).
+        // L blocks (linear attention) are detected by empty Q/K/V biases.
+        let use_linear = self.q_bias.is_empty() && self.k_bias.is_empty();
+        let attn_out = if use_linear {
+            bidirectional_linear_attention(&q, &k, &v, seq_len, num_heads, head_dim)
+        } else {
+            bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim)
+        };
 
         // Output projection
         let mut out = matmul_t(&attn_out, &self.w_o, seq_len, q_dim, h);
@@ -228,6 +234,16 @@ pub struct ViTModel {
     pub classifier_bias: Option<AlignedBuffer>,
     /// ImageNet class labels (optional, for display).
     pub class_labels: Vec<String>,
+
+    // ── Hybrid encoder extras ─────────────────────────────────────
+    /// Meta tokens: [num_meta_tokens * hidden_size] (empty if not hybrid).
+    pub meta_token: AlignedBuffer,
+    /// Number of meta tokens (0 if not hybrid).
+    pub num_meta_tokens: usize,
+    /// Encoder output projection weight: [hidden, hidden] (empty if not hybrid).
+    pub enc_proj_weight: AlignedBuffer,
+    /// Encoder output projection bias: [hidden] (empty if not hybrid).
+    pub enc_proj_bias: AlignedBuffer,
 }
 
 impl ViTModel {
@@ -297,6 +313,10 @@ impl ViTModel {
             classifier_head,
             classifier_bias,
             class_labels: Vec::new(),
+            meta_token: AlignedBuffer::new_zeroed(0),
+            num_meta_tokens: 0,
+            enc_proj_weight: AlignedBuffer::new_zeroed(0),
+            enc_proj_bias: AlignedBuffer::new_zeroed(0),
         }
     }
 
@@ -328,16 +348,23 @@ impl ViTModel {
             }
         }
 
-        let seq_len = num_patches + 1; // +1 for CLS token
+        // seq_len = CLS + meta_tokens + patches
+        let seq_len = 1 + self.num_meta_tokens + num_patches;
 
-        // 2. Prepend CLS token to get [seq_len, hidden_size]
+        // 2. Build sequence: [CLS, meta_tokens..., patches...]
         let mut x = vec![0.0f32; seq_len * h];
         // CLS token at position 0
         if !self.cls_token.is_empty() {
             x[..h].copy_from_slice(&self.cls_token);
         }
-        // Patch embeddings at positions 1..
-        x[h..].copy_from_slice(&patch_embeddings);
+        // Meta tokens at positions 1..1+num_meta
+        if !self.meta_token.is_empty() {
+            let meta_len = self.num_meta_tokens * h;
+            x[h..h + meta_len].copy_from_slice(&self.meta_token[..meta_len]);
+        }
+        // Patch embeddings after meta tokens
+        let patch_offset = (1 + self.num_meta_tokens) * h;
+        x[patch_offset..patch_offset + num_patches * h].copy_from_slice(&patch_embeddings);
 
         // 3. Add positional embeddings element-wise
         if !self.pos_embed.is_empty() {
@@ -359,6 +386,17 @@ impl ViTModel {
         if !self.final_norm_bias.is_empty() {
             for j in 0..h {
                 embeddings[j] += self.final_norm_bias[j];
+            }
+        }
+
+        // 5b. Encoder output projection (hybrid models: Linear without activation)
+        if !self.enc_proj_weight.is_empty() {
+            let out_dim = self.enc_proj_bias.len().max(h);
+            embeddings = matmul_t(&embeddings, &self.enc_proj_weight, 1, h, out_dim);
+            if !self.enc_proj_bias.is_empty() {
+                for j in 0..out_dim {
+                    embeddings[j] += self.enc_proj_bias[j];
+                }
             }
         }
 

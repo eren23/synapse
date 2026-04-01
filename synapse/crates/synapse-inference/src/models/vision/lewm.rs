@@ -127,6 +127,13 @@ pub struct LeWMBuffers {
     pub proj: Vec<f32>,       // [seq_len * hidden]
     pub ffn_inter: Vec<f32>,  // [seq_len * inter]
     pub ffn_out: Vec<f32>,    // [seq_len * hidden]
+    // Arena buffers: eliminate per-layer allocations in predict_next_fused
+    pub q_split: Vec<f32>,    // [seq_len * inner_dim] — Q after QKV split
+    pub k_split: Vec<f32>,    // [seq_len * inner_dim] — K after QKV split
+    pub v_split: Vec<f32>,    // [seq_len * inner_dim] — V after QKV split
+    pub mod_copy: Vec<f32>,   // [6 * hidden] — copy of mod_params for gate extraction
+    pub latent_seq: Vec<f32>, // [seq_len * latent_dim] — bottleneck input sequence
+    pub cond: Vec<f32>,       // [hidden] — conditioning vector
 }
 
 impl LeWMBuffers {
@@ -135,6 +142,7 @@ impl LeWMBuffers {
         let h = config.predictor_hidden;
         let inner = config.predictor_inner_dim;
         let inter = config.predictor_inter;
+        let latent = config.latent_dim;
         LeWMBuffers {
             seq: vec![0.0; seq_len * h],
             mod_params: vec![0.0; 6 * h],
@@ -144,6 +152,12 @@ impl LeWMBuffers {
             proj: vec![0.0; seq_len * h],
             ffn_inter: vec![0.0; seq_len * inter],
             ffn_out: vec![0.0; seq_len * h],
+            q_split: vec![0.0; seq_len * inner],
+            k_split: vec![0.0; seq_len * inner],
+            v_split: vec![0.0; seq_len * inner],
+            mod_copy: vec![0.0; 6 * h],
+            latent_seq: vec![0.0; seq_len * latent],
+            cond: vec![0.0; h],
         }
     }
 }
@@ -660,21 +674,23 @@ impl LeWorldModel {
 
         // 2. Build input sequence and apply projections
         let seq_len = 3;
-        let conditioning = if has_proj {
-            // Build sequence at latent_dim, then project
+        if has_proj {
+            // Build sequence at latent_dim in arena, then project
             let seq_dim = latent;
-            let mut latent_seq = vec![0.0f32; seq_len * seq_dim];
-            latent_seq[..seq_dim].copy_from_slice(z_t);
-            latent_seq[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+            let ls = &mut bufs.latent_seq[..seq_len * seq_dim];
+            ls[..seq_dim].copy_from_slice(z_t);
+            ls[seq_dim..2 * seq_dim].copy_from_slice(&a_embed);
+            for j in 2 * seq_dim..3 * seq_dim { ls[j] = 0.0; }
             if !self.predictor_pos_embed.is_empty() {
-                let pos_len = self.predictor_pos_embed.len().min(latent_seq.len());
+                let pos_len = self.predictor_pos_embed.len().min(seq_len * seq_dim);
                 for i in 0..pos_len {
-                    latent_seq[i] += self.predictor_pos_embed[i];
+                    bufs.latent_seq[i] += self.predictor_pos_embed[i];
                 }
             }
-            let projected = self.apply_input_proj(&latent_seq, seq_len);
+            let projected = self.apply_input_proj(&bufs.latent_seq[..seq_len * seq_dim], seq_len);
             bufs.seq[..seq_len * hidden].copy_from_slice(&projected);
-            self.apply_cond_proj(&a_embed)
+            let cond_proj = self.apply_cond_proj(&a_embed);
+            bufs.cond[..hidden].copy_from_slice(&cond_proj);
         } else {
             bufs.seq[..hidden].copy_from_slice(z_t);
             bufs.seq[hidden..2 * hidden].copy_from_slice(&a_embed);
@@ -687,113 +703,86 @@ impl LeWorldModel {
                     bufs.seq[i] += self.predictor_pos_embed[i];
                 }
             }
-            a_embed
+            bufs.cond[..hidden].copy_from_slice(&a_embed);
         };
+        let conditioning = &bufs.cond[..hidden];
 
-        // 3. Run through predictor layers with fused kernels
+        // 3. Run through predictor layers — single Zig FFI call per layer
+        #[cfg(feature = "zig-ffi")]
+        {
+            // Scratch sizing: normed needs max(seq*hidden, seq*inter), proj same
+            let normed_size = (seq_len * hidden).max(seq_len * inter);
+            let proj_size = normed_size;
+            if bufs.normed.len() < normed_size { bufs.normed.resize(normed_size, 0.0); }
+            if bufs.proj.len() < proj_size { bufs.proj.resize(proj_size, 0.0); }
+
+            for layer in &self.predictor_layers {
+                synapse_core::lewm_predict_layer(
+                    &mut bufs.seq,
+                    conditioning,
+                    seq_len, hidden, num_heads, inner_dim, inter,
+                    &layer.adaln_weight, &layer.adaln_bias,
+                    &layer.attn_norm_weight,
+                    &layer.to_qkv,
+                    &layer.attn_out_weight, &layer.attn_out_bias,
+                    &layer.mlp_norm_weight,
+                    &layer.mlp_up_weight, &layer.mlp_up_bias,
+                    &layer.mlp_down_weight, &layer.mlp_down_bias,
+                    &mut bufs.mod_params,
+                    &mut bufs.normed,
+                    &mut bufs.qkv,
+                    &mut bufs.attn_out,
+                    &mut bufs.proj,
+                ).expect("lewm_predict_layer failed");
+            }
+        }
+
+        // Fallback: pure Rust fused ops (slower but correct)
+        #[cfg(not(feature = "zig-ffi"))]
         for layer in &self.predictor_layers {
             let mod_dim = 6 * hidden;
-
-            // Step 1: Compute adaLN modulation into bufs.mod_params
-            let mod_result = matmul_t(&conditioning, &layer.adaln_weight, 1, hidden, mod_dim);
+            let mod_result = matmul_t(conditioning, &layer.adaln_weight, 1, hidden, mod_dim);
             bufs.mod_params[..mod_dim].copy_from_slice(&mod_result);
             if !layer.adaln_bias.is_empty() {
-                for j in 0..mod_dim {
-                    bufs.mod_params[j] += layer.adaln_bias[j];
-                }
+                for j in 0..mod_dim { bufs.mod_params[j] += layer.adaln_bias[j]; }
             }
+            bufs.mod_copy[..mod_dim].copy_from_slice(&bufs.mod_params[..mod_dim]);
 
-            let scale1 = &bufs.mod_params[0..hidden];
-            let shift1 = &bufs.mod_params[hidden..2 * hidden];
-            let gate1 = &bufs.mod_params[2 * hidden..3 * hidden];
-            let scale2 = &bufs.mod_params[3 * hidden..4 * hidden];
-            let shift2 = &bufs.mod_params[4 * hidden..5 * hidden];
-            let gate2 = &bufs.mod_params[5 * hidden..6 * hidden];
-
-            // We need owned copies of the gate/scale/shift vectors since we'll
-            // borrow bufs.mod_params region and also bufs.seq mutably later.
-            let gate1_vec: Vec<f32> = gate1.to_vec();
-            let scale2_vec: Vec<f32> = scale2.to_vec();
-            let shift2_vec: Vec<f32> = shift2.to_vec();
-            let gate2_vec: Vec<f32> = gate2.to_vec();
-
-            // Step 2: Fused layernorm + modulate + QKV matmul into bufs.qkv
             fused_adaln_layernorm_matmul_into(
-                &bufs.seq,
-                &layer.attn_norm_weight,
-                scale1,
-                shift1,
-                &layer.to_qkv,
-                seq_len,
-                hidden,
-                3 * inner_dim,
-                1e-6,
-                &mut bufs.qkv,
+                &bufs.seq, &layer.attn_norm_weight,
+                &bufs.mod_copy[0..hidden], &bufs.mod_copy[hidden..2*hidden],
+                &layer.to_qkv, seq_len, hidden, 3 * inner_dim, 1e-6, &mut bufs.qkv,
             );
 
-            // Step 3: Split QKV and run bidirectional attention
-            // bufs.qkv is [seq_len, 3*inner_dim]. Deinterleave into contiguous Q/K/V.
-            // We reuse bufs.attn_out for the Q buffer, bufs.proj for K, and bufs.ffn_out for V.
-            // (These buffers are large enough: attn_out=[seq*inner], proj=[seq*hidden],
-            //  ffn_out=[seq*hidden]. We need [seq*inner] for each of Q/K/V.)
-            // Actually proj and ffn_out are [seq*hidden] which may be smaller than [seq*inner].
-            // So we allocate Q/K/V here -- this is the one remaining allocation per layer.
-            let mut q = vec![0.0f32; seq_len * inner_dim];
-            let mut k = vec![0.0f32; seq_len * inner_dim];
-            let mut v = vec![0.0f32; seq_len * inner_dim];
+            let qi = seq_len * inner_dim;
             for t in 0..seq_len {
                 let qkv_off = t * 3 * inner_dim;
                 let off = t * inner_dim;
-                q[off..off + inner_dim]
-                    .copy_from_slice(&bufs.qkv[qkv_off..qkv_off + inner_dim]);
-                k[off..off + inner_dim]
-                    .copy_from_slice(&bufs.qkv[qkv_off + inner_dim..qkv_off + 2 * inner_dim]);
-                v[off..off + inner_dim]
-                    .copy_from_slice(&bufs.qkv[qkv_off + 2 * inner_dim..qkv_off + 3 * inner_dim]);
+                bufs.q_split[off..off+inner_dim].copy_from_slice(&bufs.qkv[qkv_off..qkv_off+inner_dim]);
+                bufs.k_split[off..off+inner_dim].copy_from_slice(&bufs.qkv[qkv_off+inner_dim..qkv_off+2*inner_dim]);
+                bufs.v_split[off..off+inner_dim].copy_from_slice(&bufs.qkv[qkv_off+2*inner_dim..qkv_off+3*inner_dim]);
             }
+            let attn_result = bidirectional_attention(
+                &bufs.q_split[..qi], &bufs.k_split[..qi], &bufs.v_split[..qi],
+                seq_len, num_heads, head_dim,
+            );
+            bufs.attn_out[..qi].copy_from_slice(&attn_result);
 
-            // bidirectional_attention allocates internally (one alloc per layer, acceptable)
-            let attn_result =
-                bidirectional_attention(&q, &k, &v, seq_len, num_heads, head_dim);
-            bufs.attn_out[..seq_len * inner_dim].copy_from_slice(&attn_result);
-
-            // Step 4: Fused attention output projection + gated residual (in-place on bufs.seq)
             fused_attn_proj_gated_residual_into(
-                &bufs.attn_out,
-                &layer.attn_out_weight,
-                &layer.attn_out_bias,
-                &gate1_vec,
-                seq_len,
-                inner_dim,
-                hidden,
-                &mut bufs.seq,
+                &bufs.attn_out, &layer.attn_out_weight, &layer.attn_out_bias,
+                &bufs.mod_copy[2*hidden..3*hidden], seq_len, inner_dim, hidden, &mut bufs.seq,
             );
-
-            // Step 5: Fused layernorm + modulate for FFN path into bufs.normed
             let modulated = fused_layernorm_modulate(
-                &bufs.seq,
-                &layer.mlp_norm_weight,
-                &scale2_vec,
-                &shift2_vec,
-                seq_len,
-                hidden,
-                1e-6,
+                &bufs.seq, &layer.mlp_norm_weight,
+                &bufs.mod_copy[3*hidden..4*hidden], &bufs.mod_copy[4*hidden..5*hidden],
+                seq_len, hidden, 1e-6,
             );
-            bufs.normed[..seq_len * hidden].copy_from_slice(&modulated);
-
-            // Step 6: Fused FFN + gated residual (in-place on bufs.seq)
+            bufs.normed[..seq_len*hidden].copy_from_slice(&modulated);
             fused_ffn_gated_residual_into(
-                &bufs.normed,
-                &layer.mlp_up_weight,
-                &layer.mlp_up_bias,
-                &layer.mlp_down_weight,
-                &layer.mlp_down_bias,
-                &gate2_vec,
-                seq_len,
-                hidden,
-                inter,
-                &mut bufs.seq,
-                &mut bufs.ffn_inter,
+                &bufs.normed, &layer.mlp_up_weight, &layer.mlp_up_bias,
+                &layer.mlp_down_weight, &layer.mlp_down_bias,
+                &bufs.mod_copy[5*hidden..6*hidden], seq_len, hidden, inter,
+                &mut bufs.seq, &mut bufs.ffn_inter,
             );
         }
 
@@ -1195,6 +1184,26 @@ impl LeWorldModel {
             }
             "layernorm.bias" => {
                 self.encoder.final_norm_bias = tensor.data.clone();
+                true
+            }
+            // Hybrid encoder extras
+            "meta_token" => {
+                let h = self.config.encoder_hidden;
+                let total = tensor.data.len();
+                self.encoder.num_meta_tokens = total / h;
+                self.encoder.meta_token = tensor.data.clone();
+                true
+            }
+            "proj.0.weight" => {
+                self.encoder.enc_proj_weight = tensor.data.clone();
+                true
+            }
+            "proj.0.bias" => {
+                self.encoder.enc_proj_bias = tensor.data.clone();
+                true
+            }
+            _ if rest.starts_with("proj.") => {
+                // Skip BN params (proj.1.weight, proj.1.bias, etc.)
                 true
             }
             _ if rest.starts_with("encoder.layer.") => {

@@ -139,7 +139,16 @@ def remap_key(flat_key: str):
 
 
 def remap_all(raw_tensors):
-    """Flatten and remap all tensor keys."""
+    """Flatten and remap all tensor keys.
+
+    For hybrid encoder checkpoints (encoder.blocks.N.*), remaps to
+    standard ViT naming (encoder.encoder.layer.N.*) and splits fused QKV.
+    """
+    is_hybrid = any(k.startswith("encoder.blocks.") for k in raw_tensors)
+
+    if is_hybrid:
+        return _remap_hybrid(raw_tensors)
+
     result = {}
     skipped = []
     for raw_key, tensor in sorted(raw_tensors.items()):
@@ -154,39 +163,260 @@ def remap_all(raw_tensors):
     return result, skipped
 
 
+def _remap_hybrid(raw_tensors):
+    """Remap hybrid ALAL encoder keys to standard ViT naming.
+
+    Hybrid encoder structure:
+      encoder.cls_token           → encoder.embeddings.cls_token
+      encoder.meta_token          → (stored as separate key)
+      encoder.pos_embed           → encoder.embeddings.position_embeddings
+      encoder.patch_embed.proj.*  → encoder.embeddings.patch_embeddings.projection.*
+      encoder.norm.*              → encoder.layernorm.*
+      encoder.blocks.N.norm1.*    → encoder.encoder.layer.N.layernorm_before.*
+      encoder.blocks.N.norm2.*    → encoder.encoder.layer.N.layernorm_after.*
+      encoder.blocks.N.mlp.0.*   → encoder.encoder.layer.N.intermediate.dense.*
+      encoder.blocks.N.mlp.2.*   → encoder.encoder.layer.N.output.dense.*
+
+    A blocks (fused QKV): in_proj_weight [3H, H] → split into Q/K/V [H, H]
+    L blocks (separate Q/K/V): q_proj, k_proj, v_proj → query, key, value
+
+    Both: out_proj → attention.output.dense
+    """
+    result = {}
+    skipped = []
+
+    # Embedding remapping
+    EMBED_MAP = {
+        "encoder.cls_token": "encoder.embeddings.cls_token",
+        "encoder.pos_embed": "encoder.embeddings.position_embeddings",
+        "encoder.patch_embed.proj.weight": "encoder.embeddings.patch_embeddings.projection.weight",
+        "encoder.patch_embed.proj.bias": "encoder.embeddings.patch_embeddings.projection.bias",
+        "encoder.norm.weight": "encoder.layernorm.weight",
+        "encoder.norm.bias": "encoder.layernorm.bias",
+    }
+
+    for key, tensor in sorted(raw_tensors.items()):
+        if "num_batches_tracked" in key:
+            skipped.append(key)
+            continue
+        # Keep running_mean/running_var in safetensors for reference
+        # (Rust code will skip them during loading)
+
+        if tensor.dtype != torch.float32:
+            tensor = tensor.float()
+
+        # 1. Direct embedding remaps
+        if key in EMBED_MAP:
+            result[EMBED_MAP[key]] = tensor
+            continue
+
+        # 2. Meta token (new for hybrid — store as-is)
+        if key == "encoder.meta_token":
+            result["encoder.meta_token"] = tensor
+            continue
+
+        # 3. Encoder output projection (encoder.proj.*) — collect for BN folding
+        if key.startswith("encoder.proj."):
+            result[key] = tensor
+            continue
+
+        # 4. Encoder blocks
+        if key.startswith("encoder.blocks."):
+            parts = key.split(".")
+            # encoder.blocks.{idx}.{rest...}
+            idx = parts[2]
+            rest = ".".join(parts[3:])
+            prefix = f"encoder.encoder.layer.{idx}"
+
+            # -- Attention --
+            if rest == "attn.in_proj_weight":
+                # Fused QKV: [3*H, H] → split into Q [H,H], K [H,H], V [H,H]
+                h = tensor.shape[0] // 3
+                q_w, k_w, v_w = tensor[:h], tensor[h:2*h], tensor[2*h:]
+                result[f"{prefix}.attention.attention.query.weight"] = q_w
+                result[f"{prefix}.attention.attention.key.weight"] = k_w
+                result[f"{prefix}.attention.attention.value.weight"] = v_w
+                continue
+            if rest == "attn.in_proj_bias":
+                h = tensor.shape[0] // 3
+                q_b, k_b, v_b = tensor[:h], tensor[h:2*h], tensor[2*h:]
+                result[f"{prefix}.attention.attention.query.bias"] = q_b
+                result[f"{prefix}.attention.attention.key.bias"] = k_b
+                result[f"{prefix}.attention.attention.value.bias"] = v_b
+                continue
+            if rest == "attn.q_proj.weight":
+                result[f"{prefix}.attention.attention.query.weight"] = tensor
+                continue
+            if rest == "attn.k_proj.weight":
+                result[f"{prefix}.attention.attention.key.weight"] = tensor
+                continue
+            if rest == "attn.v_proj.weight":
+                result[f"{prefix}.attention.attention.value.weight"] = tensor
+                continue
+            if rest == "attn.out_proj.weight":
+                result[f"{prefix}.attention.output.dense.weight"] = tensor
+                continue
+            if rest == "attn.out_proj.bias":
+                result[f"{prefix}.attention.output.dense.bias"] = tensor
+                continue
+
+            # -- LayerNorm --
+            if rest == "norm1.weight":
+                result[f"{prefix}.layernorm_before.weight"] = tensor
+                continue
+            if rest == "norm1.bias":
+                result[f"{prefix}.layernorm_before.bias"] = tensor
+                continue
+            if rest == "norm2.weight":
+                result[f"{prefix}.layernorm_after.weight"] = tensor
+                continue
+            if rest == "norm2.bias":
+                result[f"{prefix}.layernorm_after.bias"] = tensor
+                continue
+
+            # -- MLP: mlp.0 = up, mlp.2 = down --
+            if rest == "mlp.0.weight":
+                result[f"{prefix}.intermediate.dense.weight"] = tensor
+                continue
+            if rest == "mlp.0.bias":
+                result[f"{prefix}.intermediate.dense.bias"] = tensor
+                continue
+            if rest == "mlp.2.weight":
+                result[f"{prefix}.output.dense.weight"] = tensor
+                continue
+            if rest == "mlp.2.bias":
+                result[f"{prefix}.output.dense.bias"] = tensor
+                continue
+
+        # 5. Non-encoder keys (predictor, action_encoder, projector, pred_proj)
+        mapped = remap_key(key)
+        if mapped is None:
+            skipped.append(key)
+        else:
+            result[mapped] = tensor
+
+    # Fold encoder.proj BatchNorm into Linear layer
+    # BN: y = gamma * (x - mean) / sqrt(var + eps) + beta
+    # Folded: new_W = gamma * W / sqrt(var + eps)  (per output channel)
+    #         new_b = gamma * (b - mean) / sqrt(var + eps) + beta
+    proj_w = result.get("encoder.proj.0.weight")
+    proj_b = result.get("encoder.proj.0.bias")
+    bn_gamma = result.get("encoder.proj.1.weight")
+    bn_beta = result.get("encoder.proj.1.bias")
+    bn_mean = result.get("encoder.proj.1.running_mean")
+    bn_var = result.get("encoder.proj.1.running_var")
+
+    if proj_w is not None and bn_mean is not None and bn_var is not None:
+        eps = 1e-5
+        if bn_gamma is None:
+            bn_gamma = torch.ones_like(bn_mean)
+        if bn_beta is None:
+            bn_beta = torch.zeros_like(bn_mean)
+        if proj_b is None:
+            proj_b = torch.zeros(proj_w.shape[0])
+
+        std = (bn_var + eps).sqrt()
+        scale = bn_gamma / std  # [out_features]
+
+        # Fold into weight: each output row scaled by scale[j]
+        new_w = proj_w * scale.unsqueeze(1)
+        new_b = scale * (proj_b - bn_mean) + bn_beta
+
+        result["encoder.proj.0.weight"] = new_w
+        result["encoder.proj.0.bias"] = new_b
+        print(f"  Folded encoder.proj BN into Linear (scale L2={scale.norm():.4f})")
+
+        # Remove BN keys from output
+        for k in ["encoder.proj.1.weight", "encoder.proj.1.bias",
+                   "encoder.proj.1.running_mean", "encoder.proj.1.running_var"]:
+            result.pop(k, None)
+    else:
+        # Clean up BN keys if no folding needed
+        for k in list(result.keys()):
+            if k.startswith("encoder.proj.1."):
+                result.pop(k)
+
+    return result, skipped
+
+
 # ---------------------------------------------------------------------------
 # Config inference from weight shapes
 # ---------------------------------------------------------------------------
 
-def infer_config(tensors):
-    """Infer LeWMConfig from weight tensor shapes."""
+def infer_config(tensors, encoder_type="auto"):
+    """Infer LeWMConfig from weight tensor shapes.
+
+    Handles two encoder styles:
+      - "vit": Standard ViT (encoder.embeddings.*, encoder.encoder.layer.*)
+      - "hybrid": Custom blocks — keys are already remapped to ViT naming
+                  but encoder_hidden differs (64d vs 192d)
+
+    After remapping, both styles use the same key patterns.
+    Pass encoder_type="hybrid" to mark it; otherwise auto-detected.
+    """
     config = {
         "image_size": 224,
         "patch_size": 14,
         "channels": 3,
     }
 
-    cls = tensors.get("encoder.embeddings.cls_token")
-    if cls is not None:
-        config["encoder_hidden"] = cls.shape[-1]
+    # --- Detect encoder style ---
+    is_hybrid = (encoder_type == "hybrid") or any(
+        k.startswith("encoder.blocks.") for k in tensors
+    )
 
-    enc_layers = set()
-    for k in tensors:
-        if k.startswith("encoder.encoder.layer."):
-            idx = k.split(".")[3]
-            if idx.isdigit():
-                enc_layers.add(int(idx))
-    config["encoder_layers"] = len(enc_layers) if enc_layers else 6
+    if is_hybrid:
+        config["encoder_type"] = "hybrid"
+        # After remapping, hybrid keys use ViT naming
+        cls = tensors.get("encoder.embeddings.cls_token")
+        if cls is not None:
+            config["encoder_hidden"] = cls.shape[-1]
 
-    enc_hidden = config.get("encoder_hidden", 192)
-    config["encoder_heads"] = max(1, enc_hidden // 64)
+        enc_layers = set()
+        for k in tensors:
+            if k.startswith("encoder.encoder.layer."):
+                idx = k.split(".")[3]
+                if idx.isdigit():
+                    enc_layers.add(int(idx))
+        config["encoder_layers"] = len(enc_layers) if enc_layers else 4
 
-    ffn_key = "encoder.encoder.layer.0.intermediate.dense.weight"
-    if ffn_key in tensors:
-        config["encoder_inter"] = tensors[ffn_key].shape[0]
+        enc_hidden = config.get("encoder_hidden", 64)
+        config["encoder_heads"] = max(1, enc_hidden // 64)
+
+        ffn_key = "encoder.encoder.layer.0.intermediate.dense.weight"
+        if ffn_key in tensors:
+            config["encoder_inter"] = tensors[ffn_key].shape[0]
+        else:
+            config["encoder_inter"] = enc_hidden * 4
+
+        # Check for meta_token (hybrid-specific)
+        meta = tensors.get("encoder.meta_token")
+        if meta is not None:
+            config["meta_tokens"] = meta.shape[1]  # e.g., 4
     else:
-        config["encoder_inter"] = enc_hidden * 4
+        config["encoder_type"] = "vit"
+        cls = tensors.get("encoder.embeddings.cls_token")
+        if cls is not None:
+            config["encoder_hidden"] = cls.shape[-1]
 
+        enc_layers = set()
+        for k in tensors:
+            if k.startswith("encoder.encoder.layer."):
+                idx = k.split(".")[3]
+                if idx.isdigit():
+                    enc_layers.add(int(idx))
+        config["encoder_layers"] = len(enc_layers) if enc_layers else 6
+
+        enc_hidden = config.get("encoder_hidden", 192)
+        config["encoder_heads"] = max(1, enc_hidden // 64)
+
+        ffn_key = "encoder.encoder.layer.0.intermediate.dense.weight"
+        if ffn_key in tensors:
+            config["encoder_inter"] = tensors[ffn_key].shape[0]
+        else:
+            config["encoder_inter"] = enc_hidden * 4
+
+    # --- Predictor (same for both encoder styles) ---
     pred_norm = tensors.get("predictor.transformer.norm.weight")
     if pred_norm is not None:
         config["predictor_hidden"] = pred_norm.shape[0]
@@ -232,6 +462,33 @@ def infer_config(tensors):
 # Main conversion
 # ---------------------------------------------------------------------------
 
+def extract_state_dict(ckpt):
+    """Extract model state_dict from a checkpoint.
+
+    Handles Lightning checkpoints (with 'state_dict' key containing
+    'model.*' prefixed keys) and plain state_dict checkpoints.
+    Returns a flat dict of {key: tensor}.
+    """
+    # Lightning checkpoint: has top-level 'state_dict' key
+    if isinstance(ckpt, dict) and "state_dict" in ckpt:
+        sd = ckpt["state_dict"]
+        if isinstance(sd, dict):
+            result = {}
+            for k, v in sd.items():
+                if not isinstance(k, str):
+                    continue
+                if not isinstance(v, torch.Tensor):
+                    continue
+                # Strip 'model.' prefix if present
+                key = k[len("model."):] if k.startswith("model.") else k
+                result[key] = v
+            if result:
+                return result
+
+    # Fallback: walk the whole object tree (original behavior)
+    return None
+
+
 def convert_one(input_path, output_dir):
     """Convert a single .ckpt to safetensors + config.json."""
     print(f"\n{'='*60}")
@@ -242,9 +499,18 @@ def convert_one(input_path, output_dir):
     print("Loading checkpoint...")
     ckpt = load_ckpt(input_path)
 
-    print("Extracting tensors...")
-    raw_tensors = extract_tensors(ckpt)
+    # Try Lightning state_dict extraction first
+    sd_tensors = extract_state_dict(ckpt)
+    if sd_tensors is not None:
+        print(f"  Lightning checkpoint detected, extracted {len(sd_tensors)} model tensors")
+        raw_tensors = sd_tensors
+    else:
+        print("Extracting tensors (full tree walk)...")
+        raw_tensors = extract_tensors(ckpt)
     print(f"  Found {len(raw_tensors)} raw tensors")
+
+    # Detect hybrid before remapping (remapping changes the keys)
+    is_hybrid = any(k.startswith("encoder.blocks.") for k in raw_tensors)
 
     tensors, skipped = remap_all(raw_tensors)
     print(f"  Mapped {len(tensors)} tensors, skipped {len(skipped)}")
@@ -252,7 +518,7 @@ def convert_one(input_path, output_dir):
         for s in skipped:
             print(f"    skip: {s}")
 
-    config = infer_config(tensors)
+    config = infer_config(tensors, encoder_type="hybrid" if is_hybrid else "vit")
     print(f"\nInferred config:")
     for k, v in sorted(config.items()):
         print(f"  {k}: {v}")

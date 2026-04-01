@@ -297,6 +297,62 @@ pub fn bidirectional_attention(
     output
 }
 
+/// Bidirectional **linear** attention: skip softmax, use L1-normalized scores.
+///
+/// `scores_i = Q_i · K^T / √d` then `weights_i = scores_i / sum(|scores_i|)` then `out_i = weights_i · V`.
+/// This avoids the expensive exp() calls in softmax while keeping outputs bounded.
+///
+/// Same interface as [`bidirectional_attention`].
+pub fn bidirectional_linear_attention(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    seq_len: usize,
+    num_heads: usize,
+    head_dim: usize,
+) -> Vec<f32> {
+    let q_dim = num_heads * head_dim;
+    let scale = 1.0 / (head_dim as f32).sqrt();
+    let mut output = vec![0.0f32; seq_len * q_dim];
+
+    for head in 0..num_heads {
+        for qi in 0..seq_len {
+            // Compute raw scores
+            let mut scores = vec![0.0f32; seq_len];
+            let mut abs_sum = 0.0f32;
+            for ki in 0..seq_len {
+                let mut dot = 0.0f32;
+                for d in 0..head_dim {
+                    dot += q[qi * q_dim + head * head_dim + d]
+                         * k[ki * q_dim + head * head_dim + d];
+                }
+                let s = dot * scale;
+                scores[ki] = s;
+                abs_sum += s.abs();
+            }
+
+            // L1 normalize (prevents output explosion, keeps linearity)
+            if abs_sum > 1e-12 {
+                let inv = 1.0 / abs_sum;
+                for s in scores.iter_mut() {
+                    *s *= inv;
+                }
+            }
+
+            // Weighted sum of values
+            for d in 0..head_dim {
+                let mut val = 0.0f32;
+                for ki in 0..seq_len {
+                    val += scores[ki] * v[ki * q_dim + head * head_dim + d];
+                }
+                output[qi * q_dim + head * head_dim + d] = val;
+            }
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

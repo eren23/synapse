@@ -58,6 +58,46 @@ Output: z_{t+1} [latent_dim]
 
 When `latent_dim == predictor_hidden` (192, baseline), `input_proj` and `cond_proj` are empty and skipped.
 
+### Hybrid ALAL encoder (new, 2026-04-01)
+
+The hybrid ALAL architecture is a fundamentally different encoder that uses **64d hidden** (not 192d) with alternating full-attention and linear-attention blocks:
+
+```
+Image [224x224x3]
+  |
+  v
+Hybrid Encoder (64d, 4 blocks):
+  Block 0 (A): Full attention — fused QKV with bias, softmax
+  Block 1 (L): Linear attention — separate Q/K/V no bias, kernel-trick ELU+1
+  Block 2 (A): Full attention
+  Block 3 (L): Linear attention
+  + meta_token [1, 4, 64] (4 extra tokens, seq_len=261)
+  + encoder.proj (Linear + BN, folded at convert time)
+  |
+  v
+Projector: 64d -> 2048 (GELU) -> 64d
+  |
+  v
+DiT Predictor (64d, 4 layers, adaLN) — NO bottleneck, no input_proj/cond_proj
+  |
+  v
+pred_proj: 64d -> 2048 (GELU) -> 64d
+```
+
+Key differences from slim models:
+- Encoder is 64d internally (not 192d) — **3.4x fewer params** (3M vs 10.2M)
+- No bottleneck projections needed (predictor is also 64d)
+- L blocks use kernel-trick O(nd²) attention instead of O(n²d) softmax
+- `convert_lewm_ckpt.py` auto-detects hybrid via `encoder.blocks.*` keys, remaps to ViT naming, splits fused QKV, folds BN into Linear
+
+New checkpoints (2026-04-01):
+
+| Variant | Encoder | Latent | Params | Binary (LQ40) |
+|---------|---------|--------|--------|----------------|
+| lewm_slim_64d_4e_4p_baseline | 192d ViT, 4L | 64d | 10.2M | 10.9 MB |
+| hybrid_ALAL_64d_4e_4p_1ep | 64d ALAL, 4L | 64d | 3.0M | 3.9 MB |
+| elastic_fixed100_64d_4e_4p_1ep | 192d ViT, 4L | 64d | 10.2M | 10.9 MB |
+
 ### W&B variants
 
 Project: `eren23/crucible-lewm`
