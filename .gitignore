@@ -71,3 +71,5 @@ synapse/web/lewm-compress-demo/lewm-slim-*.bin
 # gsd
 .gsd/
 .bg-shell/
+
+.env
