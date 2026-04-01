@@ -16,8 +16,16 @@ This document details every optimization technique implemented for LEWM inferenc
 | 8 | Dual-Core FFN | Encoder FFN | -150 ms/layer (projected) | Roadmap |
 | 9 | Shared QKV Quantization | Encoder QKV | -10 ms/layer | Done |
 | 10 | Compiler -O2 | Everything | -50 ms/layer (projected) | Roadmap |
+| 11 | Batch INT8 Patch Embedding | Encoder patch embed | 9.4x (470->50ms) | Done |
+| 12 | Kernel-Trick Linear Attention | Hybrid L blocks | 1.3x (76->58ms) | Done |
+| 13 | Meta Token Support | Hybrid encoder | N/A (architectural) | Done |
+| 14 | Encoder Output Projection | Hybrid encoder | N/A (architectural) | Done |
 
-Combined result: **81,818 ms -> 6,416 ms encode** (12.8x speedup on slim model).
+Combined result on 96d slim: **81,818 ms -> 6,416 ms encode** (12.8x speedup).
+
+Combined result on 64d hybrid ALAL: **6,416 ms -> 922 ms encode** (7.0x additional speedup).
+
+Total from baseline to optimized hybrid: **81,818 ms -> 922 ms** (88.7x speedup).
 
 ## PIE SIMD Architecture
 

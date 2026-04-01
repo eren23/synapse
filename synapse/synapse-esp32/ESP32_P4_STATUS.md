@@ -30,6 +30,33 @@ Last updated: 2026-03-31
    - Dual-core attention (Core 1 worker for query token parallelism)
    - GELU LUT (1024 entries), tiled GEMV, PSRAM 200 MHz
    - Slim-96d-full: predict 583ms, encode 6,416ms (12.8x vs scalar baseline)
+7. **Hybrid ALAL 64d encoder support** (2026-04-01):
+   - New 64d custom encoder: alternating full-attention / linear-attention blocks
+   - Meta token support (4 extra tokens in encoder sequence, 261 total)
+   - Encoder output projection (Linear + folded BatchNorm)
+   - Kernel-trick O(nd²) linear attention for L blocks (ELU+1 feature map)
+   - PIE SIMD batch patch embedding (256 patches in one INT8 GEMM)
+   - Binary size: 3.9 MB (vs 9.8 MB for 96d)
+   - **Hybrid-64d-full: predict 152ms, encode 922ms, 3-step rollout 460ms**
+
+### ESP32-P4 Performance Timeline
+
+| Config | predict_next | encode | enc + 3 predict | Binary |
+|--------|-------------|--------|-----------------|--------|
+| 96d slim (2026-03-31) | 583 ms | 6,416 ms | 7,165 ms | 9.8 MB |
+| 64d baseline (2026-04-01) | 443 ms | 4,198 ms | 5,527 ms | 10.9 MB |
+| 64d hybrid ALAL | 152 ms | 1,392 ms | 1,852 ms | 3.9 MB |
+| + skip softmax L blocks | 152 ms | 1,364 ms | 1,824 ms | 3.9 MB |
+| + PIE batch patch embed | 152 ms | 922 ms | 1,382 ms | 3.9 MB |
+| + kernel-trick attention | **152 ms** | **922 ms** | **1,382 ms** | **3.9 MB** |
+
+Encode breakdown (hybrid ALAL, final):
+- Patch embedding: 50ms (was 470ms, 9.4x faster via INT8 batch GEMM)
+- Layer 0 (A, softmax): 215ms (norm 2, qkv 12, attn 94, oproj 7, ffn 100)
+- Layer 1 (L, kernel-trick): 178ms (norm 2, qkv 11, attn 58, oproj 7, ffn 100)
+- Layer 2 (A, softmax): 215ms
+- Layer 3 (L, kernel-trick): 178ms
+- Overhead (norms, projectors): ~86ms
 
 ## What Does NOT Work
 

@@ -414,6 +414,35 @@ extern "C" {
     ) -> syn_status_t;
 
     // ------------------------------------------------------------------
+    // Fused LEWM predictor layer
+    // ------------------------------------------------------------------
+    pub fn syn_lewm_predict_layer(
+        seq: *mut f32,
+        conditioning: *const f32,
+        seq_len: usize,
+        hidden: usize,
+        num_heads: usize,
+        inner_dim: usize,
+        inter: usize,
+        adaln_weight: *const f32,
+        adaln_bias: *const f32,     // nullable
+        attn_norm_weight: *const f32,
+        to_qkv: *const f32,
+        attn_out_weight: *const f32,
+        attn_out_bias: *const f32,   // nullable
+        mlp_norm_weight: *const f32,
+        mlp_up_weight: *const f32,
+        mlp_up_bias: *const f32,     // nullable
+        mlp_down_weight: *const f32,
+        mlp_down_bias: *const f32,   // nullable
+        mod_buf: *mut f32,
+        normed_buf: *mut f32,
+        qkv_buf: *mut f32,
+        attn_buf: *mut f32,
+        proj_buf: *mut f32,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
     // KV-Cache
     // ------------------------------------------------------------------
     pub fn syn_kvcache_create(

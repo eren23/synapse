@@ -163,6 +163,7 @@ fn export_q4_pred_with_mode(
         "action_dim": config.action_dim,
         "latent_dim": config.latent_dim,
         "channels": config.channels,
+        "meta_tokens": model.encoder.num_meta_tokens,
     });
     let config_bytes = serde_json::to_vec(&config_json).unwrap();
     file.write_all(&(config_bytes.len() as u32).to_le_bytes()).unwrap();
@@ -251,6 +252,11 @@ fn export_q4_pred_with_mode(
     total_written += write_f32_vec(&mut file, &model.cond_proj_weight);
     total_written += write_f32_vec(&mut file, &model.cond_proj_bias);
 
+    // --- Hybrid encoder extras (meta_token, encoder output proj) ---
+    total_written += write_f32_vec(&mut file, &model.encoder.meta_token.as_ref());
+    total_written += write_f32_vec(&mut file, &model.encoder.enc_proj_weight.as_ref());
+    total_written += write_f32_vec(&mut file, &model.encoder.enc_proj_bias.as_ref());
+
     eprintln!("  Total: {:.2} MB", total_written as f64 / 1_048_576.0);
 }
 
@@ -281,6 +287,7 @@ fn export_full(model: &FullyQuantizedLeWM, config: &LeWMConfig, output: &Path) {
         "action_dim": config.action_dim,
         "latent_dim": config.latent_dim,
         "channels": config.channels,
+        "meta_tokens": model.num_meta_tokens,
     });
     let config_bytes = serde_json::to_vec(&config_json).unwrap();
     file.write_all(&(config_bytes.len() as u32).to_le_bytes()).unwrap();
@@ -366,6 +373,11 @@ fn export_full(model: &FullyQuantizedLeWM, config: &LeWMConfig, output: &Path) {
     total_written += write_f32_vec(&mut file, &model.input_proj_bias);
     total_written += write_f32_vec(&mut file, &model.cond_proj_weight);
     total_written += write_f32_vec(&mut file, &model.cond_proj_bias);
+
+    // --- Hybrid encoder extras (meta_token, encoder output proj) ---
+    total_written += write_f32_vec(&mut file, &model.meta_token);
+    total_written += write_f32_vec(&mut file, &model.enc_proj_weight);
+    total_written += write_f32_vec(&mut file, &model.enc_proj_bias);
 
     eprintln!("  Total: {:.2} MB", total_written as f64 / 1_048_576.0);
 }

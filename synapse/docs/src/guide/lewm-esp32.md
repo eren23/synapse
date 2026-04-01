@@ -2,9 +2,14 @@
 
 This guide covers the LEWM (Latent Encoder World Model) architecture, the LQ40 binary format, model conversion, quantization strategies, and the available model variants for ESP32-P4 deployment.
 
+> **New**: The [Hybrid ALAL Encoder](hybrid-alal.md) guide covers the 64d hybrid architecture that achieves **3.9 MB binary, 152ms predict, 922ms encode** on ESP32-P4. See also the [Optimization Journey](../architecture/optimization-journey.md) for the full 5.2x speedup story.
+
 ## LEWM Architecture Overview
 
-LEWM is a vision-based world model that learns latent dynamics from image observations. It consists of two main components:
+LEWM is a vision-based world model that learns latent dynamics from image observations. It supports two encoder architectures:
+
+1. **Standard ViT** (192d hidden): Used by baseline and elastic variants
+2. **Hybrid ALAL** (64d hidden): Alternating full/linear attention, 3.4x fewer params
 
 ### Encoder (ViT)
 
@@ -12,11 +17,11 @@ A Vision Transformer that converts a 224x224 RGB image into a compact latent vec
 
 ```
 Image (224x224x3) -> Patch Embedding (16x16 grid = 256 patches)
-    -> CLS token prepended (257 tokens total)
+    -> CLS token prepended (+ optional meta tokens for hybrid = 261 tokens)
     -> Positional Embedding
-    -> N x Encoder Layers (LayerNorm -> Multi-Head Attention -> FFN)
-    -> CLS token extraction -> LayerNorm -> Projection Head
-    -> Latent vector (96d or 192d)
+    -> N x Encoder Layers (LayerNorm -> Attention -> FFN)
+    -> CLS token extraction -> LayerNorm -> Optional encoder.proj
+    -> Projection Head -> Latent vector (64d, 96d, or 192d)
 ```
 
 Each encoder layer:

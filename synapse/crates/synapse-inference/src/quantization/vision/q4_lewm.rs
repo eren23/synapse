@@ -1423,6 +1423,7 @@ pub(crate) fn lq40_read_q4_linear(data: &[u8], off: &mut usize) -> Result<Q4Line
         blocks,
         out_features,
         in_features,
+        packed_zig_cache: std::cell::RefCell::new(None),
     })
 }
 

@@ -153,6 +153,11 @@ pub struct FullyQuantizedLeWM {
     pub input_proj_bias: Vec<f32>,
     pub cond_proj_weight: Vec<f32>,
     pub cond_proj_bias: Vec<f32>,
+    // Hybrid encoder extras (empty for non-hybrid models)
+    pub meta_token: Vec<f32>,
+    pub num_meta_tokens: usize,
+    pub enc_proj_weight: Vec<f32>,
+    pub enc_proj_bias: Vec<f32>,
 }
 
 impl FullyQuantizedLeWM {
@@ -264,7 +269,7 @@ impl FullyQuantizedLeWM {
             vec![]
         };
 
-        Ok(FullyQuantizedLeWM {
+        let mut result = Ok(FullyQuantizedLeWM {
             config,
             encoder_layers,
             patch_proj,
@@ -290,7 +295,31 @@ impl FullyQuantizedLeWM {
             input_proj_bias,
             cond_proj_weight,
             cond_proj_bias,
-        })
+            // Hybrid extras loaded after input/cond proj (optional, may be empty)
+            meta_token: vec![],
+            num_meta_tokens: 0,
+            enc_proj_weight: vec![],
+            enc_proj_bias: vec![],
+        });
+
+        // Load hybrid extras if present
+        if let Ok(ref mut m) = result {
+            if off < data.len() {
+                m.meta_token = lq40_read_f32(data, &mut off);
+            }
+            if off < data.len() {
+                m.enc_proj_weight = lq40_read_f32(data, &mut off);
+            }
+            if off < data.len() {
+                m.enc_proj_bias = lq40_read_f32(data, &mut off);
+            }
+            let h = m.vit_config.hidden_size;
+            if h > 0 && !m.meta_token.is_empty() {
+                m.num_meta_tokens = m.meta_token.len() / h;
+            }
+        }
+
+        result
     }
 
     /// Encode an image using the INT8 ViT encoder.
@@ -632,6 +661,10 @@ pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
         input_proj_bias: model.input_proj_bias.to_vec(),
         cond_proj_weight: model.cond_proj_weight.to_vec(),
         cond_proj_bias: model.cond_proj_bias.to_vec(),
+        meta_token: model.encoder.meta_token.to_vec(),
+        num_meta_tokens: model.encoder.num_meta_tokens,
+        enc_proj_weight: model.encoder.enc_proj_weight.to_vec(),
+        enc_proj_bias: model.encoder.enc_proj_bias.to_vec(),
     }
 }
 

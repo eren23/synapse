@@ -26,4 +26,5 @@ pub const ops = struct {
     pub const selective_scan = @import("ops/selective_scan.zig");
     pub const wkv7 = @import("ops/wkv7.zig");
     pub const projection = @import("ops/projection.zig");
+    pub const fused_lewm_layer = @import("ops/fused_lewm_layer.zig");
 };

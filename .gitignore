@@ -67,3 +67,7 @@ synapse/web/lewm-compress-demo/lewm-slim-*.bin
 
 # ESP-IDF build cache
 .embuild/
+
+# gsd
+.gsd/
+.bg-shell/
