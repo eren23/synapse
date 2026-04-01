@@ -326,6 +326,11 @@ extern "C" {
     pub fn syn_silu(dst: *mut f32, src: *const f32, len: usize) -> syn_status_t;
 
     // ------------------------------------------------------------------
+    // Softplus activation
+    // ------------------------------------------------------------------
+    pub fn syn_softplus(dst: *mut f32, src: *const f32, len: usize) -> syn_status_t;
+
+    // ------------------------------------------------------------------
     // Fused SwiGLU
     // ------------------------------------------------------------------
     pub fn syn_swiglu(dst: *mut f32, gate: *const f32, up: *const f32, len: usize) -> syn_status_t;

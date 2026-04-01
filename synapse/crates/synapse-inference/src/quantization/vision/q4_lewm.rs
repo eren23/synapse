@@ -1079,13 +1079,13 @@ mod tests {
             encoder_layers: 2,
             encoder_heads: 2,
             encoder_inter: 32,
-            predictor_hidden: 16,
+            predictor_hidden: 32, // must be multiple of 32 for Q4_0 alignment
             predictor_layers: 2,
             predictor_heads: 2,
-            predictor_inner_dim: 16,
+            predictor_inner_dim: 32, // must be multiple of 32 for Q4_0 alignment
             predictor_inter: 32,
             action_dim: 4,
-            latent_dim: 16,
+            latent_dim: 32, // must equal predictor_hidden so has_proj=false path works correctly
         }
     }
 
@@ -1172,7 +1172,7 @@ mod tests {
             layer.mlp_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
             layer.mlp_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
             layer.mlp_up_weight =
-                AlignedBuffer::from_slice(&gen_weights(pred_inter * pred_h, s + 10));
+                AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 10));
             layer.mlp_up_bias = AlignedBuffer::from_slice(&gen_weights(pred_inter, s + 11));
             layer.mlp_down_weight =
                 AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 12));

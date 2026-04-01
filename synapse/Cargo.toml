@@ -184,6 +184,10 @@ name = "mamba_generate"
 path = "examples/mamba_generate.rs"
 
 [[example]]
+name = "rwkv_logit_probe"
+path = "examples/rwkv_logit_probe.rs"
+
+[[example]]
 name = "qwen3_chat"
 path = "examples/qwen3_chat.rs"
 

@@ -10,10 +10,6 @@ use std::collections::HashMap;
 
 use crate::ops::activation::gelu;
 use crate::ops::attention::bidirectional_attention;
-use crate::ops::fused_ops::{
-    fused_adaln_layernorm_matmul_into, fused_attn_proj_gated_residual_into,
-    fused_ffn_gated_residual_into, fused_layernorm_modulate,
-};
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::layernorm;
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
@@ -666,7 +662,7 @@ impl LeWorldModel {
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
-        let head_dim = inner_dim / num_heads;
+        let _head_dim = inner_dim / num_heads;
         let has_proj = !self.input_proj_weight.is_empty();
 
         // 1. Encode action -> [latent_dim]

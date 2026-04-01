@@ -7,6 +7,7 @@
 ///
 /// `input` is `[m * k]`, `weight` is `[n * k]` (row-major, each row = one output neuron),
 /// `bias` is `[n]` (pass empty slice for no bias). Returns `[m * n]` f32 output.
+#[allow(dead_code)] // available for future use; matmul_t covers most cases today
 pub(crate) fn projection_gemv_bias(
     input: &[f32],
     weight: &[f32],

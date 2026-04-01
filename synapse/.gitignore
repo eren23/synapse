@@ -38,3 +38,5 @@ web/trajectories/
 # Python
 __pycache__/
 *.pyc
+.venv-rwkv-debug/
+.hf-cache/

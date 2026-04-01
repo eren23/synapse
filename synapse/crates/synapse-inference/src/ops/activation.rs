@@ -1,20 +1,122 @@
-pub(crate) fn silu(x: f32) -> f32 {
+//! Activation functions, elementwise ops, and softmax.
+//!
+//! Priority rule: always prefer batched/vectorized calls over scalar loops.
+//! - For slices: use `*_inplace` or `batched_*` to amortise call overhead.
+//! - Scalar versions exist only for single-value calls or non-`zig-ffi` fallbacks.
+
+/// In-place SiLU: `x / (1 + exp(-x))` applied to every element of `slice`.
+/// Prefer this over scalar `silu()` for vectorized SIMD path via FFI.
+#[cfg(feature = "zig-ffi")]
+#[allow(dead_code)] // exposed for explicit in-place usage; scalar path uses silu_scalar
+pub(crate) fn silu_inplace(slice: &mut [f32]) {
+    // syn_silu works in-place: dst and src can alias.
+    unsafe {
+        synapse_sys::syn_silu(slice.as_mut_ptr(), slice.as_ptr(), slice.len());
+    }
+}
+
+#[cfg(not(feature = "zig-ffi"))]
+#[allow(dead_code)] // only compiled when zig-ffi is disabled
+pub(crate) fn silu_inplace(slice: &mut [f32]) {
+    for v in slice.iter_mut() {
+        *v = *v / (1.0 + (-*v).exp());
+    }
+}
+
+/// Scalar SiLU — use for single-value calls or when you can't take ownership.
+#[allow(dead_code)] // used via the silu() compat shim below
+pub(crate) fn silu_scalar(x: f32) -> f32 {
     x / (1.0 + (-x).exp())
 }
 
+/// Backward-compat shim: prefer `silu_scalar` for single values or
+/// `silu_inplace(&mut slice)` for vectorised paths.
+pub(crate) fn silu(x: f32) -> f32 {
+    silu_scalar(x)
+}
+
+// ── Sigmoid ──────────────────────────────────────────────────────────────────
+
+/// Sigmoid applied to a single scalar.
 #[inline]
 pub(crate) fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
+/// Batched sigmoid: `sigmoid(x[i])` for every element of `input`.
+/// Uses Zig SIMD under `zig-ffi`, pure Rust otherwise.
+pub(crate) fn batched_sigmoid(input: &[f32]) -> Vec<f32> {
+    #[cfg(feature = "zig-ffi")]
+    {
+        let mut out = vec![0.0f32; input.len()];
+        unsafe {
+            synapse_sys::syn_sigmoid(out.as_mut_ptr(), input.as_ptr(), input.len());
+        }
+        out
+    }
+    #[cfg(not(feature = "zig-ffi"))]
+    {
+        input.iter().map(|&x| sigmoid(x)).collect()
+    }
+}
+
+// ── Tanh ─────────────────────────────────────────────────────────────────────
+
+/// Tanh applied to a single scalar (uses the stdlib intrinsic).
+#[allow(dead_code)] // used via the batched_tanh fallback below
+pub(crate) fn tanh_scalar(x: f32) -> f32 {
+    x.tanh()
+}
+
+/// Batched tanh: `x.tanh()` for every element of `input`.
+/// Uses Zig SIMD under `zig-ffi`, pure Rust otherwise.
+pub(crate) fn batched_tanh(input: &[f32]) -> Vec<f32> {
+    #[cfg(feature = "zig-ffi")]
+    {
+        let mut out = vec![0.0f32; input.len()];
+        unsafe {
+            synapse_sys::syn_tanh_act(out.as_mut_ptr(), input.as_ptr(), input.len());
+        }
+        out
+    }
+    #[cfg(not(feature = "zig-ffi"))]
+    {
+        input.iter().map(|&x| tanh_scalar(x)).collect()
+    }
+}
+
+// ── Softplus ─────────────────────────────────────────────────────────────────
+
+/// Softplus applied to a single scalar: `log(1 + exp(x))`, numerically stable.
 #[inline]
 pub(crate) fn softplus(x: f32) -> f32 {
     if x > 20.0 { x } else { (1.0 + x.exp()).ln() }
 }
 
+/// Batched softplus: `softplus(input[i])` for every element.
+/// Uses Zig SIMD under `zig-ffi`, pure Rust otherwise.
+pub(crate) fn batched_softplus(input: &[f32]) -> Vec<f32> {
+    #[cfg(feature = "zig-ffi")]
+    {
+        let mut out = vec![0.0f32; input.len()];
+        unsafe {
+            synapse_sys::syn_softplus(out.as_mut_ptr(), input.as_ptr(), input.len());
+        }
+        out
+    }
+    #[cfg(not(feature = "zig-ffi"))]
+    {
+        input.iter().map(|&x| softplus(x)).collect()
+    }
+}
+
+// ── GELU ─────────────────────────────────────────────────────────────────────
+
 pub(crate) fn gelu(x: f32) -> f32 {
     0.5 * x * (1.0 + ((2.0 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
 }
+
+// ── Softmax ───────────────────────────────────────────────────────────────────
 
 pub(crate) fn softmax_slice(x: &mut [f32]) {
     let max = x.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
@@ -54,6 +156,65 @@ mod tests {
     }
 
     #[test]
+    fn silu_inplace_matches_scalar() {
+        let mut buf = vec![1.0f32, -0.5, 3.0, 0.0];
+        let expected: Vec<f32> = buf.iter().map(|&x| silu_scalar(x)).collect();
+        silu_inplace(&mut buf);
+        for (got, exp) in buf.iter().zip(expected.iter()) {
+            assert!((got - exp).abs() < 1e-6, "silu_inplace mismatch: got {got}, expected {exp}");
+        }
+    }
+
+    #[test]
+    fn sigmoid_bounds() {
+        for &x in &[-10.0f32, -1.0, 0.0, 1.0, 10.0] {
+            let y = sigmoid(x);
+            assert!(y > 0.0 && y < 1.0, "sigmoid({x}) = {y} out of (0,1)");
+        }
+    }
+
+    #[test]
+    fn batched_sigmoid_matches_scalar() {
+        let input = vec![-2.0f32, -1.0, 0.0, 1.0, 2.0];
+        let out = batched_sigmoid(&input);
+        for (i, (&got, &exp)) in out.iter().zip(input.iter()).enumerate() {
+            assert!((got - sigmoid(exp)).abs() < 1e-6, "batched_sigmoid[{i}] mismatch");
+        }
+    }
+
+    #[test]
+    fn batched_tanh_bounds() {
+        let input = vec![-5.0f32, -1.0, 0.0, 1.0, 5.0];
+        let out = batched_tanh(&input);
+        for (i, &v) in out.iter().enumerate() {
+            assert!(v >= -1.0 && v <= 1.0, "batched_tanh[{i}] = {v} out of [-1,1]");
+            assert!((v - tanh_scalar(input[i])).abs() < 1e-6, "batched_tanh[{i}] mismatch");
+        }
+    }
+
+    #[test]
+    fn softplus_stable_large_input() {
+        // softplus(50) should ≈ 50
+        let out = batched_softplus(&[50.0f32, 100.0]);
+        assert!((out[0] - 50.0).abs() < 1.0, "softplus(50) ≈ 50, got {}", out[0]);
+        assert!((out[1] - 100.0).abs() < 1.0, "softplus(100) ≈ 100, got {}", out[1]);
+    }
+
+    /// Length ≥ 4 exercises Zig SIMD chunks (VEC_LEN=4), not only the scalar tail.
+    #[test]
+    fn batched_softplus_matches_scalar_long_slice() {
+        let input = vec![-30.0f32, 0.0, 2.5, 50.0, 100.0, -1.0, 15.0, 21.0];
+        let out = batched_softplus(&input);
+        for (i, (&got, &x)) in out.iter().zip(input.iter()).enumerate() {
+            let exp = softplus(x);
+            assert!(
+                (got - exp).abs() < 1e-4,
+                "batched_softplus[{i}] x={x}: got {got}, expected {exp}"
+            );
+        }
+    }
+
+    #[test]
     fn gelu_at_zero_is_zero() {
         assert!((gelu(0.0) - 0.0).abs() < 1e-7, "gelu(0) should be 0");
     }
@@ -62,10 +223,7 @@ mod tests {
     fn gelu_known_value() {
         // gelu(1.0) ≈ 0.8413 per the tanh approximation
         let result = gelu(1.0);
-        assert!(
-            (result - 0.8413).abs() < 1e-3,
-            "gelu(1.0) should be ~0.8413, got {result}"
-        );
+        assert!((result - 0.8413).abs() < 1e-3, "gelu(1.0) should be ~0.8413, got {result}");
     }
 
     #[test]
@@ -80,7 +238,6 @@ mod tests {
     fn softmax_max_element_has_highest_prob() {
         let mut x = vec![0.5f32, 3.0, 1.0, 2.0];
         softmax_slice(&mut x);
-        // original index 1 (value 3.0) should have the highest probability
         let max_idx = x
             .iter()
             .enumerate()

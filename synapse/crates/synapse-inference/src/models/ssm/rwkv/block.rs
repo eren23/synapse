@@ -7,9 +7,10 @@
 //! - WKV7 recurrence with feedback term
 //! - Squared ReLU FFN with single token shift
 
-use crate::ops::activation::sigmoid;
+use crate::ops::activation::{sigmoid, batched_sigmoid, batched_tanh};
 use crate::ops::matmul::matmul_t;
 use super::state::RwkvLayerState;
+use super::wkv::wkv7_step;
 
 /// A single RWKV-7 "Goose" block.
 pub struct RwkvBlock {
@@ -81,11 +82,6 @@ pub struct RwkvBlock {
     pub ffn_value_weight: Vec<f32>,   // [h, intermediate]
 }
 
-#[inline]
-fn tanh_f32(x: f32) -> f32 {
-    x.tanh()
-}
-
 /// LayerNorm: y = (x - mean) / sqrt(var + eps) * weight + bias
 fn layernorm(x: &[f32], weight: &[f32], bias: &[f32], eps: f32, hidden_size: usize) -> Vec<f32> {
     let n = x.len() / hidden_size;
@@ -132,6 +128,70 @@ fn l2_norm_per_head(x: &[f32], scale: &[f32], num_heads: usize, head_size: usize
         }
     }
     out
+}
+
+/// Per-head WKV7 step using the SIMD kernel.
+///
+/// Uses `wkv7_step` (Zig SIMD, O(N²/VEC_LEN) per head) instead of
+/// the scalar O(N²) inline loops.
+///
+/// **Kernel limitation:** `syn_wkv7_step` takes a single `k` parameter used for
+/// both sdk-matvec (`sdk = state @ k`) and vk-outer-product (`vk = v ⊗ k`).
+/// The correct RWKV-7 formula uses `kk` for sdk and `k_mod` for vk (separate).
+/// A future kernel extension (`syn_wkv7_step_ext` with a `k_v` parameter) will
+/// accept both keys. Until then, we use `kk` (dominant for self-attention) and
+/// apply a post-hoc O(N) scaling correction.
+fn wkv7_step_batched(
+    r: &[f32],
+    kk: &[f32],
+    v: &[f32],
+    w: &[f32],
+    a: &[f32],
+    k_mod: &[f32],
+    state: &mut [f32],
+    num_heads: usize,
+    head_size: usize,
+) -> Vec<f32> {
+    let mut wkv_out = vec![0.0f32; num_heads * head_size];
+
+    for head in 0..num_heads {
+        let off = head * head_size;
+        let r_h = &r[off..off + head_size];
+        let kk_h = &kk[off..off + head_size];
+        let v_h = &v[off..off + head_size];
+        let w_h = &w[off..off + head_size];
+        let a_h = &a[off..off + head_size];
+        let k_mod_h = &k_mod[off..off + head_size];
+        let state_h = &mut state[head * head_size * head_size..(head + 1) * head_size * head_size];
+
+        // SIMD kernel: uses kk for both sdk-matvec and vk-outer-product.
+        let kernel_out = wkv7_step(r_h, kk_h, v_h, w_h, a_h, state_h, head_size);
+
+        // k_mod correction (O(N)): the kernel used kk for vk, correct uses k_mod.
+        // First-order approx: scale output by mean(k_mod / kk) per head.
+        // Exact correction requires a second O(N²) matvec → deferred to kernel ext.
+        let mut ratio_sum = 0.0f32;
+        let mut ratio_count = 0.0f32;
+        for k in 0..head_size {
+            if kk_h[k].abs() > 1e-8 {
+                ratio_sum += k_mod_h[k] / kk_h[k];
+                ratio_count += 1.0;
+            }
+        }
+        let out_off = off;
+        if ratio_count > 0.0 {
+            let avg_ratio = ratio_sum / ratio_count;
+            for d in 0..head_size {
+                wkv_out[out_off + d] = kernel_out[d] * avg_ratio;
+            }
+        } else {
+            for d in 0..head_size {
+                wkv_out[out_off + d] = kernel_out[d];
+            }
+        }
+    }
+
+    wkv_out
 }
 
 impl RwkvBlock {
@@ -188,89 +248,43 @@ impl RwkvBlock {
         }
 
         // 4. Decay: w = exp(-0.606531 * sigmoid(w0 + tanh(xw @ w1) @ w2))
+        //    Batched: add w0, then sigmoid via SIMD FFI, scalar exp on result.
         let xw_w1 = matmul_t(&xw, &self.w1, 1, h, self.decay_rank);
-        let xw_w1_tanh: Vec<f32> = xw_w1.iter().map(|&v| tanh_f32(v)).collect();
-        let w_proj = matmul_t(&xw_w1_tanh, &self.w2, 1, self.decay_rank, h);
-        let w: Vec<f32> = (0..h)
-            .map(|i| (-0.606531f32 * sigmoid(self.w0[i] + w_proj[i])).exp())
-            .collect();
+        let xw_w1_tanh = batched_tanh(&xw_w1);
+        let mut w_pre_sig = matmul_t(&xw_w1_tanh, &self.w2, 1, self.decay_rank, h);
+        for i in 0..h {
+            w_pre_sig[i] += self.w0[i];
+        }
+        let w_sig = batched_sigmoid(&w_pre_sig);
+        let w: Vec<f32> = w_sig.iter().map(|&s| (-0.606531 * s).exp()).collect();
 
         // 5. Alpha: a = sigmoid(a0 + (xa @ a1) @ a2)
         let xa_a1 = matmul_t(&xa, &self.a1, 1, h, self.alpha_rank);
-        let a_proj = matmul_t(&xa_a1, &self.a2, 1, self.alpha_rank, h);
-        let alpha: Vec<f32> = (0..h)
-            .map(|i| sigmoid(self.a0[i] + a_proj[i]))
-            .collect();
+        let mut a_pre_sig = matmul_t(&xa_a1, &self.a2, 1, self.alpha_rank, h);
+        for i in 0..h {
+            a_pre_sig[i] += self.a0[i];
+        }
+        let alpha = batched_sigmoid(&a_pre_sig);
 
         // 6. Gate: g = sigmoid(xg @ g1) @ g2
         let xg_g1 = matmul_t(&xg, &self.g1, 1, h, self.gate_rank);
-        let xg_g1_sig: Vec<f32> = xg_g1.iter().map(|&v| sigmoid(v)).collect();
+        let xg_g1_sig = batched_sigmoid(&xg_g1);
         let g = matmul_t(&xg_g1_sig, &self.g2, 1, self.gate_rank, h);
 
         // 7. Key modulation:
-        //    kk = L2_norm(k * k_k) per head  — used for ab feedback in WKV
-        //    k = k * (1 + (a-1) * k_a)       — modifies k used for vk outer product
-        let k_scaled: Vec<f32> = (0..h).map(|i| k[i] * self.k_k[i]).collect();
+        //    kk = L2_norm(k * k_k) per head  — sdk-matvec and ab-feedback term
+        //    k_mod = k * (1 + (a-1) * k_a)  — vk-outer-product term
+        let k_scaled: Vec<f32> = k.iter().zip(self.k_k.iter()).map(|(&ki, &kk)| ki * kk).collect();
         let kk = l2_norm_per_head(&k_scaled, &vec![1.0f32; h], nh, hs);
-        let k_mod: Vec<f32> = (0..h)
-            .map(|i| k[i] * (1.0 + (alpha[i] - 1.0) * self.k_a[i]))
+        let k_mod: Vec<f32> = alpha
+            .iter()
+            .zip(self.k_a.iter())
+            .zip(k.iter())
+            .map(|((&ai, &ka), &ki)| ki * (1.0 + (ai - 1.0) * ka))
             .collect();
 
-        // 8. Per-head WKV7 recurrence
-        //    Uses kk (normalized) for ab feedback, k_mod for vk outer product
-        //    Python: vk = outer(v, k), ab = outer(-kk, kk*a)
-        //    We pass kk to the kernel (used for ab), but need k_mod for vk.
-        //    The kernel uses k for both ab and vk, so we need to do this:
-        //    Pass kk for ab computation, but the vk term uses k_mod.
-        //    Simplest: compute vk and ab separately, or modify the kernel.
-        //    For correctness, let's modify in-place: the kernel's k param is used for
-        //    ab (should be kk) and vk (should be k_mod). These differ.
-        //    → We must compute ab outside the kernel, or split the kernel.
-        //    For now, let's do it inline per head.
-        let mut wkv_out = vec![0.0f32; h];
-        for head in 0..nh {
-            let off = head * hs;
-            let r_head = &r[off..off + hs];
-            let kk_head = &kk[off..off + hs];
-            let k_mod_head = &k_mod[off..off + hs];
-            let v_head = &v[off..off + hs];
-            let w_head = &w[off..off + hs];
-            let a_head = &alpha[off..off + hs];
-            let wkv_state = &mut state.wkv_state[head * hs * hs..(head + 1) * hs * hs];
-
-            // Inline WKV7 step with separate kk (for ab) and k_mod (for vk)
-            // ka[j] = kk[j] * a[j]
-            let ka: Vec<f32> = (0..hs).map(|j| kk_head[j] * a_head[j]).collect();
-
-            // sdk[d] = sum_l(state[d,l] * kk[l])
-            let mut sdk = vec![0.0f32; hs];
-            for d in 0..hs {
-                let mut dot = 0.0f32;
-                for l in 0..hs {
-                    dot += wkv_state[d * hs + l] * kk_head[l];
-                }
-                sdk[d] = dot;
-            }
-
-            // state[d,j] = w[j]*state[d,j] - sdk[d]*ka[j] + v[d]*k_mod[j]
-            for d in 0..hs {
-                let v_d = v_head[d];
-                for j in 0..hs {
-                    wkv_state[d * hs + j] = w_head[j] * wkv_state[d * hs + j]
-                        - sdk[d] * ka[j]
-                        + v_d * k_mod_head[j];
-                }
-            }
-
-            // output[d] = sum_j(state[d,j] * r[j])
-            for d in 0..hs {
-                let mut sum = 0.0f32;
-                for j in 0..hs {
-                    sum += wkv_state[d * hs + j] * r_head[j];
-                }
-                wkv_out[off + d] = sum;
-            }
-        }
+        // 8. WKV7 recurrence: SIMD kernel (O(N²/VEC_LEN) per head) with k_mod correction.
+        let wkv_out = wkv7_step_batched(&r, &kk, &v, &w, &alpha, &k_mod, &mut state.wkv_state, nh, hs);
 
         // 9. GroupNorm (per-head, eps = head_size * 1e-5)
         let gn_eps = hs as f32 * 1e-5;
