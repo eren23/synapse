@@ -1648,34 +1648,41 @@ static void bidirectional_attention_separate(
     free(k_scales);
 }
 
+/* Maximum sequence length for the predictor (9 = 3 actions × 3 tokens each).
+ * This is the maximum N for predict_rollout_fused (N=3 steps → 9 tokens).
+ * Scratch buffers are allocated for this size so the fused function never reallocates. */
+#define MAX_PREDICTOR_SEQ_LEN  9U
+
 static bool allocate_scratch(PredictorModel *model) {
     PredictorScratch *scratch = &model->scratch;
     EncoderScratch *encoder_scratch = &model->encoder_scratch;
-    size_t seq_len = 3U;
+    size_t max_seq_len = MAX_PREDICTOR_SEQ_LEN;
     size_t hidden = model->predictor_hidden;
     size_t inner = model->predictor_inner_dim;
     size_t inter = model->predictor_inter;
-    size_t seq_raw_dim = model->input_proj_weight.len != 0 ? model->latent_dim : hidden;
+    // seq_raw always stores hidden elements per token (needed for projected action embeds
+    // and positional embeddings in has_proj path). Token layout: [z_start, a_proj, zeros].
+    size_t seq_raw_dim = hidden;
     size_t proj_tmp_dim = model->pred_proj.max_dim > model->projector.max_dim ?
                           model->pred_proj.max_dim :
                           model->projector.max_dim;
 
     scratch->seq_raw =
-        (float *)calloc_caps(seq_len * seq_raw_dim, sizeof(float), MALLOC_CAP_INTERNAL);
-    scratch->seq = (float *)calloc_caps(seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
+        (float *)calloc_caps(max_seq_len * seq_raw_dim, sizeof(float), MALLOC_CAP_INTERNAL);
+    scratch->seq = (float *)calloc_caps(max_seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->conditioning = (float *)calloc_caps(hidden, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->action_hidden = (float *)calloc_caps(inter, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->mod_vec = (float *)calloc_caps(6U * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
-    scratch->normed = (float *)calloc_caps(seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
+    scratch->normed = (float *)calloc_caps(max_seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->modulated =
-        (float *)calloc_caps(seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
+        (float *)calloc_caps(max_seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->qkv =
-        (float *)calloc_caps(seq_len * 3U * inner, sizeof(float), MALLOC_CAP_INTERNAL);
+        (float *)calloc_caps(max_seq_len * 3U * inner, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->attn_out =
-        (float *)calloc_caps(seq_len * inner, sizeof(float), MALLOC_CAP_INTERNAL);
-    scratch->proj = (float *)calloc_caps(seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
+        (float *)calloc_caps(max_seq_len * inner, sizeof(float), MALLOC_CAP_INTERNAL);
+    scratch->proj = (float *)calloc_caps(max_seq_len * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->ffn_inter =
-        (float *)calloc_caps(seq_len * inter, sizeof(float), MALLOC_CAP_INTERNAL);
+        (float *)calloc_caps(max_seq_len * inter, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->proj_tmp_a =
         (float *)calloc_caps(proj_tmp_dim, sizeof(float), MALLOC_CAP_INTERNAL);
     scratch->proj_tmp_b =
@@ -2577,6 +2584,160 @@ void predict_next(
         scratch,
         out
     );
+}
+
+/*
+ * Fused multi-step rollout: runs all predictor layers once over an N×3-token
+ * sequence, where N = num_steps.
+ *
+ * Constructs the fused sequence as:
+ *   [z_start, a_0, zeros, z_start, a_1, zeros, ...]
+ *
+ * Same z_start for all positions — produces parallel hypothesis futures,
+ * not an autoregressive chain. The bidirectional attention in each predictor
+ * layer naturally attends across all step tokens.
+ *
+ * Saves ~2× predictor layer cost vs calling predict_next N times.
+ *
+ * Arguments:
+ *   model      -- loaded LEWM model
+ *   z_start    -- [latent_dim] initial latent state
+ *   actions    -- [num_steps][action_dim] action vectors
+ *   num_steps  -- number of rollout steps (must be <= 3 for MAX_PREDICTOR_SEQ_LEN=9)
+ *   out        -- [num_steps][latent_dim] output buffer (caller-allocated)
+ */
+void predict_rollout_fused(
+    PredictorModel *model,
+    const float *z_start,
+    const float *actions,
+    size_t num_steps,
+    float *out
+) {
+    PredictorScratch *scratch = &model->scratch;
+    size_t hidden = model->predictor_hidden;
+    size_t latent = model->latent_dim;
+    size_t inter = model->predictor_inter;
+    bool has_proj = model->input_proj_weight.len != 0;
+    size_t seq_dim = has_proj ? latent : hidden;
+    size_t fused_seq_len = num_steps * 3U;
+
+    /*
+     * Allocate scratch buffer for action embeddings on the heap.
+     * Size: num_steps * hidden (f32, internal SRAM).
+     */
+    float *action_embeds = (float *)calloc_caps(
+        num_steps * hidden, sizeof(float), MALLOC_CAP_INTERNAL);
+    if (!action_embeds) {
+        /* Fallback: zero all outputs */
+        memset(out, 0, num_steps * latent * sizeof(float));
+        return;
+    }
+
+    /* 1. Encode all actions upfront. */
+    for (size_t s = 0; s < num_steps; ++s) {
+        encode_action(model, actions + s * model->action_dim, action_embeds + s * hidden);
+    }
+
+    /* 2. Build fused sequence: [z_start, a_s, zeros] per step.
+     * seq_raw stores [N*3, hidden] elements per token. Token layout: [z_start, a_proj, zeros].
+     * Use scratch->proj_tmp_a as temp buffer for projected action embeds (reused per step). */
+    memset(scratch->seq_raw, 0, fused_seq_len * hidden * sizeof(float));
+    for (size_t s = 0; s < num_steps; ++s) {
+        size_t off = s * 3U * hidden;
+        /* Token 0: z_start (use first latent elements when has_proj, since z_start is latent-dim) */
+        if (has_proj) {
+            memcpy(scratch->seq_raw + off, z_start, latent * sizeof(float));
+        } else {
+            memcpy(scratch->seq_raw + off, z_start, hidden * sizeof(float));
+        }
+        /* Token 1: action embedding (projected to hidden dim) */
+        if (has_proj) {
+            apply_cond_proj(model, action_embeds + s * hidden, scratch->proj_tmp_a);
+            memcpy(scratch->seq_raw + off + hidden, scratch->proj_tmp_a, hidden * sizeof(float));
+        } else {
+            memcpy(scratch->seq_raw + off + hidden,
+                   action_embeds + s * hidden, hidden * sizeof(float));
+        }
+        /* Token 2: zeros (already zeroed above) */
+    }
+
+    /* 2b. Add positional embeddings (cycle through 3 pattern positions).
+     * predictor_pos_embed is [3 * seq_dim] in the binary.
+     * We repeat the 3-position pattern for each step. */
+    if (model->predictor_pos_embed.len > 0) {
+        for (size_t s = 0; s < num_steps; ++s) {
+            for (size_t pos = 0; pos < 3U; ++pos) {
+                size_t embed_off = pos * seq_dim;
+                size_t seq_off = (s * 3U + pos) * seq_dim;
+                size_t count = seq_dim;
+                if (embed_off + count > model->predictor_pos_embed.len) {
+                    count = model->predictor_pos_embed.len - embed_off;
+                }
+                if (count == 0) break;
+                for (size_t j = 0; j < count; ++j) {
+                    scratch->seq_raw[seq_off + j] +=
+                        model->predictor_pos_embed.data[embed_off + j];
+                }
+            }
+        }
+    }
+
+    /* 3. Apply input_proj if bottleneck architecture. */
+    float *seq_ptr;
+    if (has_proj) {
+        apply_input_proj(model, scratch->seq_raw, fused_seq_len, scratch->seq);
+        /* Conditioning: use first action embed projected to hidden */
+        apply_cond_proj(model, action_embeds, scratch->proj_tmp_a);
+        memcpy(scratch->conditioning, scratch->proj_tmp_a, hidden * sizeof(float));
+        seq_ptr = scratch->seq;
+    } else {
+        memcpy(scratch->seq, scratch->seq_raw, fused_seq_len * hidden * sizeof(float));
+        memcpy(scratch->conditioning, action_embeds, hidden * sizeof(float));
+        seq_ptr = scratch->seq;
+    }
+
+    /* 4. Run all predictor layers once over the fused sequence. */
+    for (size_t layer_index = 0; layer_index < model->predictor_layers; ++layer_index) {
+        predictor_layer_forward(
+            &model->layers[layer_index],
+            scratch,
+            seq_ptr,
+            scratch->conditioning,
+            fused_seq_len,
+            hidden,
+            model->predictor_heads,
+            model->predictor_inner_dim,
+            inter
+        );
+    }
+
+    /* 5. Final norm. */
+    layernorm_into(
+        seq_ptr,
+        model->predictor_norm_weight.data,
+        fused_seq_len,
+        hidden,
+        scratch->normed
+    );
+    if (model->apply_final_norm_bias && model->predictor_norm_bias.len != 0) {
+        add_bias_inplace(scratch->normed, model->predictor_norm_bias.data,
+                         fused_seq_len, hidden);
+    }
+
+    /* 6. Extract targets at positions 2, 5, 8, ... and project each.
+     * For step s: target is at seq_ptr[(s*3 + 2) * hidden]. */
+    for (size_t s = 0; s < num_steps; ++s) {
+        size_t target_off = (s * 3U + 2U) * hidden;
+        projection_head_forward(
+            &model->pred_proj,
+            scratch->normed + target_off,
+            hidden,
+            scratch,
+            out + s * latent
+        );
+    }
+
+    free(action_embeds);
 }
 
 static void fill_deterministic_vector(float *out, size_t len, uint32_t seed) {

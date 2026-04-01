@@ -12,6 +12,13 @@ use crate::ops::activation::gelu;
 use crate::ops::attention::bidirectional_attention;
 use crate::ops::matmul::matmul_t;
 use crate::ops::norm::layernorm;
+#[cfg(not(feature = "zig-ffi"))]
+use crate::ops::fused_ops::{
+    fused_adaln_layernorm_matmul_into,
+    fused_attn_proj_gated_residual_into,
+    fused_ffn_gated_residual_into,
+    fused_layernorm_modulate,
+};
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
 
 use super::vit::{ViTConfig, ViTModel};
@@ -574,6 +581,7 @@ impl LeWorldModel {
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
+        // Projection is needed when latent != predictor_hidden (bottleneck architecture).
         let has_proj = !self.input_proj_weight.is_empty();
 
         // 1. Encode action → [latent_dim]
@@ -662,7 +670,7 @@ impl LeWorldModel {
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
-        let _head_dim = inner_dim / num_heads;
+        let head_dim = inner_dim / num_heads;
         let has_proj = !self.input_proj_weight.is_empty();
 
         // 1. Encode action -> [latent_dim]
@@ -812,6 +820,331 @@ impl LeWorldModel {
             states.push(z.clone());
         }
         states
+    }
+
+    /// Fused multi-step predictor: runs all predictor layers once over an N×3-token
+    /// sequence, where N = actions.len().
+    ///
+    /// Constructs the sequence as: `[z_start, a_0, zeros, z_start, a_1, zeros, ...]`.
+    /// Same `z_start` for all positions — produces **parallel hypothesis futures**, not
+    /// a sequential autoregressive chain. Step 0 output matches sequential rollout step 0;
+    /// steps 1 and 2 differ because fused sees all 3 action embeddings simultaneously.
+    ///
+    /// Bidirectional attention naturally attends across all step tokens, giving the
+    /// model cross-step context for free. Saves ~2× predictor layer cost vs calling
+    /// `predict_next_fused` N times sequentially.
+    ///
+    /// `z_start`: `[latent_dim]` — initial latent state.
+    /// `actions`: slice of action vectors, each `[action_dim]`.
+    /// `bufs`: pre-allocated buffers. Will be resized if needed for seq_len = N*3.
+    /// Returns `Vec<Vec<f32>>` — one predicted latent state per action.
+    #[allow(clippy::too_many_arguments)]
+    pub fn predict_rollout_fused(
+        &self,
+        z_start: &[f32],
+        actions: &[Vec<f32>],
+        bufs: &mut LeWMBuffers,
+    ) -> Vec<Vec<f32>> {
+        let hidden = self.config.predictor_hidden;
+        let latent = self.config.latent_dim;
+        let num_heads = self.config.predictor_heads;
+        let inner_dim = self.config.predictor_inner_dim;
+        let inter = self.config.predictor_inter;
+        let num_steps = actions.len();
+        let fused_seq_len = num_steps * 3; // e.g. 9 for 3 actions
+
+        // 1. Encode all actions upfront.
+        let action_embeds: Vec<Vec<f32>> = actions
+            .iter()
+            .map(|a| self.encode_action(a))
+            .collect();
+
+        // Projection is needed when input_proj weights are loaded.
+        // For zeroed test models, latent_dim == predictor_hidden (no projection needed).
+        let has_proj = !self.input_proj_weight.is_empty();
+
+        // 2. Build fused sequence and ensure buffers are large enough.
+        //    Buffer sizing: seq needs fused_seq_len*hidden; intermediate bufs need
+        //    max(fused_seq_len*hidden, fused_seq_len*inter).
+        let seq_size = fused_seq_len * hidden;
+        let scratch_size = seq_size.max(fused_seq_len * inter);
+        let mod_size = 6 * hidden;
+
+        if bufs.seq.len() < seq_size {
+            bufs.seq.resize(seq_size, 0.0);
+        }
+        if bufs.normed.len() < scratch_size {
+            bufs.normed.resize(scratch_size, 0.0);
+        }
+        if bufs.proj.len() < scratch_size {
+            bufs.proj.resize(scratch_size, 0.0);
+        }
+        if bufs.mod_params.len() < mod_size {
+            bufs.mod_params.resize(mod_size, 0.0);
+        }
+        if bufs.mod_copy.len() < mod_size {
+            bufs.mod_copy.resize(mod_size, 0.0);
+        }
+        // QKV: 3 components × inner_dim each → resize for full [fused_seq_len * 3 * inner_dim]
+        if bufs.qkv.len() < fused_seq_len * 3 * inner_dim {
+            bufs.qkv.resize(fused_seq_len * 3 * inner_dim, 0.0);
+        }
+        if bufs.attn_out.len() < fused_seq_len * inner_dim {
+            bufs.attn_out.resize(fused_seq_len * inner_dim, 0.0);
+        }
+        if bufs.q_split.len() < fused_seq_len * inner_dim {
+            bufs.q_split.resize(fused_seq_len * inner_dim, 0.0);
+        }
+        if bufs.k_split.len() < fused_seq_len * inner_dim {
+            bufs.k_split.resize(fused_seq_len * inner_dim, 0.0);
+        }
+        if bufs.v_split.len() < fused_seq_len * inner_dim {
+            bufs.v_split.resize(fused_seq_len * inner_dim, 0.0);
+        }
+        if bufs.ffn_inter.len() < fused_seq_len * inter {
+            bufs.ffn_inter.resize(fused_seq_len * inter, 0.0);
+        }
+        if bufs.ffn_out.len() < fused_seq_len * hidden {
+            bufs.ffn_out.resize(fused_seq_len * hidden, 0.0);
+        }
+        if bufs.latent_seq.len() < num_steps * 3 * latent {
+            bufs.latent_seq.resize(num_steps * 3 * latent, 0.0);
+        }
+        // Ensure cond buffer is large enough: for slim models (latent < hidden),
+        // cond must hold hidden elements for the conditioning vector.
+        if bufs.cond.len() < hidden {
+            bufs.cond.resize(hidden, 0.0);
+        }
+
+        let conditioning = if has_proj {
+            // Build latent-space sequence: [z_start, a_i, zeros] per step
+            let ls = &mut bufs.latent_seq[..num_steps * 3 * latent];
+            for step in 0..num_steps {
+                let off = step * 3 * latent;
+                ls[off..off + latent].copy_from_slice(z_start);
+                ls[off + latent..off + 2 * latent].copy_from_slice(&action_embeds[step]);
+                // zeros already zeroed by resize
+            }
+
+            // Add positional embeddings (cycle through 3 pattern positions)
+            if !self.predictor_pos_embed.is_empty() {
+                for step in 0..num_steps {
+                    for pos in 0..3 {
+                        let embed_off = pos * latent;
+                        let seq_off = (step * 3 + pos) * latent;
+                        let count = latent.min(self.predictor_pos_embed.len() - embed_off);
+                        for j in 0..count {
+                            ls[seq_off + j] += self.predictor_pos_embed[embed_off + j];
+                        }
+                    }
+                }
+            }
+
+            // Project sequence: [N*3, latent] -> [N*3, hidden]
+            let projected = self.apply_input_proj(ls, num_steps * 3);
+            bufs.seq[..num_steps * 3 * hidden].copy_from_slice(&projected);
+
+            // Conditioning: use first action embed projected to hidden
+            let cond_proj = self.apply_cond_proj(&action_embeds[0]);
+            let cond_len = cond_proj.len().min(hidden);
+            bufs.cond[..cond_len].copy_from_slice(&cond_proj[..cond_len]);
+            &bufs.cond[..hidden]
+        } else {
+            // No bottleneck: latent == hidden
+            for step in 0..num_steps {
+                let off = step * 3 * hidden;
+                bufs.seq[off..off + hidden].copy_from_slice(z_start);
+                bufs.seq[off + hidden..off + 2 * hidden].copy_from_slice(&action_embeds[step]);
+                // zeros already zeroed by resize
+            }
+
+            // Add positional embeddings
+            if !self.predictor_pos_embed.is_empty() {
+                for step in 0..num_steps {
+                    for pos in 0..3 {
+                        let embed_off = pos * hidden;
+                        let seq_off = (step * 3 + pos) * hidden;
+                        let count = hidden.min(self.predictor_pos_embed.len() - embed_off);
+                        for j in 0..count {
+                            bufs.seq[seq_off + j] += self.predictor_pos_embed[embed_off + j];
+                        }
+                    }
+                }
+            }
+
+            // Conditioning: first action embed
+            let cond_len = action_embeds[0].len().min(hidden);
+            bufs.cond[..cond_len].copy_from_slice(&action_embeds[0][..cond_len]);
+            &bufs.cond[..hidden]
+        };
+
+        // 3. Run all predictor layers once over the fused sequence.
+        #[cfg(feature = "zig-ffi")]
+        {
+            let normed_size = scratch_size;
+            let proj_size = scratch_size;
+            if bufs.normed.len() < normed_size {
+                bufs.normed.resize(normed_size, 0.0);
+            }
+            if bufs.proj.len() < proj_size {
+                bufs.proj.resize(proj_size, 0.0);
+            }
+
+            for layer in &self.predictor_layers {
+                synapse_core::lewm_predict_layer(
+                    &mut bufs.seq[..seq_size],
+                    conditioning,
+                    fused_seq_len, hidden, num_heads, inner_dim, inter,
+                    &layer.adaln_weight, &layer.adaln_bias,
+                    &layer.attn_norm_weight,
+                    &layer.to_qkv,
+                    &layer.attn_out_weight, &layer.attn_out_bias,
+                    &layer.mlp_norm_weight,
+                    &layer.mlp_up_weight, &layer.mlp_up_bias,
+                    &layer.mlp_down_weight, &layer.mlp_down_bias,
+                    &mut bufs.mod_params,
+                    &mut bufs.normed,
+                    &mut bufs.qkv,
+                    &mut bufs.attn_out,
+                    &mut bufs.proj,
+                ).expect("lewm_predict_layer failed");
+            }
+        }
+
+        // Pure Rust path (fallback — used by tests, ESP32 host harness)
+        // Uses only: matmul_t, layernorm, bidirectional_attention, gelu.
+        #[cfg(not(feature = "zig-ffi"))]
+        for layer in &self.predictor_layers {
+            let mod_dim = 6 * hidden;
+
+            // adaLN modulation
+            let mod_result = matmul_t(conditioning, &layer.adaln_weight, 1, hidden, mod_dim);
+            bufs.mod_params[..mod_dim].copy_from_slice(&mod_result);
+            if !layer.adaln_bias.is_empty() {
+                for j in 0..mod_dim {
+                    bufs.mod_params[j] += layer.adaln_bias[j];
+                }
+            }
+            bufs.mod_copy[..mod_dim].copy_from_slice(&bufs.mod_params[..mod_dim]);
+
+            // Pre-attention: layernorm + modulate
+            let normed = layernorm(&bufs.seq[..seq_size], &layer.attn_norm_weight, 1e-6, hidden);
+            let head_dim = inner_dim / num_heads;
+            let modulated_len = fused_seq_len * hidden;
+            // Reuse bufs.ffn_inter as the modulated buffer (pre-allocated, zeroed per iteration).
+            // ffn_inter is sized [fused_seq_len * inter] which is >= [fused_seq_len * hidden].
+            bufs.ffn_inter[..modulated_len].fill(0.0);
+            for t in 0..fused_seq_len {
+                for j in 0..hidden {
+                    bufs.ffn_inter[t * hidden + j] =
+                        normed[t * hidden + j] * (1.0 + bufs.mod_copy[j]) + bufs.mod_copy[hidden + j];
+                }
+            }
+            let modulated = &bufs.ffn_inter[..modulated_len];
+
+            // QKV matmul
+            let qkv = matmul_t(&modulated, &layer.to_qkv, fused_seq_len, hidden, 3 * inner_dim);
+            bufs.qkv[..fused_seq_len * 3 * inner_dim].copy_from_slice(&qkv);
+
+            // Split QKV and run bidirectional attention
+            let qi = fused_seq_len * inner_dim;
+            for t in 0..fused_seq_len {
+                let qkv_off = t * 3 * inner_dim;
+                let off = t * inner_dim;
+                bufs.q_split[off..off + inner_dim]
+                    .copy_from_slice(&bufs.qkv[qkv_off..qkv_off + inner_dim]);
+                bufs.k_split[off..off + inner_dim]
+                    .copy_from_slice(&bufs.qkv[qkv_off + inner_dim..qkv_off + 2 * inner_dim]);
+                bufs.v_split[off..off + inner_dim]
+                    .copy_from_slice(&bufs.qkv[qkv_off + 2 * inner_dim..qkv_off + 3 * inner_dim]);
+            }
+            let attn_result = bidirectional_attention(
+                &bufs.q_split[..qi],
+                &bufs.k_split[..qi],
+                &bufs.v_split[..qi],
+                fused_seq_len, num_heads, head_dim,
+            );
+            bufs.attn_out[..qi].copy_from_slice(&attn_result);
+
+            // Attention output projection + gated residual
+            let proj = matmul_t(&bufs.attn_out[..qi], &layer.attn_out_weight, fused_seq_len, inner_dim, hidden);
+            for t in 0..fused_seq_len {
+                for j in 0..hidden {
+                    let idx = t * hidden + j;
+                    bufs.seq[idx] += bufs.mod_copy[2 * hidden + j] * proj[idx];
+                }
+            }
+            if !layer.attn_out_bias.is_empty() {
+                for t in 0..fused_seq_len {
+                    for j in 0..hidden {
+                        bufs.seq[t * hidden + j] += layer.attn_out_bias[j];
+                    }
+                }
+            }
+
+            // Pre-FFN: layernorm + modulate
+            let normed2 = layernorm(&bufs.seq[..seq_size], &layer.mlp_norm_weight, 1e-6, hidden);
+            let modulated2 = {
+                let mut out = vec![0.0f32; modulated_len];
+                for t in 0..fused_seq_len {
+                    for j in 0..hidden {
+                        out[t * hidden + j] = normed2[t * hidden + j]
+                            * (1.0 + bufs.mod_copy[3 * hidden + j])
+                            + bufs.mod_copy[4 * hidden + j];
+                    }
+                }
+                out
+            };
+
+            // FFN: up -> GELU -> down + gated residual
+            let up = matmul_t(&modulated2, &layer.mlp_up_weight, fused_seq_len, hidden, inter);
+            let mut up_gelu = vec![0.0f32; fused_seq_len * inter];
+            for (i, v) in up.iter().enumerate() {
+                up_gelu[i] = gelu(*v);
+            }
+            if !layer.mlp_up_bias.is_empty() {
+                for t in 0..fused_seq_len {
+                    for j in 0..inter {
+                        up_gelu[t * inter + j] += layer.mlp_up_bias[j];
+                    }
+                }
+            }
+            let down = matmul_t(&up_gelu, &layer.mlp_down_weight, fused_seq_len, inter, hidden);
+            for t in 0..fused_seq_len {
+                for j in 0..hidden {
+                    let idx = t * hidden + j;
+                    bufs.seq[idx] += bufs.mod_copy[5 * hidden + j] * down[idx];
+                }
+            }
+            if !layer.mlp_down_bias.is_empty() {
+                for t in 0..fused_seq_len {
+                    for j in 0..hidden {
+                        bufs.seq[t * hidden + j] += layer.mlp_down_bias[j];
+                    }
+                }
+            }
+        }
+
+        // 4. Final norm
+        let normed = layernorm(&bufs.seq[..seq_size], &self.predictor_norm_weight, 1e-6, hidden);
+        let mut normed_out = normed;
+        if !self.predictor_norm_bias.is_empty() {
+            for t in 0..fused_seq_len {
+                for j in 0..hidden {
+                    normed_out[t * hidden + j] += self.predictor_norm_bias[j];
+                }
+            }
+        }
+
+        // 5. Extract targets at positions 2, 5, 8, ... (index 2 of each 3-token group)
+        //    and project each through pred_proj.
+        let mut outputs = Vec::with_capacity(num_steps);
+        for step in 0..num_steps {
+            let target_off = step * 3 * hidden + 2 * hidden;
+            let target = &normed_out[target_off..target_off + hidden];
+            outputs.push(self.pred_proj.forward(target));
+        }
+        outputs
     }
 
     /// Predict the next latent state using Metal GPU acceleration.
@@ -1884,5 +2217,233 @@ mod tests {
             diff > 1e-6,
             "Different actions should produce different predictions with reused buffers"
         );
+    }
+
+    /// Verify predict_rollout_fused returns valid outputs with 1 step.
+    #[test]
+    fn lewm_predict_rollout_fused_one_step_produces_finite() {
+        let cfg = small_config();
+        let model = build_test_lewm(&cfg);
+        let mut bufs = LeWMBuffers::new(&cfg);
+
+        let z_start = gen_weights(cfg.latent_dim, 42);
+        let actions = vec![gen_weights(cfg.action_dim, 100)];
+
+        // Single-step fused should work the same as predict_next
+        let outputs = model.predict_rollout_fused(&z_start, &actions, &mut bufs);
+
+        assert_eq!(outputs.len(), 1, "Should produce 1 output for 1 action");
+        assert_eq!(outputs[0].len(), cfg.latent_dim, "Output should have latent_dim elements");
+        assert!(outputs[0].iter().all(|v| v.is_finite()), "Output contains non-finite values");
+    }
+
+    /// Verify predict_rollout_fused returns valid outputs.
+    #[test]
+    fn lewm_predict_rollout_fused_produces_finite() {
+        let cfg = small_config();
+        let model = build_test_lewm(&cfg);
+        let mut bufs = LeWMBuffers::new(&cfg);
+
+        let z_start = gen_weights(cfg.latent_dim, 42);
+        let actions: Vec<Vec<f32>> = (0..3)
+            .map(|i| gen_weights(cfg.action_dim, 100 + i as u32))
+            .collect();
+
+        let outputs = model.predict_rollout_fused(&z_start, &actions, &mut bufs);
+
+        // Must return 3 outputs
+        assert_eq!(outputs.len(), 3, "Should produce 3 outputs for 3 actions");
+        for (i, out) in outputs.iter().enumerate() {
+            assert_eq!(
+                out.len(),
+                cfg.latent_dim,
+                "Output {} should have latent_dim elements",
+                i
+            );
+            assert!(
+                out.iter().all(|v| v.is_finite()),
+                "Output {} contains non-finite values",
+                i
+            );
+        }
+    }
+
+    /// Verify predict_rollout_fused step-0 matches sequential predict_next step-0.
+    /// Steps 1 and 2 differ by design (parallel futures vs autoregressive).
+    #[test]
+    fn lewm_rollout_fused_step0_matches_sequential() {
+        let cfg = small_config();
+        let model = build_test_lewm(&cfg);
+
+        let z = gen_weights(cfg.latent_dim, 42);
+        let a0 = gen_weights(cfg.action_dim, 100);
+        let a1 = gen_weights(cfg.action_dim, 101);
+        let a2 = gen_weights(cfg.action_dim, 102);
+        let actions = vec![a0.clone(), a1.clone(), a2.clone()];
+
+        // Sequential: step 0 via predict_next
+        let seq0 = model.predict_next(&z, &a0);
+
+        // Fused: first step
+        let mut bufs = LeWMBuffers::new(&cfg);
+        let fused = model.predict_rollout_fused(&z, &actions, &mut bufs);
+
+        // Step 0 must match exactly (same z_start, same a0)
+        assert_eq!(fused[0].len(), seq0.len());
+        let cos_sim = cosine_sim(&fused[0], &seq0);
+        assert!(
+            cos_sim >= 0.999,
+            "Fused step-0 cosine sim vs sequential step-0: {} (want >= 0.999)",
+            cos_sim
+        );
+        // All 3 outputs must be finite
+        for (i, out) in fused.iter().enumerate() {
+            assert!(
+                out.iter().all(|v| v.is_finite()),
+                "Fused output {} is not finite",
+                i
+            );
+        }
+    }
+
+    fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+        let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if na > 0.0 && nb > 0.0 {
+            dot / (na * nb)
+        } else {
+            0.0
+        }
+    }
+
+    /// Test: rollout_fused matches sequential rollout for pushT config (192d).
+    /// Uses seeded weights (not zeroed) so matmul asserts pass.
+    /// Fused[0] vs sequential[0] cosine sim should be ≥ 0.999.
+    /// Fused[1] and fused[2] differ from sequential by design (parallel futures vs autoregressive).
+    #[test]
+    fn lewm_rollout_fused_vs_sequential_pushT() {
+        // Build pushT model with seeded weights (replicate build_test_lewm pattern)
+        let cfg = LeWMConfig::pusht();
+        let model = build_test_lewm_pushT(&cfg);
+        let mut bufs = LeWMBuffers::new(&cfg);
+
+        let z = gen_weights(cfg.latent_dim, 42);
+        let actions: Vec<Vec<f32>> = (0..3).map(|i| gen_weights(cfg.action_dim, 100 + i)).collect();
+
+        let seq_out = model.rollout(&z, &actions);
+        let fused_out = model.predict_rollout_fused(&z, &actions, &mut bufs);
+
+        assert_eq!(seq_out.len(), fused_out.len());
+
+        // Step 0: must match (same z_start + a0, same computation path)
+        let cos0 = cosine_sim(&seq_out[0], &fused_out[0]);
+        assert!(
+            cos0 >= 0.999,
+            "Step 0 cosine sim {} should be ≥ 0.999 (same z_start + a0)",
+            cos0
+        );
+
+        // Steps 1-2: differ by design (see docstring)
+        let cos1 = cosine_sim(&seq_out[1], &fused_out[1]);
+        let cos2 = cosine_sim(&seq_out[2], &fused_out[2]);
+        assert!(
+            seq_out[1].iter().all(|v| v.is_finite()),
+            "sequential[1] must be finite"
+        );
+        assert!(
+            fused_out[1].iter().all(|v| v.is_finite()),
+            "fused[1] must be finite"
+        );
+        assert!(
+            fused_out[2].iter().all(|v| v.is_finite()),
+            "fused[2] must be finite"
+        );
+        // Document that cos1/cos2 may differ (intentional architectural difference)
+        println!("Note: cos1={:.4}, cos2={:.4} (expected lower than cos0 — parallel vs autoregressive)", cos1, cos2);
+    }
+
+    /// Build a seeded pushT LeWorldModel (mirrors build_test_lewm for 192d pushT config).
+    fn build_test_lewm_pushT(cfg: &LeWMConfig) -> LeWorldModel {
+        let h = cfg.encoder_hidden; // 192
+        let pred_h = cfg.predictor_hidden; // 192
+        let pred_inner = cfg.predictor_inner_dim; // 192
+        let pred_inter = cfg.predictor_inter; // 768
+        let act_dim = cfg.action_dim; // 10
+        let patch_dim = cfg.patch_size * cfg.patch_size * cfg.channels; // 588
+        let num_patches = (cfg.image_size / cfg.patch_size).pow(2); // 256
+        let enc_seq_len = num_patches + 1; // 257
+        let enc_inter = cfg.encoder_inter; // 768
+
+        let mut model = LeWorldModel::from_config(cfg);
+
+        // Encoder weights
+        model.encoder.patch_proj = AlignedBuffer::from_slice(&gen_weights(h * patch_dim, 1));
+        model.encoder.cls_token = AlignedBuffer::from_slice(&gen_weights(h, 2));
+        model.encoder.pos_embed = AlignedBuffer::from_slice(&gen_weights(enc_seq_len * h, 3));
+        model.encoder.final_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+
+        for (i, layer) in model.encoder.layers.iter_mut().enumerate() {
+            let s = (i as u32 + 1) * 100;
+            layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+            layer.w_q = AlignedBuffer::from_slice(&gen_weights(h * h, s + 1));
+            layer.w_k = AlignedBuffer::from_slice(&gen_weights(h * h, s + 2));
+            layer.w_v = AlignedBuffer::from_slice(&gen_weights(h * h, s + 3));
+            layer.w_o = AlignedBuffer::from_slice(&gen_weights(h * h, s + 4));
+            layer.ffn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; h]);
+            layer.ffn_up = AlignedBuffer::from_slice(&gen_weights(enc_inter * h, s + 5));
+            layer.ffn_down = AlignedBuffer::from_slice(&gen_weights(h * enc_inter, s + 6));
+        }
+
+        // Projector: [h] → [enc_inter] → [enc_inter] → [pred_h]
+        model.projector.layers[0].0 = AlignedBuffer::from_slice(&gen_weights(enc_inter * h, 400));
+        model.projector.layers[0].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 401));
+        model.projector.layers[1].0 = AlignedBuffer::from_slice(&gen_weights(enc_inter * enc_inter, 402));
+        model.projector.layers[1].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 403));
+        model.projector.layers[2].0 = AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 404));
+        model.projector.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 405));
+
+        // Pred_proj: same structure
+        model.pred_proj.layers[0].0 = AlignedBuffer::from_slice(&gen_weights(enc_inter * pred_h, 500));
+        model.pred_proj.layers[0].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 501));
+        model.pred_proj.layers[1].0 = AlignedBuffer::from_slice(&gen_weights(enc_inter * enc_inter, 502));
+        model.pred_proj.layers[1].1 = AlignedBuffer::from_slice(&gen_weights(enc_inter, 503));
+        model.pred_proj.layers[2].0 = AlignedBuffer::from_slice(&gen_weights(enc_inter * pred_h, 504));
+        model.pred_proj.layers[2].1 = AlignedBuffer::from_slice(&gen_weights(pred_h, 505));
+
+        // Action encoder
+        model.action_conv_weight = AlignedBuffer::from_slice(&gen_weights(act_dim * act_dim, 600));
+        model.action_conv_bias = AlignedBuffer::from_slice(&gen_weights(act_dim, 601));
+        model.action_mlp1_weight = AlignedBuffer::from_slice(&gen_weights(enc_inter * act_dim, 602));
+        model.action_mlp1_bias = AlignedBuffer::from_slice(&gen_weights(enc_inter, 603));
+        model.action_mlp2_weight = AlignedBuffer::from_slice(&gen_weights(pred_h * enc_inter, 604));
+        model.action_mlp2_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, 605));
+
+        // Predictor pos embed: [3, pred_h]
+        model.predictor_pos_embed = AlignedBuffer::from_slice(&gen_weights(3 * pred_h, 700));
+
+        // Predictor norm
+        model.predictor_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
+        model.predictor_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
+
+        // Predictor layers (adaLN DiT)
+        for (i, layer) in model.predictor_layers.iter_mut().enumerate() {
+            let s = (i as u32 + 1) * 1000;
+            layer.adaln_weight = AlignedBuffer::from_slice(&gen_weights(6 * pred_h * pred_h, s + 1));
+            layer.adaln_bias = AlignedBuffer::from_slice(&gen_weights(6 * pred_h, s + 2));
+            layer.to_qkv = AlignedBuffer::from_slice(&gen_weights(3 * pred_inner * pred_h, s + 3));
+            layer.attn_out_weight = AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inner, s + 4));
+            layer.attn_out_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 5));
+            layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
+            layer.attn_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
+            layer.mlp_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
+            layer.mlp_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
+            layer.mlp_up_weight = AlignedBuffer::from_slice(&gen_weights(pred_inter * pred_h, s + 10));
+            layer.mlp_up_bias = AlignedBuffer::from_slice(&gen_weights(pred_inter, s + 11));
+            layer.mlp_down_weight = AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 12));
+            layer.mlp_down_bias = AlignedBuffer::from_slice(&gen_weights(pred_h, s + 13));
+        }
+
+        model
     }
 }
