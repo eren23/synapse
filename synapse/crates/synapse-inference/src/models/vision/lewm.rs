@@ -344,6 +344,18 @@ pub struct ProjectionHead {
     pub layers: Vec<(AlignedBuffer, AlignedBuffer)>,
 }
 
+impl Clone for ProjectionHead {
+    fn clone(&self) -> Self {
+        ProjectionHead {
+            layers: self
+                .layers
+                .iter()
+                .map(|(w, b)| (AlignedBuffer::from_slice(w), AlignedBuffer::from_slice(b)))
+                .collect(),
+        }
+    }
+}
+
 impl ProjectionHead {
     /// Create a projection head with zeroed weights.
     pub fn new_zeroed(num_layers: usize) -> Self {
@@ -1027,20 +1039,18 @@ impl LeWorldModel {
             }
             bufs.mod_copy[..mod_dim].copy_from_slice(&bufs.mod_params[..mod_dim]);
 
-            // Pre-attention: layernorm + modulate
-            let normed = layernorm(&bufs.seq[..seq_size], &layer.attn_norm_weight, 1e-6, hidden);
+            // Pre-attention: layernorm + modulate (fused kernel, single pass)
+            let modulated = fused_layernorm_modulate(
+                &bufs.seq[..seq_size],
+                &layer.attn_norm_weight,
+                &bufs.mod_copy[..hidden],          // scale1
+                &bufs.mod_copy[hidden..2 * hidden], // shift1
+                fused_seq_len,
+                hidden,
+                1e-6,
+            );
             let head_dim = inner_dim / num_heads;
             let modulated_len = fused_seq_len * hidden;
-            // Reuse bufs.ffn_inter as the modulated buffer (pre-allocated, zeroed per iteration).
-            // ffn_inter is sized [fused_seq_len * inter] which is >= [fused_seq_len * hidden].
-            bufs.ffn_inter[..modulated_len].fill(0.0);
-            for t in 0..fused_seq_len {
-                for j in 0..hidden {
-                    bufs.ffn_inter[t * hidden + j] =
-                        normed[t * hidden + j] * (1.0 + bufs.mod_copy[j]) + bufs.mod_copy[hidden + j];
-                }
-            }
-            let modulated = &bufs.ffn_inter[..modulated_len];
 
             // QKV matmul
             let qkv = matmul_t(&modulated, &layer.to_qkv, fused_seq_len, hidden, 3 * inner_dim);
@@ -1082,47 +1092,32 @@ impl LeWorldModel {
                 }
             }
 
-            // Pre-FFN: layernorm + modulate
-            let normed2 = layernorm(&bufs.seq[..seq_size], &layer.mlp_norm_weight, 1e-6, hidden);
-            let modulated2 = {
-                let mut out = vec![0.0f32; modulated_len];
-                for t in 0..fused_seq_len {
-                    for j in 0..hidden {
-                        out[t * hidden + j] = normed2[t * hidden + j]
-                            * (1.0 + bufs.mod_copy[3 * hidden + j])
-                            + bufs.mod_copy[4 * hidden + j];
-                    }
-                }
-                out
-            };
+            // Pre-FFN: layernorm + modulate (fused kernel, single pass)
+            let modulated2 = fused_layernorm_modulate(
+                &bufs.seq[..seq_size],
+                &layer.mlp_norm_weight,
+                &bufs.mod_copy[3 * hidden..4 * hidden], // scale2
+                &bufs.mod_copy[4 * hidden..5 * hidden], // shift2
+                fused_seq_len,
+                hidden,
+                1e-6,
+            );
 
-            // FFN: up -> GELU -> down + gated residual
-            let up = matmul_t(&modulated2, &layer.mlp_up_weight, fused_seq_len, hidden, inter);
-            let mut up_gelu = vec![0.0f32; fused_seq_len * inter];
-            for (i, v) in up.iter().enumerate() {
-                up_gelu[i] = gelu(*v);
-            }
-            if !layer.mlp_up_bias.is_empty() {
-                for t in 0..fused_seq_len {
-                    for j in 0..inter {
-                        up_gelu[t * inter + j] += layer.mlp_up_bias[j];
-                    }
-                }
-            }
-            let down = matmul_t(&up_gelu, &layer.mlp_down_weight, fused_seq_len, inter, hidden);
-            for t in 0..fused_seq_len {
-                for j in 0..hidden {
-                    let idx = t * hidden + j;
-                    bufs.seq[idx] += bufs.mod_copy[5 * hidden + j] * down[idx];
-                }
-            }
-            if !layer.mlp_down_bias.is_empty() {
-                for t in 0..fused_seq_len {
-                    for j in 0..hidden {
-                        bufs.seq[t * hidden + j] += layer.mlp_down_bias[j];
-                    }
-                }
-            }
+            // FFN: fused up + bias + GELU + down + gated residual
+            // Uses ffn_inter as scratch [fused_seq_len * inter]; residual (bufs.seq) updated in-place.
+            fused_ffn_gated_residual_into(
+                &modulated2,
+                &layer.mlp_up_weight,
+                &layer.mlp_up_bias,
+                &layer.mlp_down_weight,
+                &layer.mlp_down_bias,
+                &bufs.mod_copy[5 * hidden..6 * hidden], // gate2
+                fused_seq_len,
+                hidden,
+                inter,
+                &mut bufs.seq[..seq_size],
+                &mut bufs.ffn_inter[..fused_seq_len * inter],
+            );
         }
 
         // 4. Final norm

@@ -126,6 +126,27 @@ The hybrid's "192% drift" is misleading — the endpoint L2 (0.82) matches basel
 | `zig/src/root.zig` | Register fused_lewm_layer module |
 | `synapse-esp32/esp-idf-app/main/app_main.c` | Hybrid encoder, kernel-trick attention, PIE batch patch embed |
 
+## Phase 5: Fused Multi-Step Rollout
+
+Fused rollout reduces latency for N-step predictions by running all predictor layers **once** over an N×3-token fused sequence `[z, a₀, 0, z, a₁, 0, ...]` instead of N sequential predictor passes. Bidirectional attention across all steps enables parallel future hypotheses.
+
+**ESP32-P4 results (slim 96d):**
+
+| Steps | Sequential | Fused | Speedup |
+|-------|-----------|-------|---------|
+| 3 | 462 ms | 279 ms | **1.66x** |
+
+**Host results (slim 96d Q4):**
+
+| Steps | Sequential | Fused | Speedup |
+|-------|-----------|-------|---------|
+| 3 | 66 ms | 53 ms | **1.25x** |
+| 10 | 170 ms | 156 ms | **1.09x** |
+
+**Accuracy:** Step-0 of fused matches sequential exactly (cos_sim = 1.000). Steps 1+ differ by design — fused uses bidirectional attention across all steps while sequential is strictly autoregressive.
+
+**Limitation:** ESP32 firmware limited to **3 steps max** due to `MAX_PREDICTOR_SEQ_LEN=9` hard cap.
+
 ## Remaining Optimization Targets
 
 ### Parked (Phase 2 — do next)

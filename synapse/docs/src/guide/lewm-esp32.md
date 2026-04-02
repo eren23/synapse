@@ -341,6 +341,29 @@ return [latent_1, latent_2, ..., latent_N]
 
 Timing: **~583 ms x N steps** (e.g., 1,748 ms for 3 steps).
 
+### rollout_fused(latent, actions[])
+
+Fused multi-step rollout: encodes all actions, builds one N×3-token fused sequence,
+runs all predictor layers **once**. Returns one predicted latent state per action.
+
+```
+1. Encode all actions: action -> action_emb (same encoder for all steps)
+2. Build fused sequence: [z, a0, 0, z, a1, 0, ...] (positional embeddings added)
+3. Run predictor layers once (all N steps processed in parallel via bidirectional attention)
+4. Extract targets at positions 2, 5, 8, ... and project each
+```
+
+**Note on fused vs sequential:** Steps 1+ in fused differ from sequential by design —
+fused uses bidirectional attention across all steps (parallel future hypotheses), while
+sequential is strictly autoregressive. Step-0 is identical (same z_start + a0, cos_sim = 1.000).
+
+**ESP32 limitation:** Currently limited to **10 steps max** (`MAX_PREDICTOR_SEQ_LEN=30`).
+
+| Variant | Sequential 3-step | Fused 3-step | Speedup |
+|---------|------------------|--------------|---------|
+| Slim 96d (Q4) | 462 ms | 279 ms | **1.66x** |
+| Full 192d (Q4) | ~900 ms | ~540 ms | **1.66x** |
+
 ## Host Testing
 
 Run model tests on your development machine without ESP32 hardware:

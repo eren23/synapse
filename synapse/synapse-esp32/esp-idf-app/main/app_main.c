@@ -1648,10 +1648,10 @@ static void bidirectional_attention_separate(
     free(k_scales);
 }
 
-/* Maximum sequence length for the predictor (9 = 3 actions × 3 tokens each).
- * This is the maximum N for predict_rollout_fused (N=3 steps → 9 tokens).
+/* Maximum sequence length for the predictor (30 = 10 actions × 3 tokens each).
+ * This is the maximum N for predict_rollout_fused (N=10 steps → 30 tokens).
  * Scratch buffers are allocated for this size so the fused function never reallocates. */
-#define MAX_PREDICTOR_SEQ_LEN  9U
+#define MAX_PREDICTOR_SEQ_LEN  30U
 
 static bool allocate_scratch(PredictorModel *model) {
     PredictorScratch *scratch = &model->scratch;
@@ -2603,7 +2603,7 @@ void predict_next(
  *   model      -- loaded LEWM model
  *   z_start    -- [latent_dim] initial latent state
  *   actions    -- [num_steps][action_dim] action vectors
- *   num_steps  -- number of rollout steps (must be <= 3 for MAX_PREDICTOR_SEQ_LEN=9)
+ *   num_steps  -- number of rollout steps (must be <= 10 for MAX_PREDICTOR_SEQ_LEN=30)
  *   out        -- [num_steps][latent_dim] output buffer (caller-allocated)
  */
 void predict_rollout_fused(

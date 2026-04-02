@@ -245,8 +245,8 @@ impl Esp32LeWM {
     /// Fused multi-step rollout: encodes all actions, builds one N×3-token sequence,
     /// runs predictor layers once. Same z_start for all positions — parallel futures.
     ///
-    /// Currently only implemented for the F32 variant. Q4Pred/Full fall back
-    /// to sequential rollout (slower but correct).
+    /// F32 uses the native f32 fused path. Q4Pred/Full dequantize to f32 first,
+    /// then use the f32 fused path — this is faster than sequential Q4 decode.
     pub fn rollout_fused(
         &self,
         state: &[f32],
@@ -261,12 +261,18 @@ impl Esp32LeWM {
                 m.predict_rollout_fused(state, actions, &mut bufs)
             }
             Esp32LeWMInner::Q4Pred(m) => {
-                // Q4Pred: fall back to sequential rollout (predict_rollout_fused not yet impl)
-                m.rollout(state, actions)
+                // Q4Pred: dequantize to f32, then use f32 fused path
+                let f32_model = m.dequantize();
+                let mut bufs =
+                    synapse_inference::models::vision::lewm::LeWMBuffers::new(&f32_model.config);
+                f32_model.predict_rollout_fused(state, actions, &mut bufs)
             }
             Esp32LeWMInner::Full(m) => {
-                // Full: fall back to sequential rollout
-                m.rollout(state, actions)
+                // Full: dequantize to f32, then use f32 fused path
+                let f32_model = m.dequantize();
+                let mut bufs =
+                    synapse_inference::models::vision::lewm::LeWMBuffers::new(&f32_model.config);
+                f32_model.predict_rollout_fused(state, actions, &mut bufs)
             }
         };
         let ms = start.elapsed().as_secs_f64() * 1000.0;
