@@ -1,6 +1,6 @@
 //! Q4_0-quantized LeWorldModel variants.
 
-use crate::models::vision::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
+use crate::models::vision::lewm::{AdaLNTransformerLayer, LeWMConfig, LeWorldModel, ProjectionHead};
 use crate::models::vision::vit::ViTModel;
 use crate::ops::activation::gelu;
 use crate::ops::attention::bidirectional_attention;
@@ -157,6 +157,27 @@ impl QuantizedQ4AdaLNLayer {
         }
 
         residual
+    }
+
+    /// Dequantize this Q4 layer to f32, returning an `AdaLNTransformerLayer`.
+    pub fn dequantize(&self, hidden: usize, inner_dim: usize, inter: usize) -> AdaLNTransformerLayer {
+        use crate::weight_loading::AlignedBuffer;
+
+        AdaLNTransformerLayer {
+            adaln_weight: AlignedBuffer::from_vec(self.adaln_linear.dequantize()),
+            adaln_bias: AlignedBuffer::from_vec(self.adaln_bias.clone()),
+            to_qkv: AlignedBuffer::from_vec(self.to_qkv.dequantize()),
+            attn_out_weight: AlignedBuffer::from_vec(self.attn_out.dequantize()),
+            attn_out_bias: AlignedBuffer::from_vec(self.attn_out_bias.clone()),
+            attn_norm_weight: AlignedBuffer::from_vec(self.attn_norm_weight.clone()),
+            attn_norm_bias: AlignedBuffer::from_vec(self.attn_norm_bias.clone()),
+            mlp_norm_weight: AlignedBuffer::from_vec(self.mlp_norm_weight.clone()),
+            mlp_norm_bias: AlignedBuffer::from_vec(self.mlp_norm_bias.clone()),
+            mlp_up_weight: AlignedBuffer::from_vec(self.mlp_up.dequantize()),
+            mlp_up_bias: AlignedBuffer::from_vec(self.mlp_up_bias.clone()),
+            mlp_down_weight: AlignedBuffer::from_vec(self.mlp_down.dequantize()),
+            mlp_down_bias: AlignedBuffer::from_vec(self.mlp_down_bias.clone()),
+        }
     }
 }
 
@@ -478,6 +499,46 @@ impl QuantizedQ4LeWM {
             cond_proj_weight,
             cond_proj_bias,
         })
+    }
+
+    /// Dequantize the Q4 model to f32, returning a `LeWorldModel`.
+    ///
+    /// This enables fused f32 rollout on Q4 models by converting all Q4 predictor
+    /// weights to f32 upfront. The memory cost is paid once; subsequent fused rollout
+    /// runs faster than sequential Q4 decode.
+    pub fn dequantize(&self) -> LeWorldModel {
+        use crate::weight_loading::AlignedBuffer;
+
+        let hidden = self.config.predictor_hidden;
+        let inner_dim = self.config.predictor_inner_dim;
+        let inter = self.config.predictor_inter;
+
+        let predictor_layers: Vec<AdaLNTransformerLayer> = self
+            .predictor_layers
+            .iter()
+            .map(|layer| layer.dequantize(hidden, inner_dim, inter))
+            .collect();
+
+        LeWorldModel {
+            config: self.config.clone(),
+            encoder: clone_vit_encoder(&self.encoder),
+            predictor_layers,
+            predictor_pos_embed: AlignedBuffer::from_vec(self.predictor_pos_embed.clone()),
+            predictor_norm_weight: AlignedBuffer::from_vec(self.predictor_norm_weight.clone()),
+            predictor_norm_bias: AlignedBuffer::from_vec(self.predictor_norm_bias.clone()),
+            action_conv_weight: AlignedBuffer::from_vec(self.action_conv_weight.clone()),
+            action_conv_bias: AlignedBuffer::from_vec(self.action_conv_bias.clone()),
+            action_mlp1_weight: AlignedBuffer::from_vec(self.action_mlp1_weight.clone()),
+            action_mlp1_bias: AlignedBuffer::from_vec(self.action_mlp1_bias.clone()),
+            action_mlp2_weight: AlignedBuffer::from_vec(self.action_mlp2_weight.clone()),
+            action_mlp2_bias: AlignedBuffer::from_vec(self.action_mlp2_bias.clone()),
+            input_proj_weight: AlignedBuffer::from_vec(self.input_proj_weight.clone()),
+            input_proj_bias: AlignedBuffer::from_vec(self.input_proj_bias.clone()),
+            cond_proj_weight: AlignedBuffer::from_vec(self.cond_proj_weight.clone()),
+            cond_proj_bias: AlignedBuffer::from_vec(self.cond_proj_bias.clone()),
+            projector: clone_projection_head(&self.projector),
+            pred_proj: clone_projection_head(&self.pred_proj),
+        }
     }
 }
 
@@ -1079,13 +1140,13 @@ mod tests {
             encoder_layers: 2,
             encoder_heads: 2,
             encoder_inter: 32,
-            predictor_hidden: 16,
+            predictor_hidden: 32, // must be multiple of 32 for Q4_0 alignment
             predictor_layers: 2,
             predictor_heads: 2,
-            predictor_inner_dim: 16,
+            predictor_inner_dim: 32, // must be multiple of 32 for Q4_0 alignment
             predictor_inter: 32,
             action_dim: 4,
-            latent_dim: 16,
+            latent_dim: 32, // must equal predictor_hidden so has_proj=false path works correctly
         }
     }
 
@@ -1172,7 +1233,7 @@ mod tests {
             layer.mlp_norm_weight = AlignedBuffer::from_slice(&vec![1.0f32; pred_h]);
             layer.mlp_norm_bias = AlignedBuffer::from_slice(&vec![0.0f32; pred_h]);
             layer.mlp_up_weight =
-                AlignedBuffer::from_slice(&gen_weights(pred_inter * pred_h, s + 10));
+                AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 10));
             layer.mlp_up_bias = AlignedBuffer::from_slice(&gen_weights(pred_inter, s + 11));
             layer.mlp_down_weight =
                 AlignedBuffer::from_slice(&gen_weights(pred_h * pred_inter, s + 12));

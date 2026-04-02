@@ -3,7 +3,7 @@
 //! Implements the full Mamba block forward pass:
 //! RMSNorm → in_proj (split x, z) → Conv1d → SiLU → SSM → Gate (silu(z)*y) → out_proj → residual.
 
-use crate::ops::activation::{silu, softplus};
+use crate::ops::activation::{silu, batched_softplus};
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
 use super::selective_scan::selective_scan_step;
@@ -82,10 +82,12 @@ impl MambaBlock {
         // dt_proj: [1, dt_rank] × [d_inner, dt_rank]^T → [1, d_inner]
         let dt_projected = matmul_t(dt_input, &self.dt_proj_weight, 1, dt_rank, d_inner);
 
-        // Apply softplus to get positive delta values
-        let delta: Vec<f32> = (0..d_inner)
-            .map(|i| softplus(dt_projected[i] + self.dt_proj_bias[i]))
-            .collect();
+        // Add dt_proj_bias, then apply softplus via batched SIMD call.
+        let mut delta: Vec<f32> = dt_projected;
+        for i in 0..d_inner {
+            delta[i] += self.dt_proj_bias[i];
+        }
+        let delta = batched_softplus(&delta);
 
         selective_scan_step(
             x,

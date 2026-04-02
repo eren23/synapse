@@ -150,6 +150,7 @@ impl Q4Linear {
     }
 
     /// Pure-Rust scalar fallback for Q4 forward pass.
+    #[allow(dead_code)] // available for benchmarking or non-Zig targets
     fn forward_scalar(&self, x: &[f32], m: usize) -> Vec<f32> {
         let k = self.in_features;
         let n = self.out_features;

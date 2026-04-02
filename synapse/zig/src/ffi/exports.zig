@@ -1247,6 +1247,14 @@ pub export fn syn_silu(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
     return SYN_OK;
 }
 
+pub export fn syn_softplus(dst: ?[*]f32, src: ?[*]const f32, len: usize) c_int {
+    const d = dst orelse return SYN_ERR_NULL_PTR;
+    const s = src orelse return SYN_ERR_NULL_PTR;
+    if (len == 0) return SYN_OK;
+    silu_ops.softplus(d[0..len], s[0..len]);
+    return SYN_OK;
+}
+
 // ============================================================
 // Fused SwiGLU: dst[i] = silu(gate[i]) * up[i] (flat f32 arrays)
 // ============================================================

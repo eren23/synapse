@@ -49,6 +49,37 @@ pub fn siluScalar(dst: []f32, src: []const f32) void {
     }
 }
 
+/// SIMD-vectorized softplus: dst[i] = log(1 + exp(src[i]))
+///
+/// Stable for all f32 inputs:
+///   - For src[i] >= 20, returns src[i] directly (exp(20) ≈ 485M < f32::MAX).
+///   - For src[i] <= -20, returns ~0 (exp(-20) ≈ 2e-9, log1p ≈ 0).
+///   - The midpoint range uses the full formula.
+/// LLVM auto-vectorises the tail scalar loop with -O2.
+pub fn softplus(dst: []f32, src: []const f32) void {
+    std.debug.assert(dst.len == src.len);
+    const n = src.len;
+    const one: F32x4 = @splat(1.0);
+    const threshold: F32x4 = @splat(20.0);
+
+    var i: usize = 0;
+    while (i + VEC_LEN <= n) : (i += VEC_LEN) {
+        const x: F32x4 = src[i..][0..VEC_LEN].*;
+        // Match scalar tail: x > 20 → x; else log(1+exp(clamp(x))) with clamp in [-20,20].
+        const clamped = @min(@max(x, -threshold), threshold);
+        const mid = @log(one + @exp(clamped));
+        dst[i..][0..VEC_LEN].* = @select(f32, x > threshold, x, mid);
+    }
+    // Scalar tail handles remaining 0–3 elements.
+    while (i < n) : (i += 1) {
+        const x = src[i];
+        // Use log1p for numerical stability near x=0:
+        // log1p(y) = log(1+y), stable for small y.
+        // For x <= -20, exp(x) ≈ 0 so log1p(0) = 0.
+        dst[i] = if (x > 20.0) x else std.math.log1p(@exp(x));
+    }
+}
+
 /// Fused SwiGLU: dst[i] = silu(gate[i]) * up[i]
 /// Single pass, no intermediate allocation. 2x-unrolled SIMD.
 pub fn swigluFused(dst: []f32, gate: []const f32, up: []const f32) void {

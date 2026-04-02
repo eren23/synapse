@@ -40,6 +40,12 @@ extern void predict_next(PredictorModel *model,
                          const float *action,
                          float *out);
 
+extern void predict_rollout_fused(PredictorModel *model,
+                                  const float *z_start,
+                                  const float *actions,
+                                  size_t num_steps,
+                                  float *out);
+
 extern bool encode_image(PredictorModel *model,
                          const float *image,
                          size_t height,
@@ -429,6 +435,133 @@ static esp_err_t rollout_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* POST /rollout_fused ----------------------------------------------
+ * Fused multi-step rollout: encodes all actions, builds one fused
+ * N×3-token sequence, runs predictor layers once.
+ * Same z_start for all positions — parallel future hypotheses.
+ * Faster than sequential rollout for N>1.
+ * ---------------------------------------------------------------- */
+
+static esp_err_t rollout_fused_handler(httpd_req_t *req)
+{
+    set_cors_headers(req);
+
+    char *body = receive_body(req);
+    if (!body) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "Failed to read request body");
+        return ESP_FAIL;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    const cJSON *latent_arr  = cJSON_GetObjectItem(root, "latent");
+    const cJSON *actions_arr = cJSON_GetObjectItem(root, "actions");
+    if (!cJSON_IsArray(latent_arr) || !cJSON_IsArray(actions_arr)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "Missing 'latent' or 'actions' arrays");
+        return ESP_FAIL;
+    }
+
+    size_t ldim = s_cfg.latent_dim;
+    size_t adim = s_cfg.action_dim;
+
+    int num_steps = cJSON_GetArraySize(actions_arr);
+    if (num_steps <= 0 || num_steps > 10) {
+        /* Hard limit: MAX_PREDICTOR_SEQ_LEN = 30, and num_steps * 3 <= 30 */
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "Invalid steps (must be 1..10)");
+        return ESP_FAIL;
+    }
+
+    /* Allocate working buffers */
+    float *z_start = heap_caps_malloc(ldim * sizeof(float),
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    float *actions = heap_caps_malloc((size_t)num_steps * adim * sizeof(float),
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    float *outputs = heap_caps_malloc((size_t)num_steps * ldim * sizeof(float),
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!z_start || !actions || !outputs) {
+        free(z_start); free(actions); free(outputs);
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Out of memory");
+        return ESP_FAIL;
+    }
+
+    /* Parse latent */
+    cjson_to_float_array(latent_arr, z_start, ldim);
+
+    /* Parse actions */
+    for (int s = 0; s < num_steps; ++s) {
+        const cJSON *act_i = cJSON_GetArrayItem(actions_arr, s);
+        if (cJSON_IsArray(act_i)) {
+            cjson_to_float_array(act_i, actions + (size_t)s * adim, adim);
+        } else {
+            memset(actions + (size_t)s * adim, 0, adim * sizeof(float));
+        }
+    }
+
+    int64_t t0 = esp_timer_get_time();
+
+    /* Call the fused predictor */
+    predict_rollout_fused((PredictorModel *)s_cfg.model,
+                          z_start, actions, (size_t)num_steps, outputs);
+
+    int64_t latency_us = esp_timer_get_time() - t0;
+    double latency_ms = (double)latency_us / 1000.0;
+
+    cJSON_Delete(root);
+    free(z_start);
+    free(actions);
+
+    /*
+     * Build response: {"trajectory": [[...], [...], [...]], "steps": N, "latency_ms": M}
+     */
+    size_t resp_size = (size_t)num_steps * ldim * 14 + (size_t)num_steps * 4 + 128;
+    char *resp = heap_caps_malloc(resp_size,
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!resp) {
+        free(outputs);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                            "Out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t pos = 0;
+    pos += snprintf(resp + pos, resp_size - pos, "{\"trajectory\":[");
+
+    for (int s = 0; s < num_steps; ++s) {
+        if (s > 0) resp[pos++] = ',';
+        char *step_json = float_array_to_json(outputs + (size_t)s * ldim, ldim);
+        if (step_json) {
+            pos += snprintf(resp + pos, resp_size - pos, "%s", step_json);
+            free(step_json);
+        }
+    }
+
+    pos += snprintf(resp + pos, resp_size - pos,
+                    "],\"steps\":%d,\"latency_ms\":%.2f}",
+                    num_steps, latency_ms);
+
+    free(outputs);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, resp, pos);
+    free(resp);
+
+    ESP_LOGI(TAG, "rollout_fused: %d steps in %.1f ms (%.1f ms/step)",
+             num_steps, latency_ms, latency_ms / num_steps);
+    return ESP_OK;
+}
+
 /* POST /encode ----------------------------------------------------- */
 
 static esp_err_t encode_handler(httpd_req_t *req)
@@ -610,6 +743,14 @@ httpd_handle_t start_inference_server(const ServerConfig *config)
     };
     httpd_register_uri_handler(server, &uri_rollout);
 
+    /* POST /rollout_fused */
+    const httpd_uri_t uri_rollout_fused = {
+        .uri      = "/rollout_fused",
+        .method   = HTTP_POST,
+        .handler  = rollout_fused_handler,
+    };
+    httpd_register_uri_handler(server, &uri_rollout_fused);
+
     /* POST /encode */
     const httpd_uri_t uri_encode = {
         .uri      = "/encode",
@@ -632,6 +773,13 @@ httpd_handle_t start_inference_server(const ServerConfig *config)
         .handler  = cors_options_handler,
     };
     httpd_register_uri_handler(server, &uri_options_rollout);
+
+    const httpd_uri_t uri_options_rollout_fused = {
+        .uri      = "/rollout_fused",
+        .method   = HTTP_OPTIONS,
+        .handler  = cors_options_handler,
+    };
+    httpd_register_uri_handler(server, &uri_options_rollout_fused);
 
     const httpd_uri_t uri_options_encode = {
         .uri      = "/encode",

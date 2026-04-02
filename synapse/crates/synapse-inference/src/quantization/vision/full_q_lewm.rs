@@ -11,7 +11,7 @@ use super::q4_lewm::{
     lq40_config_from_json, lq40_read_f32, lq40_read_projection_head, lq40_read_q4_adaln_layer,
     lq40_read_u32,
 };
-use crate::models::vision::lewm::{LeWMConfig, LeWorldModel, ProjectionHead};
+use crate::models::vision::lewm::{AdaLNTransformerLayer, LeWMConfig, LeWorldModel, ProjectionHead};
 use crate::models::vision::vit::ViTConfig;
 use crate::ops::activation::gelu;
 use crate::ops::attention::bidirectional_attention;
@@ -571,7 +571,55 @@ fn lq40_read_quantized_linear(data: &[u8], off: &mut usize) -> Result<QuantizedL
     })
 }
 
-/// Quantize a full LeWorldModel to INT8 encoder + Q4 predictor.
+impl FullyQuantizedLeWM {
+    /// Dequantize the predictor to f32, returning a `LeWorldModel`.
+    ///
+    /// This enables fused f32 rollout on Full (INT8+Q4) models by converting the Q4
+    /// predictor weights to f32 upfront. The INT8 encoder is not needed for rollout
+    /// (action encoding uses separate f32 action encoder).
+    pub fn dequantize(&self) -> LeWorldModel {
+        use crate::weight_loading::AlignedBuffer;
+
+        let hidden = self.config.predictor_hidden;
+        let inner_dim = self.config.predictor_inner_dim;
+        let inter = self.config.predictor_inter;
+
+        let predictor_layers: Vec<AdaLNTransformerLayer> = self
+            .predictor_layers
+            .iter()
+            .map(|layer| layer.dequantize(hidden, inner_dim, inter))
+            .collect();
+
+        // Create a minimal LeWorldModel with empty encoder (not used for rollout)
+        let mut model = LeWorldModel::from_config(&self.config);
+
+        // Fill in the predictor parts from dequantized layers
+        model.predictor_layers = predictor_layers;
+        model.predictor_pos_embed = AlignedBuffer::from_vec(self.predictor_pos_embed.clone());
+        model.predictor_norm_weight = AlignedBuffer::from_vec(self.predictor_norm_weight.clone());
+        model.predictor_norm_bias = AlignedBuffer::from_vec(self.predictor_norm_bias.clone());
+
+        // Action encoder (f32 in both Full and LeWorldModel)
+        model.action_conv_weight = AlignedBuffer::from_vec(self.action_conv_weight.clone());
+        model.action_conv_bias = AlignedBuffer::from_vec(self.action_conv_bias.clone());
+        model.action_mlp1_weight = AlignedBuffer::from_vec(self.action_mlp1_weight.clone());
+        model.action_mlp1_bias = AlignedBuffer::from_vec(self.action_mlp1_bias.clone());
+        model.action_mlp2_weight = AlignedBuffer::from_vec(self.action_mlp2_weight.clone());
+        model.action_mlp2_bias = AlignedBuffer::from_vec(self.action_mlp2_bias.clone());
+
+        // Input/conditioning projections
+        model.input_proj_weight = AlignedBuffer::from_vec(self.input_proj_weight.clone());
+        model.input_proj_bias = AlignedBuffer::from_vec(self.input_proj_bias.clone());
+        model.cond_proj_weight = AlignedBuffer::from_vec(self.cond_proj_weight.clone());
+        model.cond_proj_bias = AlignedBuffer::from_vec(self.cond_proj_bias.clone());
+
+        // Projectors
+        model.projector = self.projector.clone();
+        model.pred_proj = self.pred_proj.clone();
+
+        model
+    }
+}
 pub fn quantize_lewm_full(model: &LeWorldModel) -> FullyQuantizedLeWM {
     let cfg = &model.config;
     let hidden = cfg.predictor_hidden;

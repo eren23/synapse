@@ -13,6 +13,7 @@ use synapse_inference::models::ssm::rwkv::block::RwkvBlock;
 use synapse_inference::models::ssm::rwkv::config::RwkvConfig;
 use synapse_inference::models::ssm::rwkv::model::RwkvModel;
 use synapse_inference::models::traits::{Model, ModelState};
+use synapse_inference::weight_loading::AlignedBuffer;
 use synapse_inference::models::vision::lewm::{LeWMConfig, LeWorldModel};
 use synapse_inference::quantization::{
     FullyQuantizedLeWM, Q4MambaModel, Q4RwkvModel, QuantizedQ4LeWM,
@@ -72,6 +73,67 @@ impl Esp32LeWM {
     pub fn new_zeroed() -> Self {
         let config = LeWMConfig::pusht();
         let model = LeWorldModel::from_config(&config);
+        Esp32LeWM {
+            config,
+            inner: Esp32LeWMInner::F32(model),
+        }
+    }
+
+    /// Create a model with seeded predictor weights for benchmarking.
+    /// Uses pushT config with deterministically seeded f32 weights.
+    pub fn new_benchmark() -> Self {
+        let config = LeWMConfig::pusht();
+        let mut model = LeWorldModel::from_config(&config);
+        let hidden = config.predictor_hidden;
+        let inner = config.predictor_inner_dim;
+        let inter = config.predictor_inter;
+
+        // Seed predictor weights deterministically (non-zero so matmul asserts pass).
+        let seed_w = |len: usize, s: u32| -> AlignedBuffer {
+            AlignedBuffer::from_slice(
+                &(0..len)
+                    .map(|i| {
+                        let x = (((i as u32).wrapping_mul(2_654_435_761).wrapping_add(s)) as f32);
+                        x / u32::MAX as f32 * 0.36 - 0.18
+                    })
+                    .collect::<Vec<f32>>(),
+            )
+        };
+        let seed_bias = |len: usize, s: u32| AlignedBuffer::from_slice(
+            &(0..len)
+                .map(|i| {
+                    let x = (((i as u32).wrapping_mul(3_333_333).wrapping_add(s)) as f32);
+                    x / u32::MAX as f32 * 0.1
+                })
+                .collect::<Vec<f32>>(),
+        );
+
+        // Action encoder weights (mirrors build_test_lewm_pushT seeds 600-605)
+        model.action_conv_weight = seed_w(config.action_dim * config.action_dim, 600);
+        model.action_conv_bias = seed_bias(config.action_dim, 601);
+        model.action_mlp1_weight = seed_w(config.encoder_inter * config.action_dim, 602);
+        model.action_mlp1_bias = seed_bias(config.encoder_inter, 603);
+        model.action_mlp2_weight = seed_w(hidden * config.encoder_inter, 604);
+        model.action_mlp2_bias = seed_bias(hidden, 605);
+
+        for (i, layer) in model.predictor_layers.iter_mut().enumerate() {
+            let s = (i as u32 + 1) * 1000;
+            layer.adaln_weight = seed_w(6 * hidden * hidden, s + 1);
+            layer.adaln_bias = seed_bias(6 * hidden, s + 2);
+            layer.to_qkv = seed_w(3 * inner * hidden, s + 3);
+            layer.attn_out_weight = seed_w(hidden * inner, s + 4);
+            layer.attn_out_bias = seed_bias(hidden, s + 5);
+            layer.attn_norm_weight = AlignedBuffer::from_slice(&vec![1.0; hidden]);
+            layer.attn_norm_bias = AlignedBuffer::from_slice(&vec![0.0; hidden]);
+            layer.mlp_norm_weight = AlignedBuffer::from_slice(&vec![1.0; hidden]);
+            layer.mlp_norm_bias = AlignedBuffer::from_slice(&vec![0.0; hidden]);
+            layer.mlp_up_weight = seed_w(inter * hidden, s + 10);
+            layer.mlp_up_bias = seed_bias(inter, s + 11);
+            layer.mlp_down_weight = seed_w(hidden * inter, s + 12);
+            layer.mlp_down_bias = seed_bias(hidden, s + 13);
+        }
+        model.predictor_norm_weight = AlignedBuffer::from_slice(&vec![1.0; hidden]);
+        model.predictor_norm_bias = AlignedBuffer::from_slice(&vec![0.0; hidden]);
         Esp32LeWM {
             config,
             inner: Esp32LeWMInner::F32(model),
@@ -174,6 +236,49 @@ impl Esp32LeWM {
         let steps = trajectory.len();
         let metrics = InferenceMetrics {
             operation: format!("rollout_{steps}_steps"),
+            latency_ms: ms,
+            output_dim: self.config.latent_dim,
+        };
+        (trajectory, metrics)
+    }
+
+    /// Fused multi-step rollout: encodes all actions, builds one N×3-token sequence,
+    /// runs predictor layers once. Same z_start for all positions — parallel futures.
+    ///
+    /// F32 uses the native f32 fused path. Q4Pred/Full dequantize to f32 first,
+    /// then use the f32 fused path — this is faster than sequential Q4 decode.
+    pub fn rollout_fused(
+        &self,
+        state: &[f32],
+        actions: &[Vec<f32>],
+    ) -> (Vec<Vec<f32>>, InferenceMetrics) {
+        let start = Instant::now();
+        let trajectory = match &self.inner {
+            Esp32LeWMInner::F32(m) => {
+                // F32: use the truly-fused path
+                let mut bufs =
+                    synapse_inference::models::vision::lewm::LeWMBuffers::new(&m.config);
+                m.predict_rollout_fused(state, actions, &mut bufs)
+            }
+            Esp32LeWMInner::Q4Pred(m) => {
+                // Q4Pred: dequantize to f32, then use f32 fused path
+                let f32_model = m.dequantize();
+                let mut bufs =
+                    synapse_inference::models::vision::lewm::LeWMBuffers::new(&f32_model.config);
+                f32_model.predict_rollout_fused(state, actions, &mut bufs)
+            }
+            Esp32LeWMInner::Full(m) => {
+                // Full: dequantize to f32, then use f32 fused path
+                let f32_model = m.dequantize();
+                let mut bufs =
+                    synapse_inference::models::vision::lewm::LeWMBuffers::new(&f32_model.config);
+                f32_model.predict_rollout_fused(state, actions, &mut bufs)
+            }
+        };
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let steps = trajectory.len();
+        let metrics = InferenceMetrics {
+            operation: format!("rollout_fused_{steps}_steps"),
             latency_ms: ms,
             output_dim: self.config.latent_dim,
         };
