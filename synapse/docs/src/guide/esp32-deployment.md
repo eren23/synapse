@@ -97,19 +97,24 @@ pip install pyserial
 ```
 synapse/synapse-esp32/esp-idf-app/
 ├── CMakeLists.txt              # Top-level ESP-IDF project
-├── sdkconfig.defaults          # SDK configuration (PSRAM 200MHz, WiFi, etc.)
+├── sdkconfig.defaults          # SDK configuration (PSRAM 200MHz, WiFi placeholders)
+├── sdkconfig.credentials       # WiFi SSID/pass (gitignored — create locally)
 ├── partitions.csv              # Custom partition table (16MB factory)
 └── main/
     ├── CMakeLists.txt          # Component: sources, deps, binary data
+    ├── Kconfig.projbuild       # Menuconfig: WiFi SSID/pass
     ├── idf_component.yml       # Managed deps: esp_wifi_remote, esp_hosted
-    ├── app_main.c              # Model loading, inference, boot sequence (~2150 lines)
-    ├── pie_gemv.h              # PIE SIMD kernel API
-    ├── pie_gemv.c              # PIE assembly implementations + self-tests
-    ├── http_server.c           # HTTP endpoints, JSON, CORS (~650 lines)
-    ├── http_server.h           # ServerConfig struct
-    ├── wifi.c                  # WiFi STA via esp_hosted (C6 companion)
-    ├── wifi.h                  # WiFi function declarations
-    ├── model.bin               # Embedded LQ40 model blob (~10 MB)
+    ├── lewm_types.h            # All struct/typedef definitions
+    ├── app_main.c              # Boot, WiFi, HTTP server start (~100 lines)
+    ├── model_loader.c/.h       # LQ40 parsing, weight deserialization (~940 lines)
+    ├── inference.c/.h          # predict_next, encode_image, layer forward (~730 lines)
+    ├── kernels.c/.h            # Math ops, LUTs, attention, GEMV, allocators (~890 lines)
+    ├── dual_core.c/.h          # Core 1 worker, dispatch, semaphores (~120 lines)
+    ├── smoke_tests.c/.h        # Boot-time smoke tests (~250 lines)
+    ├── pie_gemv.c/.h           # PIE SIMD assembly + self-tests
+    ├── http_server.c/.h        # HTTP endpoints, JSON, CORS (~780 lines)
+    ├── wifi.c/.h               # WiFi STA via esp_hosted (C6 companion)
+    ├── model.bin               # Embedded LQ40 model blob (~4 MB)
     └── index.html              # Companion web dashboard (~696 lines)
 ```
 
@@ -206,12 +211,14 @@ cp ../../web/lewm-compress-demo/lewm-slim-96d-q4.bin main/model.bin
 
 ### Step 3: Configure WiFi
 
-Edit `main/app_main.c` — find the `WIFI_SSID` and `WIFI_PASS` defines near the bottom of the file and set your WiFi credentials:
+WiFi credentials are managed via Kconfig (not hardcoded in source). Create a `sdkconfig.credentials` file (gitignored):
 
-```c
-#define WIFI_SSID "YourNetworkName"
-#define WIFI_PASS "YourPassword"
+```bash
+echo 'CONFIG_LEWM_WIFI_SSID="YourNetworkName"' > sdkconfig.credentials
+echo 'CONFIG_LEWM_WIFI_PASS="YourPassword"' >> sdkconfig.credentials
 ```
+
+Or use `idf.py menuconfig` → "Synapse LEWM Config" to set them interactively.
 
 ### Step 4: Build
 
@@ -219,6 +226,7 @@ Edit `main/app_main.c` — find the `WIFI_SSID` and `WIFI_PASS` defines near the
 # First-time build (or after sdkconfig changes)
 rm -f sdkconfig
 idf.py set-target esp32p4
+cat sdkconfig.credentials >> sdkconfig   # inject WiFi creds
 idf.py build
 
 # Quick rebuild (no config changes)
