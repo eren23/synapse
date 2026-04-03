@@ -473,11 +473,11 @@ static esp_err_t rollout_fused_handler(httpd_req_t *req)
     size_t adim = s_cfg.action_dim;
 
     int num_steps = cJSON_GetArraySize(actions_arr);
-    if (num_steps <= 0 || num_steps > 10) {
-        /* Hard limit: MAX_PREDICTOR_SEQ_LEN = 30, and num_steps * 3 <= 30 */
+    if (num_steps <= 0 || num_steps > 50) {
+        /* Hard limit: MAX_PREDICTOR_SEQ_LEN = 150, and num_steps * 3 <= 150 */
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "Invalid steps (must be 1..10)");
+                            "Invalid steps (must be 1..50)");
         return ESP_FAIL;
     }
 

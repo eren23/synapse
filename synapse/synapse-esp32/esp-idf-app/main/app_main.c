@@ -101,14 +101,15 @@ static void l1_normalize_inplace(float *x, size_t len) {
     float abs_sum = 0.0f;
     for (size_t i = 0; i < len; ++i) abs_sum += fabsf(x[i]);
     if (abs_sum > 1e-12f) {
-        float inv = 1.0f / abs_sum;
-        for (size_t i = 0; i < len; ++i) x[i] *= inv;
+        float inv_sum = 1.0f / abs_sum;
+        for (size_t i = 0; i < len; ++i) x[i] *= inv_sum;
     }
 }
 
 /* ELU+1 feature map for kernel-trick linear attention: φ(x) = elu(x) + 1 */
+static inline float exp_lut_scalar(float x);
 static inline float elu_plus1(float x) {
-    return x >= 0.0f ? x + 1.0f : expf(x);
+    return x >= 0.0f ? x + 1.0f : exp_lut_scalar(x);
 }
 
 /*
@@ -347,8 +348,6 @@ typedef struct {
     int8_t *row_quant;
 } EncoderScratch;
 
-static void log_vector_preview(const char *label, const float *values, size_t len);
-static void log_vector_stats(const char *label, const float *values, size_t len);
 
 /* Cosine similarity for parity comparison */
 static float cosine_similarity(const float *a, const float *b, size_t len) {
@@ -1159,6 +1158,41 @@ static inline float gelu_scalar(float x) {
     return s_gelu_lut[idx] + frac * (s_gelu_lut[idx + 1] - s_gelu_lut[idx]);
 }
 
+/* ------------------------------------------------------------------ */
+/* Exp LUT for softmax: exp(x) approximated via linear interpolation.  */
+/* Range [-8, 8] covers exp(-8)=0.00034 to exp(8)=2981.              */
+/* Beyond max: clamp to 8.0. Beyond min: return 0.0.                  */
+/* 256 entries gives 0.0625 resolution, <0.1% interpolation error.     */
+/* Built once at startup, stored in internal SRAM for fast access.      */
+/* ------------------------------------------------------------------ */
+#define EXP_LUT_SIZE  256
+#define EXP_LUT_MIN   (-8.0f)
+#define EXP_LUT_MAX   (8.0f)
+#define EXP_LUT_STEP  ((EXP_LUT_MAX - EXP_LUT_MIN) / (float)(EXP_LUT_SIZE - 1))
+
+static float s_exp_lut[EXP_LUT_SIZE];
+static bool s_exp_lut_ready = false;
+
+static void exp_lut_init(void) {
+    if (s_exp_lut_ready) return;
+    for (int i = 0; i < EXP_LUT_SIZE; i++) {
+        float x = EXP_LUT_MIN + (float)i * EXP_LUT_STEP;
+        s_exp_lut[i] = expf(x);
+    }
+    s_exp_lut_ready = true;
+}
+
+/* Clamped exp lookup with linear interpolation: x clamped to [-8, 8] */
+static inline float exp_lut_scalar(float x) {
+    if (x <= EXP_LUT_MIN) return 0.0f;
+    if (x >= EXP_LUT_MAX) return s_exp_lut[EXP_LUT_SIZE - 1];
+    float idx_f = (x - EXP_LUT_MIN) / EXP_LUT_STEP;
+    int idx = (int)idx_f;
+    if (idx >= EXP_LUT_SIZE - 1) return s_exp_lut[EXP_LUT_SIZE - 1];
+    float frac = idx_f - (float)idx;
+    return s_exp_lut[idx] + frac * (s_exp_lut[idx + 1] - s_exp_lut[idx]);
+}
+
 static void quantize_row_int8(const float *input, size_t len, int8_t *out, float *scale_out);
 
 static void softmax_inplace(float *x, size_t len) {
@@ -1171,13 +1205,14 @@ static void softmax_inplace(float *x, size_t len) {
 
     float sum = 0.0f;
     for (size_t i = 0; i < len; ++i) {
-        x[i] = expf(x[i] - max_value);
+        x[i] = exp_lut_scalar(x[i] - max_value);
         sum += x[i];
     }
 
     if (sum > 0.0f) {
+        float inv_sum = 1.0f / sum;
         for (size_t i = 0; i < len; ++i) {
-            x[i] /= sum;
+            x[i] *= inv_sum;
         }
     }
 }
@@ -1281,11 +1316,14 @@ static void bidirectional_attention_from_qkv(
     float *out
 ) {
     size_t inner_dim = num_heads * head_dim;
-    float scores[3] = {0.0f, 0.0f, 0.0f};
-
-    for (size_t token = 0; token < seq_len * inner_dim; ++token) {
-        out[token] = 0.0f;
+    float *scores = (float *)malloc(seq_len * sizeof(float));
+    if (!scores) {
+        memset(out, 0, seq_len * inner_dim * sizeof(float));
+        return;
     }
+
+    memset(out, 0, seq_len * inner_dim * sizeof(float));
+    float inv_sqrt_hd = 1.0f / sqrtf((float)head_dim);
 
     for (size_t head = 0; head < num_heads; ++head) {
         for (size_t q_token = 0; q_token < seq_len; ++q_token) {
@@ -1296,7 +1334,7 @@ static void bidirectional_attention_from_qkv(
                     size_t k_idx = k_token * 3U * inner_dim + inner_dim + head * head_dim + d;
                     dot += qkv[q_idx] * qkv[k_idx];
                 }
-                scores[k_token] = dot / sqrtf((float)head_dim);
+                scores[k_token] = dot * inv_sqrt_hd;
             }
 
             softmax_inplace(scores, seq_len);
@@ -1312,6 +1350,7 @@ static void bidirectional_attention_from_qkv(
             }
         }
     }
+    free(scores);
 }
 
 static void quantize_row_int8(
@@ -1648,10 +1687,10 @@ static void bidirectional_attention_separate(
     free(k_scales);
 }
 
-/* Maximum sequence length for the predictor (30 = 10 actions × 3 tokens each).
- * This is the maximum N for predict_rollout_fused (N=10 steps → 30 tokens).
- * Scratch buffers are allocated for this size so the fused function never reallocates. */
-#define MAX_PREDICTOR_SEQ_LEN  30U
+/* Maximum sequence length for the predictor (150 = 50 actions × 3 tokens).
+ * Scratch buffers are allocated for this size so the fused function never reallocates.
+ * 50-step fused rollouts supported: ~3MB total predictor scratch in internal SRAM. */
+#define MAX_PREDICTOR_SEQ_LEN  150U
 
 static bool allocate_scratch(PredictorModel *model) {
     PredictorScratch *scratch = &model->scratch;
@@ -2323,6 +2362,8 @@ static void encoder_layer_forward(
 
     int64_t t_attn = esp_timer_get_time();
 
+    /* Fused w_o output + bias + residual add: single loop, reads proj once + writes seq once.
+     * Saves: 1× proj write + 1× proj bias read+write = 2 PSRAM passes over 67KB. */
     int8linear_forward_into(
         &layer->w_o,
         scratch->attn_out,
@@ -2330,9 +2371,14 @@ static void encoder_layer_forward(
         scratch->row_quant,
         scratch->proj
     );
-    add_bias_inplace(scratch->proj, layer->o_bias.data, seq_len, hidden);
-    for (size_t i = 0; i < seq_len * hidden; ++i) {
-        seq[i] += scratch->proj[i];
+    {
+        const float *bias = layer->o_bias.data;
+        for (size_t t = 0; t < seq_len; ++t) {
+            size_t off = t * hidden;
+            for (size_t col = 0; col < hidden; ++col) {
+                seq[off + col] += scratch->proj[off + col] + bias[col];
+            }
+        }
     }
 
     int64_t t_oproj = esp_timer_get_time();
@@ -2346,9 +2392,18 @@ static void encoder_layer_forward(
         scratch->row_quant,
         scratch->ffn_inter
     );
-    add_bias_inplace(scratch->ffn_inter, layer->ffn_up_bias.data, seq_len, model->encoder_inter);
-    for (size_t i = 0; i < seq_len * model->encoder_inter; ++i) {
-        scratch->ffn_inter[i] = gelu_scalar(scratch->ffn_inter[i]);
+    /* Fused FFN_up bias + GELU: single loop, one PSRAM read + write per element.
+     * Eliminates separate add_bias_inplace pass (read+write) over ffn_inter. */
+    {
+        const float *bias = layer->ffn_up_bias.data;
+        size_t inter = model->encoder_inter;
+        for (size_t t = 0; t < seq_len; ++t) {
+            size_t off = t * inter;
+            for (size_t col = 0; col < inter; ++col) {
+                float v = scratch->ffn_inter[off + col] + bias[col];
+                scratch->ffn_inter[off + col] = gelu_scalar(v);
+            }
+        }
     }
     int8linear_forward_into(
         &layer->ffn_down,
@@ -2357,9 +2412,16 @@ static void encoder_layer_forward(
         scratch->row_quant,
         scratch->proj
     );
-    add_bias_inplace(scratch->proj, layer->ffn_down_bias.data, seq_len, hidden);
-    for (size_t i = 0; i < seq_len * hidden; ++i) {
-        seq[i] += scratch->proj[i];
+    /* Fused FFN_down bias + residual add: single loop, reads proj once + writes seq once.
+     * Eliminates separate add_bias_inplace pass over proj (67KB). */
+    {
+        const float *bias = layer->ffn_down_bias.data;
+        for (size_t t = 0; t < seq_len; ++t) {
+            size_t off = t * hidden;
+            for (size_t col = 0; col < hidden; ++col) {
+                seq[off + col] += scratch->proj[off + col] + bias[col];
+            }
+        }
     }
 
     int64_t t_ffn = esp_timer_get_time();
@@ -2401,28 +2463,18 @@ bool encode_image(
     patch_embed_image_into(model, image, height, width, scratch->x + patch_offset);
     int64_t t_pe_end = esp_timer_get_time();
     ESP_LOGI(TAG, "enc.patch_embed latency: %.1f ms", (double)(t_pe_end - t_pe_start) / 1000.0);
-    log_vector_preview("enc.patch0_embed", scratch->x + patch_offset, hidden);
-    log_vector_stats("enc.patch0_embed", scratch->x + patch_offset, hidden);
     for (size_t i = 0; i < seq_len * hidden && i < model->pos_embed.len; ++i) {
         scratch->x[i] += model->pos_embed.data[i];
     }
-    log_vector_preview("enc.patch0_with_pos", scratch->x + patch_offset, hidden);
-    log_vector_stats("enc.patch0_with_pos", scratch->x + patch_offset, hidden);
 
     for (size_t layer_index = 0; layer_index < model->encoder_layers; ++layer_index) {
         encoder_layer_forward(model, &model->encoder[layer_index], scratch->x);
-        if (layer_index == 0U) {
-            log_vector_preview("enc.layer0_cls", scratch->x, hidden);
-            log_vector_stats("enc.layer0_cls", scratch->x, hidden);
-        }
         if ((layer_index & 1U) == 1U) {
-            vTaskDelay(pdMS_TO_TICKS(1));
+            esp_task_wdt_reset();
         }
     }
 
     layernorm_into(scratch->x, model->final_norm_weight.data, 1U, hidden, scratch->cls_norm);
-    log_vector_preview("enc.cls_norm", scratch->cls_norm, hidden);
-    log_vector_stats("enc.cls_norm", scratch->cls_norm, hidden);
 
     /* Hybrid encoder output projection (Linear, no activation) */
     float *enc_out = scratch->cls_norm;
@@ -2502,18 +2554,27 @@ static void predictor_layer_forward(
     }
 
     q4linear_forward_into(&layer->mlp_up, scratch->modulated, seq_len, scratch->ffn_inter);
-    add_bias_inplace(scratch->ffn_inter, layer->mlp_up_bias.data, seq_len, inter);
-    for (size_t i = 0; i < seq_len * inter; ++i) {
-        scratch->ffn_inter[i] = gelu_scalar(scratch->ffn_inter[i]);
+    /* Fused mlp_up bias + GELU: single loop, reads ffn_inter once + writes once. */
+    {
+        const float *bias = layer->mlp_up_bias.data;
+        for (size_t t = 0; t < seq_len; ++t) {
+            size_t off = t * inter;
+            for (size_t col = 0; col < inter; ++col) {
+                float v = scratch->ffn_inter[off + col] + bias[col];
+                scratch->ffn_inter[off + col] = gelu_scalar(v);
+            }
+        }
     }
 
     q4linear_forward_into(&layer->mlp_down, scratch->ffn_inter, seq_len, scratch->proj);
-    add_bias_inplace(scratch->proj, layer->mlp_down_bias.data, seq_len, hidden);
-
-    for (size_t token = 0; token < seq_len; ++token) {
-        for (size_t i = 0; i < hidden; ++i) {
-            size_t idx = token * hidden + i;
-            seq[idx] += gate2[i] * scratch->proj[idx];
+    /* Fused mlp_down bias + gated residual: single loop over seq×hidden. */
+    {
+        const float *bias = layer->mlp_down_bias.data;
+        for (size_t token = 0; token < seq_len; ++token) {
+            size_t base = token * hidden;
+            for (size_t i = 0; i < hidden; ++i) {
+                seq[base + i] += gate2[i] * (scratch->proj[base + i] + bias[i]);
+            }
         }
     }
 }
@@ -2748,46 +2809,6 @@ static void fill_deterministic_vector(float *out, size_t len, uint32_t seed) {
     }
 }
 
-static void log_vector_preview(const char *label, const float *values, size_t len) {
-    char line[256];
-    int written = snprintf(line, sizeof(line), "%s len=%lu first=[", label, (unsigned long)len);
-    size_t preview = len < 8U ? len : 8U;
-    for (size_t i = 0; i < preview && written > 0 && (size_t)written < sizeof(line); ++i) {
-        written += snprintf(
-            line + written,
-            sizeof(line) - (size_t)written,
-            "%s%.6f",
-            i == 0U ? "" : ", ",
-            values[i]
-        );
-    }
-    snprintf(line + written, sizeof(line) - (size_t)written, "]");
-    ESP_LOGI(TAG, "%s", line);
-}
-
-static void log_vector_stats(const char *label, const float *values, size_t len) {
-    float sum = 0.0f;
-    float sq_sum = 0.0f;
-    float max_abs = 0.0f;
-    for (size_t i = 0; i < len; ++i) {
-        float value = values[i];
-        sum += value;
-        sq_sum += value * value;
-        float abs_value = fabsf(value);
-        if (abs_value > max_abs) {
-            max_abs = abs_value;
-        }
-    }
-    ESP_LOGI(
-        TAG,
-        "%s stats: sum=%.6f l2=%.6f max_abs=%.6f",
-        label,
-        sum,
-        sqrtf(sq_sum),
-        max_abs
-    );
-}
-
 static void probe_projection_head(
     const ProjectionHead *head,
     const float *input,
@@ -2805,21 +2826,14 @@ static void probe_projection_head(
         }
         size_t out_dim = current_dim == 0 ? 0 : layer->weight.len / current_dim;
         float *next = use_a ? scratch->proj_tmp_a : scratch->proj_tmp_b;
-        char label[64];
 
         matmul_t_into(current, layer->weight.data, 1U, current_dim, out_dim, next);
         add_bias_inplace(next, layer->bias.data, 1U, out_dim);
-        snprintf(label, sizeof(label), "probe.pred_proj_layer%lu_pre_gelu", (unsigned long)layer_index);
-        log_vector_preview(label, next, out_dim);
-        log_vector_stats(label, next, out_dim);
 
         if (layer_index + 1U < head->num_layers) {
             for (size_t i = 0; i < out_dim; ++i) {
                 next[i] = gelu_scalar(next[i]);
             }
-            snprintf(label, sizeof(label), "probe.pred_proj_layer%lu_post_gelu", (unsigned long)layer_index);
-            log_vector_preview(label, next, out_dim);
-            log_vector_stats(label, next, out_dim);
         }
 
         current = next;
@@ -2883,16 +2897,12 @@ static void run_full_encode_smoke(PredictorModel *model) {
     }
     int64_t elapsed_us = esp_timer_get_time() - started_us;
     ESP_LOGI(TAG, "encode latency: %.3f ms", (double)elapsed_us / 1000.0);
-    log_vector_preview("encode", latent, model->latent_dim);
-    log_vector_stats("encode", latent, model->latent_dim);
     vTaskDelay(pdMS_TO_TICKS(1));
 
     started_us = esp_timer_get_time();
     predict_next(model, latent, action, next);
     elapsed_us = esp_timer_get_time() - started_us;
     ESP_LOGI(TAG, "encode+predict_next latency: %.3f ms", (double)elapsed_us / 1000.0);
-    log_vector_preview("encode_predict_next", next, model->latent_dim);
-    log_vector_stats("encode_predict_next", next, model->latent_dim);
     vTaskDelay(pdMS_TO_TICKS(1));
 
     free(image);
@@ -2932,21 +2942,15 @@ static void run_predictor_smoke(PredictorModel *model) {
     fill_deterministic_vector(action, model->action_dim, 101U);
 
     encode_action(model, action, action_embed);
-    log_vector_preview("probe.action_embed", action_embed, model->latent_dim);
-    log_vector_stats("probe.action_embed", action_embed, model->latent_dim);
 
     if (model->cond_proj_weight.len != 0) {
         apply_cond_proj(model, action_embed, conditioning);
     } else {
         memcpy(conditioning, action_embed, model->predictor_hidden * sizeof(float));
     }
-    log_vector_preview("probe.conditioning", conditioning, model->predictor_hidden);
-    log_vector_stats("probe.conditioning", conditioning, model->predictor_hidden);
 
     q4linear_forward_into(&model->layers[0].adaln_linear, conditioning, 1U, layer0_adaln);
     add_bias_inplace(layer0_adaln, model->layers[0].adaln_bias.data, 1U, 6U * model->predictor_hidden);
-    log_vector_preview("probe.layer0_adaln", layer0_adaln, 6U * model->predictor_hidden);
-    log_vector_stats("probe.layer0_adaln", layer0_adaln, 6U * model->predictor_hidden);
 
     int64_t started_us = esp_timer_get_time();
     predict_next(model, state, action, next);
@@ -2957,34 +2961,61 @@ static void run_predictor_smoke(PredictorModel *model) {
         "predict_next latency: %.3f ms",
         (double)elapsed_us / 1000.0
     );
-    log_vector_preview("probe.final_target", model->scratch.normed + 2U * model->predictor_hidden, model->predictor_hidden);
-    log_vector_stats("probe.final_target", model->scratch.normed + 2U * model->predictor_hidden, model->predictor_hidden);
     probe_projection_head(
         &model->pred_proj,
         model->scratch.normed + 2U * model->predictor_hidden,
         model->predictor_hidden,
         &model->scratch
     );
-    log_vector_preview("predict_next", next, model->latent_dim);
-    log_vector_stats("predict_next", next, model->latent_dim);
     vTaskDelay(pdMS_TO_TICKS(1));
 
-    memcpy(rollout_state, state, model->latent_dim * sizeof(float));
-    float *prev_step = (float *)calloc_caps(model->latent_dim, sizeof(float), MALLOC_CAP_INTERNAL);
-    for (size_t step = 0; step < 3U; ++step) {
-        fill_deterministic_vector(action, model->action_dim, 101U + (uint32_t)step * 17U);
-        started_us = esp_timer_get_time();
-        predict_next(model, rollout_state, action, next);
-        elapsed_us = esp_timer_get_time() - started_us;
-        float cos = step > 0 ? cosine_similarity(prev_step, next, model->latent_dim) : 0.0f;
-        ESP_LOGI(TAG, "rollout step %lu: %.3f ms cos_vs_prev=%.6f",
-            (unsigned long)step, (double)elapsed_us / 1000.0, cos);
-        log_vector_stats("rollout", next, model->latent_dim);
-        memcpy(prev_step, next, model->latent_dim * sizeof(float));
-        memcpy(rollout_state, next, model->latent_dim * sizeof(float));
-        vTaskDelay(pdMS_TO_TICKS(1));
+    /* ----------------------------------------------------------
+     * 50-step fused rollout via predict_rollout_fused.
+     * All steps processed in one fused pass — much faster than
+     * calling predict_next N times.
+     * ---------------------------------------------------------- */
+    {
+        static const size_t ROLLOUT_STEPS = 50U;
+        float *rollout_actions = (float *)calloc_caps(
+            ROLLOUT_STEPS * model->action_dim, sizeof(float), MALLOC_CAP_INTERNAL);
+        float *rollout_outputs = (float *)calloc_caps(
+            ROLLOUT_STEPS * model->latent_dim, sizeof(float), MALLOC_CAP_INTERNAL);
+        float *prev_step = (float *)calloc_caps(
+            model->latent_dim, sizeof(float), MALLOC_CAP_INTERNAL);
+
+        if (rollout_actions && rollout_outputs && prev_step) {
+            /* Fill each action with deterministic values */
+            for (size_t s = 0; s < ROLLOUT_STEPS; ++s) {
+                fill_deterministic_vector(rollout_actions + s * model->action_dim,
+                                         model->action_dim, 101U + (uint32_t)s * 17U);
+            }
+            started_us = esp_timer_get_time();
+            predict_rollout_fused(model, state, rollout_actions,
+                                  ROLLOUT_STEPS, rollout_outputs);
+            elapsed_us = esp_timer_get_time() - started_us;
+            ESP_LOGI(TAG, "fused_rollout %lu steps: %.3f ms total (%.3f ms/step)",
+                (unsigned long)ROLLOUT_STEPS,
+                (double)elapsed_us / 1000.0,
+                (double)elapsed_us / 1000.0 / ROLLOUT_STEPS);
+
+            /* Per-step stats — stripped for serial output; full data available via HTTP */
+            for (size_t s = 0; s < ROLLOUT_STEPS; ++s) {
+                const float *step_out = rollout_outputs + s * model->latent_dim;
+                float cos = s > 0 ? cosine_similarity(prev_step, step_out, model->latent_dim) : 0.0f;
+                ESP_LOGI(TAG, "fused_rollout step %lu/%lu: cos=%.6f",
+                    (unsigned long)(s + 1), (unsigned long)ROLLOUT_STEPS, cos);
+                if (prev_step != NULL) memcpy(prev_step, step_out, model->latent_dim * sizeof(float));
+            }
+        } else {
+            ESP_LOGW(TAG, "Failed to allocate fused rollout buffers — skipping 50-step test");
+            free(rollout_actions);
+            free(rollout_outputs);
+            free(prev_step);
+        }
+        free(rollout_actions);
+        free(rollout_outputs);
+        free(prev_step);
     }
-    free(prev_step);
 
     free(state);
     free(action);
@@ -3101,10 +3132,13 @@ void app_main(void) {
     /* Initialize dual-core attention worker on Core 1 */
     dual_core_init();
 
-    /* Initialize GELU lookup table */
+    /* Initialize GELU and Exp lookup tables */
     gelu_lut_init();
+    exp_lut_init();
     ESP_LOGI(TAG, "GELU LUT initialized (%d entries, [%.1f, %.1f])",
              GELU_LUT_SIZE, GELU_LUT_MIN, GELU_LUT_MAX);
+    ESP_LOGI(TAG, "Exp LUT initialized (%d entries, [%.1f, %.1f])",
+             EXP_LUT_SIZE, EXP_LUT_MIN, EXP_LUT_MAX);
 
     /* Run smoke tests to get baseline timing */
     run_predictor_smoke(&model);
