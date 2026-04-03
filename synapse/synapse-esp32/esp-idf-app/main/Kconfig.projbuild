@@ -1,0 +1,8 @@
+menu "Synapse LEWM Config"
+    config LEWM_WIFI_SSID
+        string "WiFi SSID"
+        default "myssid"
+    config LEWM_WIFI_PASS
+        string "WiFi Password"
+        default "mypassword"
+endmenu

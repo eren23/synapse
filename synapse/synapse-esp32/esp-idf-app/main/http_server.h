@@ -16,6 +16,8 @@ typedef struct {
     size_t      action_dim;
     size_t      predictor_layers;
     bool        has_encoder;
+    size_t      image_size;
+    size_t      channels;
     char        mode[32];
 } ServerConfig;
 
