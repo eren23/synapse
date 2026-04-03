@@ -15,27 +15,22 @@ WiFi-connected HTTP inference server running on ESP32-P4 with embedded LEWM worl
 
 ### Benchmark Results
 
-**Slim model (96d latent, 4 encoder + 4 predictor layers, PIE + dual-core):**
+**Hybrid ALAL 64d model (4 encoder + 4 predictor layers, PIE + dual-core, optimized):**
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| predict_next | **583 ms** | 4 adaLN layers, Q4 PIE GEMV |
-| rollout (3 steps) | **1,748 ms** | ~583 ms/step |
-| encode(image) | **6,416 ms** | 4 ViT layers, dual-core attention, PIE INT8 |
+| predict_next | **143 ms** | 4 adaLN layers, Q4 PIE GEMV, fused ops |
+| encode(image) | **782 ms** | 4 hybrid ViT layers (A/L/A/L), exp LUT, fused FFN |
+| encode + predict | **925 ms** | Full pipeline |
+| 50-step fused rollout | **119 s** | 2.4s/step (150-token bidirectional attention) |
 
-**Full model (192d, 6+6 layers, PIE + dual-core):**
+**Previous configurations (for reference):**
 
-| Operation | Latency | Speedup vs scalar baseline |
-|-----------|---------|---------------------------|
-| predict_next | 828 ms | 3.7x (was 3,037 ms) |
-| encode(image) | ~10,000 ms | 8.2x (was 81,818 ms) |
-
-**Scalar baseline (200 MHz PSRAM, no PIE):**
-
-| Operation | Latency |
-|-----------|---------|
-| predict_next | 3,009 ms |
-| encode(image) | 70,913 ms |
+| Config | predict_next | encode |
+|--------|-------------|--------|
+| 96d slim (2026-03-31) | 583 ms | 6,416 ms |
+| 64d hybrid ALAL (2026-04-01) | 152 ms | 922 ms |
+| 64d hybrid + fused ops (2026-04-03) | **143 ms** | **782 ms** |
 
 ### Parity (board vs Rust host reference)
 

@@ -1225,12 +1225,17 @@ static void q4linear_forward_into(
 ) {
     memset(out, 0, m * linear->out_features * sizeof(float));
 
-    /* Quantize each input row to INT8 once upfront */
+    /* Quantize each input row to INT8 once upfront.
+     * Aligned to 16 bytes for PIE SIMD loads (esp.vld.128.ip).
+     * Try internal SRAM first, fall back to PSRAM. */
     size_t in_padded = (linear->in_features + 31U) & ~31U;
-    int8_t *x_i8 = (int8_t *)heap_caps_malloc(
-        m * in_padded, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    float *x_scales = (float *)heap_caps_malloc(
-        m * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    int8_t *x_i8 = (int8_t *)heap_caps_aligned_alloc(
+        16, m * in_padded, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!x_i8) {
+        x_i8 = (int8_t *)heap_caps_aligned_alloc(
+            16, m * in_padded, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    float *x_scales = (float *)malloc(m * sizeof(float));
 
     if (x_i8 && x_scales) {
         for (size_t batch = 0; batch < m; ++batch) {
@@ -2664,7 +2669,7 @@ void predict_next(
  *   model      -- loaded LEWM model
  *   z_start    -- [latent_dim] initial latent state
  *   actions    -- [num_steps][action_dim] action vectors
- *   num_steps  -- number of rollout steps (must be <= 10 for MAX_PREDICTOR_SEQ_LEN=30)
+ *   num_steps  -- number of rollout steps (must be <= 50 for MAX_PREDICTOR_SEQ_LEN=150)
  *   out        -- [num_steps][latent_dim] output buffer (caller-allocated)
  */
 void predict_rollout_fused(
@@ -3008,9 +3013,6 @@ static void run_predictor_smoke(PredictorModel *model) {
             }
         } else {
             ESP_LOGW(TAG, "Failed to allocate fused rollout buffers — skipping 50-step test");
-            free(rollout_actions);
-            free(rollout_outputs);
-            free(prev_step);
         }
         free(rollout_actions);
         free(rollout_outputs);

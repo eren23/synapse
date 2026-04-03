@@ -1,6 +1,6 @@
 # ESP32-P4 Porting Status
 
-Last updated: 2026-03-31
+Last updated: 2026-04-03
 
 ## Board
 
@@ -48,15 +48,24 @@ Last updated: 2026-03-31
 | 64d hybrid ALAL | 152 ms | 1,392 ms | 1,852 ms | 3.9 MB |
 | + skip softmax L blocks | 152 ms | 1,364 ms | 1,824 ms | 3.9 MB |
 | + PIE batch patch embed | 152 ms | 922 ms | 1,382 ms | 3.9 MB |
-| + kernel-trick attention | **152 ms** | **922 ms** | **1,382 ms** | **3.9 MB** |
+| + kernel-trick attention | 152 ms | 922 ms | 1,382 ms | 3.9 MB |
+| + fused ops + exp LUT (2026-04-03) | **143 ms** | **782 ms** | **1,211 ms** | **3.9 MB** |
 
-Encode breakdown (hybrid ALAL, final):
-- Patch embedding: 50ms (was 470ms, 9.4x faster via INT8 batch GEMM)
-- Layer 0 (A, softmax): 215ms (norm 2, qkv 12, attn 94, oproj 7, ffn 100)
-- Layer 1 (L, kernel-trick): 178ms (norm 2, qkv 11, attn 58, oproj 7, ffn 100)
-- Layer 2 (A, softmax): 215ms
-- Layer 3 (L, kernel-trick): 178ms
-- Overhead (norms, projectors): ~86ms
+Encode breakdown (hybrid ALAL, after optimization):
+- Patch embedding: 52ms (INT8 batch GEMM)
+- Layer 0 (A, softmax): 191ms (norm 2, qkv 11, attn 82, oproj 7, ffn 89)
+- Layer 1 (L, kernel-trick): 161ms (norm 2, qkv 10, attn 53, oproj 6, ffn 89)
+- Layer 2 (A, softmax): 192ms
+- Layer 3 (L, kernel-trick): 161ms
+- Overhead (norms, projectors): ~25ms
+
+Optimizations applied (2026-04-03):
+- Exp LUT (256-entry) replacing expf() in softmax and elu_plus1
+- Fused bias+GELU and bias+residual loops (encoder + predictor)
+- Nested (token, col) loops replacing i%dim modulo
+- Reciprocal multiply in softmax (1 div instead of N)
+- -O3 compiler flag, vTaskDelay→esp_task_wdt_reset
+- 50-step fused rollout (MAX_PREDICTOR_SEQ_LEN=150)
 
 ## What Does NOT Work
 
