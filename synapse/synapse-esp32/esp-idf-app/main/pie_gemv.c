@@ -46,6 +46,7 @@ int32_t pie_dot_int8(const int8_t *a, const int8_t *b, size_t len) {
  */
 #define PIE_CHUNK_ELEMS 256
 
+__attribute__((optimize("-O2")))
 static int32_t pie_dot_chunk(const int8_t *a, const int8_t *b, size_t len16) {
     /* len16 must be a multiple of 16 and <= PIE_CHUNK_ELEMS */
     int32_t partial;
@@ -77,6 +78,7 @@ static int32_t pie_dot_chunk(const int8_t *a, const int8_t *b, size_t len16) {
     return partial;
 }
 
+__attribute__((optimize("-O2")))
 int32_t pie_dot_int8(const int8_t *a, const int8_t *b, size_t len) {
     int32_t result = 0;
     size_t done = 0;

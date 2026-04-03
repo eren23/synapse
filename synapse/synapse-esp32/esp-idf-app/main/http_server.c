@@ -20,37 +20,11 @@
 #include "cJSON.h"
 
 #include "http_server.h"
+#include "inference.h"
+#include "lewm_types.h"
 #include "wifi.h"
 
 static const char *TAG = "http-server";
-
-/* ------------------------------------------------------------------ */
-/* Forward-declared PredictorModel: we never dereference this pointer  */
-/* directly -- all access goes through the extern helpers below.       */
-/* ------------------------------------------------------------------ */
-typedef struct PredictorModel PredictorModel;
-
-/*
- * These functions are defined in app_main.c but made non-static so the
- * HTTP server can call them.  The PredictorModel pointer is cast from
- * the opaque void* stored in ServerConfig.
- */
-extern void predict_next(PredictorModel *model,
-                         const float *state,
-                         const float *action,
-                         float *out);
-
-extern void predict_rollout_fused(PredictorModel *model,
-                                  const float *z_start,
-                                  const float *actions,
-                                  size_t num_steps,
-                                  float *out);
-
-extern bool encode_image(PredictorModel *model,
-                         const float *image,
-                         size_t height,
-                         size_t width,
-                         float *out);
 
 /* ------------------------------------------------------------------ */
 /* Embedded HTML dashboard                                             */
@@ -473,11 +447,11 @@ static esp_err_t rollout_fused_handler(httpd_req_t *req)
     size_t adim = s_cfg.action_dim;
 
     int num_steps = cJSON_GetArraySize(actions_arr);
-    if (num_steps <= 0 || num_steps > 10) {
-        /* Hard limit: MAX_PREDICTOR_SEQ_LEN = 30, and num_steps * 3 <= 30 */
+    int max_steps = (int)(MAX_PREDICTOR_SEQ_LEN / 3U);
+    if (num_steps <= 0 || num_steps > max_steps) {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "Invalid steps (must be 1..10)");
+                            "Invalid steps count");
         return ESP_FAIL;
     }
 
@@ -574,9 +548,9 @@ static esp_err_t encode_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    /* Read height/width from query params (default 224) */
-    size_t height = 224;
-    size_t width  = 224;
+    /* Read height/width from query params (default from model config) */
+    size_t height = s_cfg.image_size;
+    size_t width  = s_cfg.image_size;
 
     char param_buf[16];
     if (httpd_req_get_url_query_str(req, param_buf,
@@ -598,14 +572,15 @@ static esp_err_t encode_handler(httpd_req_t *req)
         free(qstr);
     }
 
-    /* Expected body: height * width * 3 * sizeof(float) raw LE f32 */
-    size_t expected = height * width * 3 * sizeof(float);
+    /* Expected body: height * width * channels * sizeof(float) raw LE f32 */
+    size_t ch = s_cfg.channels > 0 ? s_cfg.channels : 3;
+    size_t expected = height * width * ch * sizeof(float);
     int total = req->content_len;
     if (total <= 0 || (size_t)total != expected) {
         ESP_LOGE(TAG, "encode: expected %zu bytes, got %d",
                  expected, total);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "Body size does not match height*width*3*4");
+                            "Body size does not match height*width*channels*4");
         return ESP_FAIL;
     }
 

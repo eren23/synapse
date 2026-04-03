@@ -15,17 +15,25 @@ This document details every optimization technique implemented for LEWM inferenc
 | 7 | Dual-Core Attention | Encoder attention | ~20% layer speedup | Done |
 | 8 | Dual-Core FFN | Encoder FFN | -150 ms/layer (projected) | Roadmap |
 | 9 | Shared QKV Quantization | Encoder QKV | -10 ms/layer | Done |
-| 10 | Compiler -O2 | Everything | -50 ms/layer (projected) | Roadmap |
+| 10 | Compiler -O3 | Everything | ~5% overall | Done |
 | 11 | Batch INT8 Patch Embedding | Encoder patch embed | 9.4x (470->50ms) | Done |
 | 12 | Kernel-Trick Linear Attention | Hybrid L blocks | 1.3x (76->58ms) | Done |
 | 13 | Meta Token Support | Hybrid encoder | N/A (architectural) | Done |
 | 14 | Encoder Output Projection | Hybrid encoder | N/A (architectural) | Done |
+| 15 | Exp LUT for Softmax | A-block attention | 95->82ms/layer | Done |
+| 16 | Fused Bias+GELU/Residual | Encoder + predictor FFN | 101->89ms/layer | Done |
+| 17 | Reciprocal Softmax | All softmax calls | 1 div vs N divs | Done |
+| 18 | Nested Loop (no modulo) | Fused ops | Eliminates RISC-V div | Done |
+| 19 | Aligned PIE Alloc | Q4 predictor | Fixes non-determinism | Done |
+| 20 | Memory Barriers | Dual-core dispatch | Correctness fix | Done |
 
 Combined result on 96d slim: **81,818 ms -> 6,416 ms encode** (12.8x speedup).
 
 Combined result on 64d hybrid ALAL: **6,416 ms -> 922 ms encode** (7.0x additional speedup).
 
-Total from baseline to optimized hybrid: **81,818 ms -> 922 ms** (88.7x speedup).
+Combined result with fused ops (2026-04-03): **922 ms -> 817 ms encode** (13% additional).
+
+Total from baseline to final optimized hybrid: **81,818 ms -> 817 ms** (100x speedup).
 
 ## PIE SIMD Architecture
 
@@ -385,7 +393,7 @@ I (pie-test) All PIE self-tests passed
 | All PIE optimizations | 583 ms | 7,950 ms |
 | **+Dual-core attention** | **583 ms** | **6,416 ms** |
 
-### Encoder Layer Breakdown (Slim, Dual-Core)
+### Encoder Layer Breakdown (Slim 96d, Dual-Core)
 
 | Component | Time | % of Layer |
 |-----------|------|------------|
@@ -396,6 +404,17 @@ I (pie-test) All PIE self-tests passed
 | FFN (PIE INT8 tiled + GELU LUT) | 384 ms | 38.5% |
 | **Layer total** | **998 ms** | |
 
+### Encoder Layer Breakdown (Hybrid ALAL 64d, Fused Ops, 2026-04-03)
+
+| Component | A-block | L-block |
+|-----------|---------|---------|
+| LayerNorm | 2 ms | 2 ms |
+| QKV (PIE INT8) | 11 ms | 10 ms |
+| Attention | 82 ms (softmax + exp LUT) | 53 ms (kernel-trick) |
+| O projection | 7 ms | 6 ms |
+| FFN (fused bias+GELU) | 89 ms | 89 ms |
+| **Layer total** | **191 ms** | **161 ms** |
+
 ### Speedup Summary
 
 | Model | Operation | Baseline | Optimized | Speedup |
@@ -403,28 +422,27 @@ I (pie-test) All PIE self-tests passed
 | Full 192d | predict_next | 3,037 ms | 828 ms | **3.7x** |
 | Full 192d | encode | 81,818 ms | ~10,000 ms | **8.2x** |
 | Slim 96d | predict_next | ~2,332 ms | 583 ms | **4.0x** |
-| Slim 96d | encode | ~12,832 ms | 6,416 ms | **2.0x** (from PIE baseline) |
+| Slim 96d | encode | ~12,832 ms | 6,416 ms | **2.0x** |
+| **Hybrid ALAL 64d** | **predict_next** | — | **145 ms** | — |
+| **Hybrid ALAL 64d** | **encode** | — | **817 ms** | **100x vs scalar baseline** |
 
 ## Performance Roadmap
 
-### Kernel-Level Optimizations
+### Remaining Kernel-Level Optimizations
 
-| Optimization | Target Savings/Layer | Complexity | Description |
-|-------------|---------------------|------------|-------------|
-| FFN dual-core | -150 ms | Easy | Same fork-join as attention. Split 768 output features. |
-| V weighting PIE | -100 ms | Medium | Quantize V per head to INT8, PIE dot for scores x V weighted sum. |
-| Compiler -O2 | -50 ms | Easy | `CONFIG_COMPILER_OPTIMIZATION_PERF=y`. Currently `-Og`. |
-| DMA weight prefetch | -50 ms | Hard | GDMA-AXI prefetch next layer while computing current. |
-| Shared QKV quantization | -10 ms | Easy | Already done. |
-| **Combined** | **-360 ms/layer** | | **~5,000 ms encode (projected)** |
+| Optimization | Target Savings | Complexity | Description |
+|-------------|---------------|------------|-------------|
+| V weighting PIE | -20 ms/A-layer | Medium | Quantize V per head to INT8, PIE dot for scores x V weighted sum. |
+| DMA weight prefetch | -10 ms/layer | Hard | GDMA-AXI prefetch next layer while computing current. |
+
+Most kernel optimizations are now done. Remaining gains require architectural changes.
 
 ### Model-Level Optimizations
 
 | Optimization | Target | Description |
 |-------------|--------|-------------|
-| 48d/2e/2p slim | ~3s encode, ~300ms predict | Half the layers. Needs W&B export. |
+| 48d/2e/2p slim | ~500ms total | Smaller latent dim. Needs W&B export + re-flash. |
 | Patch pruning | 4x fewer attention ops | Keep 128 of 256 patches. No retraining needed. |
-| Linear attention | Eliminate O(n^2) bottleneck | Replace full attention with kernel approximation. Needs retraining. |
 
 ### The Attention Bottleneck
 

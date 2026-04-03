@@ -32,3 +32,12 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 # Larger TCP buffers for image upload (602KB binary)
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
 CONFIG_LWIP_TCP_WND_DEFAULT=32768
+
+# WiFi credentials (set via menuconfig or override here)
+# Override these with real credentials before building:
+#   idf.py menuconfig → Synapse LEWM Config
+#   or create sdkconfig.credentials (gitignored) with:
+#     CONFIG_LEWM_WIFI_SSID="YourSSID"
+#     CONFIG_LEWM_WIFI_PASS="YourPassword"
+CONFIG_LEWM_WIFI_SSID="changeme"
+CONFIG_LEWM_WIFI_PASS="changeme"

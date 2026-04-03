@@ -65,14 +65,15 @@ Action (2d) -> Conv1D -> MLP(act_dim -> 4*latent -> latent) -> Action Embedding
 
 | Variant | Latent Dim | Encoder Layers | Predictor Layers | Format | Size | predict_next | encode |
 |---------|-----------|----------------|-----------------|--------|------|-------------|--------|
+| **Hybrid ALAL 64d** | 64 | 4 (ALAL) | 4 | INT8+Q4 | 3.9 MB | **145 ms** | **817 ms** |
 | **Full 192d** | 192 | 6 | 6 | INT8+Q4 | ~10 MB | 828 ms | ~10,000 ms |
 | **Slim 96d full** | 96 | 4 | 4 | INT8+Q4 | ~5 MB | 583 ms | 6,416 ms |
 | **Slim 96d Q4** | 96 | 4 | 4 | Q4-pred only | ~3 MB | 583 ms | N/A |
 | **Slim 48d** | 48 | 2 | 2 | INT8+Q4 | ~2 MB | ~300 ms* | ~3,000 ms* |
-| **WANDA 20%** | 192 | 6 | 6 | Pruned Q4 | ~8 MB | ~700 ms | N/A |
-| **WANDA 40%** | 192 | 6 | 6 | Pruned Q4 | ~6 MB | ~600 ms | N/A |
 
 \* Projected, not yet tested on hardware.
+
+The **Hybrid ALAL 64d** is the recommended variant — smallest binary, fastest inference, with fused ops + exp LUT + aligned PIE alloc (2026-04-03).
 
 The config is parsed dynamically from the LQ40 header -- any variant works without code changes.
 
@@ -302,7 +303,7 @@ Total PSRAM available after model load: ~22-27 MB free (of 32 MB).
 5. Output projection -> next_latent
 ```
 
-Timing (slim 96d, PIE): **583 ms** per step.
+Timing (hybrid ALAL 64d, PIE + fused ops): **145 ms** per step.
 
 ### encode(image)
 
@@ -326,7 +327,7 @@ Timing (slim 96d, PIE): **583 ms** per step.
 5. Extract CLS token -> LayerNorm -> Projection head -> latent
 ```
 
-Timing (slim 96d, PIE + dual-core): **6,416 ms**.
+Timing (hybrid ALAL 64d, PIE + dual-core + fused ops): **817 ms**.
 
 ### rollout(latent, actions[])
 
@@ -339,7 +340,7 @@ for i in 0..N:
 return [latent_1, latent_2, ..., latent_N]
 ```
 
-Timing: **~583 ms x N steps** (e.g., 1,748 ms for 3 steps).
+Timing: **~145 ms x N steps** (e.g., 435 ms for 3 steps).
 
 ### rollout_fused(latent, actions[])
 
@@ -357,7 +358,7 @@ runs all predictor layers **once**. Returns one predicted latent state per actio
 fused uses bidirectional attention across all steps (parallel future hypotheses), while
 sequential is strictly autoregressive. Step-0 is identical (same z_start + a0, cos_sim = 1.000).
 
-**ESP32 limitation:** Currently limited to **10 steps max** (`MAX_PREDICTOR_SEQ_LEN=30`).
+**ESP32 limitation:** Currently limited to **50 steps max** (`MAX_PREDICTOR_SEQ_LEN=150`).
 
 | Variant | Sequential 3-step | Fused 3-step | Speedup |
 |---------|------------------|--------------|---------|

@@ -357,8 +357,31 @@ impl FullyQuantizedLeWM {
         let cls = &x[..hidden];
         let normed = layernorm(cls, &self.final_norm_weight, 1e-6, hidden);
 
+        // Apply encoder output projection if present (hybrid architecture)
+        let enc_out = if !self.enc_proj_weight.is_empty() {
+            let out_dim = if !self.enc_proj_bias.is_empty() {
+                self.enc_proj_bias.len()
+            } else {
+                hidden
+            };
+            let mut proj = vec![0.0f32; out_dim];
+            for j in 0..out_dim {
+                let mut sum = 0.0f32;
+                for k in 0..hidden {
+                    sum += normed[k] * self.enc_proj_weight[j * hidden + k];
+                }
+                if j < self.enc_proj_bias.len() {
+                    sum += self.enc_proj_bias[j];
+                }
+                proj[j] = sum;
+            }
+            proj
+        } else {
+            normed
+        };
+
         // Project to predictor space
-        self.projector.forward(&normed)
+        self.projector.forward(&enc_out)
     }
 
     /// Predict next latent using Q4 predictor.
@@ -868,6 +891,7 @@ impl Q4FullLeWM {
         }
         let cls = &x[..hidden];
         let normed = layernorm(cls, &self.final_norm_weight, 1e-6, hidden);
+        // Note: Q4FullLeWM does not have enc_proj fields — skip for this path
         self.projector.forward(&normed)
     }
 
