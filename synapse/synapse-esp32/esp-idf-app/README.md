@@ -73,12 +73,15 @@ cd synapse/synapse-esp32/esp-idf-app
 cp ../../web/lewm-compress-demo/lewm-full.bin main/model.bin
 # Or for slim: cp ../../web/lewm-compress-demo/lewm-slim-96d-q4.bin main/model.bin
 
-# 4. Set WiFi credentials in main/app_main.c
-#    Edit WIFI_SSID and WIFI_PASS defines near bottom of file
+# 4. Set WiFi credentials
+#    Create sdkconfig.credentials (gitignored) with your WiFi creds:
+echo 'CONFIG_LEWM_WIFI_SSID="YourSSID"' > sdkconfig.credentials
+echo 'CONFIG_LEWM_WIFI_PASS="YourPassword"' >> sdkconfig.credentials
 
 # 5. Clean build (first time or after sdkconfig changes)
 rm -f sdkconfig
 idf.py set-target esp32p4
+cat sdkconfig.credentials >> sdkconfig   # inject WiFi creds
 idf.py build
 
 # 6. Flash and monitor
