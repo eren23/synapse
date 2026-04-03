@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::config::ModelConfig;
 use crate::models::ssm::mamba::config::MambaConfig;
 use crate::models::ssm::rwkv::config::RwkvConfig;
-use crate::models::ssm::hybrid::config::HybridConfig;
+use crate::models::ssm::hybrid::config::{HybridConfig, LayerKind};
 use crate::weight_loading::WeightError;
 
 /// Detect the `model_type` field from a HuggingFace `config.json`.
@@ -216,6 +216,23 @@ pub(crate) fn minimal_config_for_hybrid(name: &str, hybrid: &HybridConfig) -> Mo
     }
 }
 
+/// Parse the `layer_types` array from LFM2.5-style config.json.
+///
+/// Returns `None` if the field is absent (falls back to interval-based pattern).
+fn parse_layer_types(json: &serde_json::Value) -> Option<Vec<LayerKind>> {
+    let arr = json["layer_types"].as_array()?;
+    let types: Vec<LayerKind> = arr
+        .iter()
+        .map(|v| match v.as_str().unwrap_or("") {
+            "conv" => LayerKind::LivConv,
+            "full_attention" | "attention" | "gqa" => LayerKind::Gqa,
+            "deltanet" | "delta_net" => LayerKind::DeltaNet,
+            other => panic!("unknown layer_type in config.json: {other:?}"),
+        })
+        .collect();
+    Some(types)
+}
+
 /// Parse a `HybridConfig` from a HuggingFace-style `config.json`.
 pub(crate) fn parse_hybrid_config(config_path: &Path) -> Result<HybridConfig, Box<dyn std::error::Error>> {
     let file = std::fs::File::open(config_path)?;
@@ -256,8 +273,22 @@ pub(crate) fn parse_hybrid_config(config_path: &Path) -> Result<HybridConfig, Bo
             .as_u64()
             .or(json["conv_kernel_size"].as_u64())
             .unwrap_or(4) as usize,
+        livconv_inner_size: json["conv_dim"]
+            .as_u64()
+            .unwrap_or(hidden_size as u64) as usize,
+        livconv_kernel_size: json["conv_L_cache"]
+            .as_u64()
+            .unwrap_or(3) as usize,
         intermediate_size: json["intermediate_size"].as_u64().unwrap_or(3072) as usize,
         full_attention_interval,
+        layer_types: parse_layer_types(&json),
+        rope_theta: json["rope_parameters"]["rope_theta"]
+            .as_f64()
+            .or(json["rope_theta"].as_f64())
+            .unwrap_or(10000.0) as f32,
+        tie_embedding: json["tie_embedding"].as_bool()
+            .or(json["tie_word_embeddings"].as_bool())
+            .unwrap_or(false),
     })
 }
 

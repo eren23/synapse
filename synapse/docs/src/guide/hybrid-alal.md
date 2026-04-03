@@ -104,6 +104,8 @@ idf.py build && idf.py -p /dev/cu.usbmodem* flash
 
 ## ESP32-P4 Performance
 
+Historical optimization milestone:
+
 | Metric | 96d ViT (old) | 64d Hybrid ALAL |
 |--------|--------------|-----------------|
 | Binary size | 9.8 MB | **3.9 MB** |
@@ -111,6 +113,20 @@ idf.py build && idf.py -p /dev/cu.usbmodem* flash
 | encode | 6,416 ms | **922 ms** |
 | 3-step rollout | 1,748 ms | **460 ms** |
 | Free PSRAM | 24.4 MB | 29.5 MB |
+
+Current live board medians (April 3, 2026, 5 HTTP trials on the same 64d full blob):
+
+| Metric | Live ESP32-P4 |
+|--------|---------------|
+| predict_next | **145.56 ms** |
+| encode | **832.93 ms** |
+| encode + 1 predict | **978.21 ms** |
+| 3-step rollout (`/rollout`) | **436.36 ms** |
+| encode + 3-step rollout | **1,270.12 ms** |
+| 3-step rollout_fused (`/rollout_fused`) | **275.00 ms** |
+| encode + 3-step rollout_fused | **1,108.22 ms** |
+
+`/rollout` matches chained `/predict` numerically. `/rollout_fused` is a faster parallel-futures path and diverges from sequential rollout after step 0 by design.
 
 ### Encoder layer breakdown
 

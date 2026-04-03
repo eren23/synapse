@@ -33,6 +33,7 @@ impl InferenceEngine {
             "mamba" | "mamba2" => return Self::from_pretrained_mamba(model_path),
             "rwkv" | "rwkv7" => return Self::from_pretrained_rwkv(model_path),
             "qwen3_5" | "qwen3.5" => return Self::from_pretrained_hybrid(model_path),
+            "lfm2" => return Self::from_pretrained_lfm(model_path),
             _ => {
                 // Also detect hybrid from config fields
                 let config_path = model_path.join("config.json");
@@ -285,6 +286,62 @@ impl InferenceEngine {
 
     /// Load a Qwen3.5-style hybrid model from a HuggingFace-style directory.
     ///
+    /// Load an LFM2.5 model from GGUF or safetensors.
+    ///
+    /// Detects GGUF files by the `.gguf` extension, otherwise falls back
+    /// to safetensors with Qwen-style names routed through `from_weights`.
+    pub fn from_pretrained_lfm(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
+        let hybrid_config = parse_hybrid_config(&model_path.join("config.json"))?;
+
+        // Try GGUF first (most common for LFM2.5)
+        let gguf_path = find_gguf_file(model_path);
+        let weights = if let Some(gp) = gguf_path {
+            load_gguf(&gp)?
+        } else if model_path.join("model.safetensors.index.json").exists() {
+            load_safetensors_sharded(model_path)?
+        } else {
+            let checkpoint = find_checkpoint_file(model_path)?;
+            load_safetensors(&checkpoint)?
+        };
+
+        let max_kv_seq = 4096;
+        let hybrid_model = HybridModel::from_weights_lfm25(hybrid_config.clone(), &weights, max_kv_seq)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+        let tokenizer = Tokenizer::from_model_dir(model_path).ok();
+
+        let chat_template = {
+            let tokenizer_config_path = model_path.join("tokenizer_config.json");
+            if tokenizer_config_path.exists() {
+                ChatTemplate::from_tokenizer_config(&tokenizer_config_path).ok()
+            } else {
+                None
+            }
+        };
+
+        let config = minimal_config_for_hybrid("lfm2", &hybrid_config);
+        let model_adapter_kind = ModelAdapterKind::from_model_name("lfm2");
+        let model = ModelBuilder::from_config(&config);
+
+        #[cfg(feature = "metal")]
+        let backend = crate::metal::ComputeBackend::auto();
+
+        Ok(Self {
+            model,
+            quantized_model: None,
+            ternary_model: None,
+            ssm_model: Some(Box::new(hybrid_model)),
+            config,
+            model_adapter_kind,
+            tokenizer,
+            chat_template,
+            #[cfg(feature = "metal")]
+            backend,
+            #[cfg(feature = "metal")]
+            metal_model_bufs_cell: None,
+        })
+    }
+
     /// Reads `config.json` for `HybridConfig`, loads safetensors weights,
     /// and creates a `HybridModel` stored as `ssm_model`.
     pub fn from_pretrained_hybrid(model_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
@@ -334,4 +391,16 @@ impl InferenceEngine {
             metal_model_bufs_cell: None,
         })
     }
+}
+
+/// Find the first `.gguf` file in a directory.
+fn find_gguf_file(dir: &Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir).ok()?.find_map(|entry| {
+        let path = entry.ok()?.path();
+        if path.extension().map_or(false, |e| e == "gguf") {
+            Some(path)
+        } else {
+            None
+        }
+    })
 }

@@ -2,7 +2,7 @@
 
 WiFi-connected HTTP inference server running on ESP32-P4 with embedded LEWM world model. Serves a browser companion dashboard and exposes JSON API endpoints for predict, rollout, and encode.
 
-## Current Status (2026-03-31)
+## Current Status (2026-04-03)
 
 **Working on real Waveshare ESP32-P4-WIFI6 hardware:**
 
@@ -10,21 +10,36 @@ WiFi-connected HTTP inference server running on ESP32-P4 with embedded LEWM worl
 - WiFi connected via ESP32-C6 companion chip (esp_hosted + esp_wifi_remote over SDIO)
 - HTTP server on port 80 with companion web dashboard
 - PSRAM running at 200 MHz (requires `CONFIG_IDF_EXPERIMENTAL_FEATURES=y`)
-- 32 MB PSRAM detected, ~33.5 MB free after model load
-- Smoke tests run on boot: predict_next, rollout, encode, encode+predict
+- 32 MB PSRAM detected, ~33.5 MB free after model load; live idle heap/PSRAM after server start is ~25.9 MB / 25.7 MB
+- Smoke tests run on boot: predict_next, fused rollout, encode, predict-after-encode
+- Live hardware validated over HTTP on April 3, 2026 using the deterministic smoke-test seeds
 
 ### Benchmark Results
 
-**Hybrid ALAL 64d model (4 encoder + 4 predictor layers, PIE + dual-core, optimized):**
+**Live ESP32-P4 HTTP endpoint medians (5 trials, Hybrid ALAL 64d full blob):**
 
 | Operation | Latency | Notes |
 |-----------|---------|-------|
-| predict_next | **143 ms** | 4 adaLN layers, Q4 PIE GEMV, fused ops |
-| encode(image) | **782 ms** | 4 hybrid ViT layers (A/L/A/L), exp LUT, fused FFN |
-| encode + predict | **925 ms** | Full pipeline |
-| 50-step fused rollout | **119 s** | 2.4s/step (150-token bidirectional attention) |
+| `predict_next` | **145.56 ms** | Single `/predict` call on live board |
+| `encode(image)` | **832.93 ms** | Single `/encode` call on live board |
+| `encode + 1 predict` | **978.21 ms** | `encode` + first chained `/predict` |
+| `3-step rollout` | **436.36 ms** | `/rollout`, true autoregressive path |
+| `encode + 3-step rollout` | **1,270.12 ms** | `encode` + `/rollout` |
+| `3-step rollout_fused` | **275.00 ms** | `/rollout_fused`, parallel-futures path |
+| `encode + 3-step rollout_fused` | **1,108.22 ms** | Faster than sequential, still above 1 s |
 
-**Previous configurations (for reference):**
+Sequential `/rollout` matches chained `/predict` numerically on-device. `/rollout_fused` is intentionally a different workload: step 1 is close, later steps diverge because all futures share the same start state and one conditioning vector.
+
+**Rust host reference (same `model.bin`, local dev build):**
+
+| Operation | Latency | Notes |
+|-----------|---------|-------|
+| `encode(image)` | **890.22 ms** | `cargo run ... lewm_encode_probe` |
+| `predict_next` from encoded latent | **46.31 ms** | Host dev profile, not optimized benchmark |
+| `predict_next` from seeded latent | **69.45 ms** | `cargo run ... lewm_golden --steps 3` |
+| `3-step rollout` | **144.52 ms** | Host dev profile |
+
+**Historical smoke-test milestones (for reference):**
 
 | Config | predict_next | encode |
 |--------|-------------|--------|
@@ -49,8 +64,9 @@ All endpoints include CORS headers for browser access.
 | GET | `/status` | Model info, memory, WiFi IP (JSON) |
 | POST | `/predict` | `{latent:[...], action:[...]}` → `{next_latent:[...], latency_ms}` |
 | POST | `/rollout` | `{latent:[...], actions:[[...],...]}` → `{trajectory:[[...],...], latency_ms}` |
+| POST | `/rollout_fused` | `{latent:[...], actions:[[...],...]}` → `{trajectory:[[...],...], latency_ms}` |
 | POST | `/encode` | Raw f32 binary body (602KB) → `{latent:[...], latency_ms}` |
-| OPTIONS | `/predict`, `/rollout`, `/encode` | CORS preflight |
+| OPTIONS | `/predict`, `/rollout`, `/rollout_fused`, `/encode` | CORS preflight |
 
 ## How to Build & Flash
 

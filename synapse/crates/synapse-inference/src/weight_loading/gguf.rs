@@ -46,6 +46,110 @@ pub fn load_gguf(path: &Path) -> Result<HashMap<String, RawTensor>, WeightError>
     parse_gguf(&mmap)
 }
 
+/// Raw Q4_0 tensor: raw block bytes + shape metadata.
+pub struct RawQ4Tensor {
+    /// Raw Q4_0 block data: N_rows × blocks_per_row × 18 bytes.
+    /// Row-major: row j starts at `data[j * blocks_per_row * 18]`.
+    pub data: Vec<u8>,
+    /// Tensor shape (e.g. [out_features, in_features] from GGUF).
+    pub shape: Vec<usize>,
+}
+
+/// Load GGUF returning both f32 tensors and raw Q4_0 block data.
+///
+/// Q4_0 tensors appear in BOTH maps: dequantized f32 for prefill (BLAS) and
+/// raw bytes for GPU Q4 GEMV. Non-Q4 tensors only appear in the f32 map.
+pub fn load_gguf_with_raw_q4(
+    path: &Path,
+) -> Result<(HashMap<String, RawTensor>, HashMap<String, RawQ4Tensor>), WeightError> {
+    let file = File::open(path).map_err(WeightError::Io)?;
+    let mmap = unsafe { Mmap::map(&file) }.map_err(WeightError::Io)?;
+    parse_gguf_with_raw_q4(&mmap)
+}
+
+/// Parse GGUF returning f32 + raw Q4 tensors.
+pub fn parse_gguf_with_raw_q4(
+    data: &[u8],
+) -> Result<(HashMap<String, RawTensor>, HashMap<String, RawQ4Tensor>), WeightError> {
+    let mut cur = Cursor::new(data);
+
+    let magic = cur.read_u32()?;
+    if magic != GGUF_MAGIC {
+        return Err(WeightError::InvalidFormat(format!("Bad GGUF magic: 0x{magic:08X}")));
+    }
+    let version = cur.read_u32()?;
+    if version < 2 || version > 3 {
+        return Err(WeightError::InvalidFormat(format!("Unsupported GGUF version: {version}")));
+    }
+    let tensor_count = cur.read_u64()? as usize;
+    let metadata_kv_count = cur.read_u64()? as usize;
+
+    for _ in 0..metadata_kv_count {
+        skip_metadata_kv(&mut cur)?;
+    }
+
+    struct TensorInfo { name: String, shape: Vec<usize>, dtype: u32, offset: usize }
+    let mut tensor_infos = Vec::with_capacity(tensor_count);
+    for _ in 0..tensor_count {
+        let name = cur.read_string()?;
+        let n_dims = cur.read_u32()? as usize;
+        let mut shape = Vec::with_capacity(n_dims);
+        for _ in 0..n_dims { shape.push(cur.read_u64()? as usize); }
+        let dtype = cur.read_u32()?;
+        let offset = cur.read_u64()? as usize;
+        tensor_infos.push(TensorInfo { name, shape, dtype, offset });
+    }
+
+    let data_start = align_up(cur.pos, GGUF_DEFAULT_ALIGNMENT);
+    let mut f32_result = HashMap::new();
+    let mut q4_result = HashMap::new();
+
+    for info in tensor_infos {
+        let numel: usize = info.shape.iter().product();
+        let tensor_data_offset = data_start + info.offset;
+
+        // For Q4_0: extract raw bytes AND dequantize
+        if info.dtype == GGML_TYPE_Q4_0 {
+            let n_blocks = numel / QK4_0;
+            let block_size = 2 + QK4_0 / 2; // 18 bytes
+            let raw_len = n_blocks * block_size;
+            let raw_bytes = data[tensor_data_offset..tensor_data_offset + raw_len].to_vec();
+            q4_result.insert(info.name.clone(), RawQ4Tensor {
+                data: raw_bytes,
+                shape: info.shape.clone(),
+            });
+        }
+
+        // Always produce f32 for backward compat
+        let f32_data = match info.dtype {
+            GGML_TYPE_F32 => {
+                let byte_len = numel * 4;
+                bytes_to_f32(&data[tensor_data_offset..tensor_data_offset + byte_len])
+            }
+            GGML_TYPE_F16 => {
+                let byte_len = numel * 2;
+                let u16_data = bytes_to_u16(&data[tensor_data_offset..tensor_data_offset + byte_len]);
+                f16_to_f32(&u16_data)
+            }
+            GGML_TYPE_Q4_0 => dequantize_q4_0(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q4_1 => dequantize_q4_1(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q8_0 => dequantize_q8_0(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q4_K => dequantize_q4_k(&data[tensor_data_offset..], numel)?,
+            GGML_TYPE_Q6_K => dequantize_q6_k(&data[tensor_data_offset..], numel)?,
+            other => {
+                return Err(WeightError::UnsupportedDtype(format!("GGML type {other}")));
+            }
+        };
+
+        f32_result.insert(info.name, RawTensor {
+            data: AlignedBuffer::from_slice(&f32_data),
+            shape: info.shape,
+        });
+    }
+
+    Ok((f32_result, q4_result))
+}
+
 /// Parse GGUF from a byte slice into raw f32 data.
 ///
 /// Supports GGUF v3. Tensor types: F32, F16, Q8_0.
