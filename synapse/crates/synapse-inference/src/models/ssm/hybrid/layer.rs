@@ -607,15 +607,19 @@ impl LivConvDecoderLayer {
         let mut conv_out = vec![0.0f32; inner];
 
         if self.is_double_gated() {
+            // HF order: B, C, x = in_proj(hidden).chunk(3)
+            // B = pre-conv gate, C = post-conv gate, x = signal
+            // Bx = B * x (plain multiply), conv(Bx), y = C * conv_out (plain multiply)
             for i in 0..inner {
-                let x_conv = proj[i];
-                let gate1 = silu(proj[inner + i]);
-                let gated_in = gate1 * x_conv;
+                let b_gate = proj[i];             // proj[0..inner] = B
+                let c_gate = proj[inner + i];     // proj[inner..2*inner] = C
+                let x_sig = proj[2 * inner + i];  // proj[2*inner..3*inner] = x
+                let bx = b_gate * x_sig;          // pre-conv: plain multiply
                 let cv = conv1d_step_single(
-                    gated_in, i, &mut state.conv_state,
+                    bx, i, &mut state.conv_state,
                     &self.conv_weight, if has_bias { &self.conv_bias } else { &[] }, ck,
                 );
-                conv_out[i] = silu(cv) * proj[2 * inner + i];
+                conv_out[i] = c_gate * cv;        // post-conv: plain multiply
             }
         } else {
             for i in 0..inner {
@@ -674,14 +678,16 @@ impl LivConvDecoderLayer {
             let off = t * proj_dim;
             for i in 0..inner {
                 if double_gated {
-                    let x_conv = proj[off + i];
-                    let gate1 = silu(proj[off + inner + i]);
-                    let gated_in = gate1 * x_conv;
+                    // HF: B, C, x = chunk(3); Bx = B*x; conv(Bx); y = C*conv_out
+                    let b_gate = proj[off + i];
+                    let c_gate = proj[off + inner + i];
+                    let x_sig = proj[off + 2 * inner + i];
+                    let bx = b_gate * x_sig;
                     let cv = conv1d_step_single(
-                        gated_in, i, &mut state.conv_state,
+                        bx, i, &mut state.conv_state,
                         &self.conv_weight, if has_bias { &self.conv_bias } else { &[] }, ck,
                     );
-                    conv_out_all[t * inner + i] = silu(cv) * proj[off + 2 * inner + i];
+                    conv_out_all[t * inner + i] = c_gate * cv;
                 } else {
                     let signal = proj[off + i];
                     let gate = 1.0 / (1.0 + (-proj[off + inner + i]).exp());

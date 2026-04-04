@@ -203,6 +203,17 @@ pub struct MetalHybridBuffers {
     pub kv_indices: Vec<Option<usize>>,
     /// Layer kind for each layer index (for dispatch).
     pub layer_kinds: Vec<LayerKind>,
+    // ── LM head (final norm + output projection) on GPU ──
+    /// Final RMSNorm weight: `[hidden]`.
+    pub final_norm: Buffer,
+    /// LM head weight: f32 transposed `[hidden, vocab]` for f32 GEMV.
+    pub lm_head_f32: Buffer,
+    /// LM head weight: raw Q4 for Q4 GEMV (None if Q6_K/f32).
+    pub lm_head_q4: Option<Buffer>,
+    /// Logits output scratch: `[vocab]`.
+    pub logits_buf: Buffer,
+    /// Vocab size constant buffer.
+    pub vocab_const: Buffer,
 }
 
 // ── Implementations ─────────────────────────────────────────────────
@@ -472,6 +483,23 @@ impl MetalHybridBuffers {
         // ── Constant buffers ────────────────────────────────────────
         let consts = HybridConstantBuffers::new(config, device);
 
+        // ── LM head + final norm on GPU ───────────────────────────
+        let final_norm = upload(device, &model.final_norm_weight);
+        let vocab = config.vocab_size;
+        let h = config.hidden_size;
+        let lm_head_data = model.lm_head_weight.as_deref().unwrap_or(&model.embed_tokens);
+        let lm_head_f32 = upload_transposed(device, lm_head_data, vocab, h);
+        let lm_head_q4 = q4_map.get("output.weight").map(|t| upload_q4_for_gemv(device, &t.data));
+        let logits_buf = alloc_empty(device, vocab);
+        let vocab_const = {
+            let val = vocab as u32;
+            device.new_buffer_with_data(
+                &val as *const u32 as *const _,
+                4,
+                MTLResourceOptions::StorageModeShared,
+            )
+        };
+
         MetalHybridBuffers {
             layer_weights,
             scratch,
@@ -485,6 +513,11 @@ impl MetalHybridBuffers {
             conv_indices,
             kv_indices,
             layer_kinds,
+            final_norm,
+            lm_head_f32,
+            lm_head_q4,
+            logits_buf,
+            vocab_const,
         }
     }
 

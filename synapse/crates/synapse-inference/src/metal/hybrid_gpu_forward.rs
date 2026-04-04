@@ -134,15 +134,34 @@ pub fn hybrid_forward_all_layers(
         }
     }
 
-    // 5. ONE commit + wait
+    // 5. Final RMSNorm + LM head (still in the SAME command buffer)
+    let h = read_const_u32(&bufs.consts.h) as usize;
+    let vocab = read_const_u32(&bufs.vocab_const) as usize;
+
+    // Final norm: scratch.x → scratch.norm_out
+    encode_rmsnorm_fast(
+        cmd_buf, rmsnorm_pl,
+        &bufs.scratch.x, &bufs.final_norm, &bufs.scratch.norm_out,
+        &bufs.consts.h, &bufs.consts.eps,
+    );
+
+    // LM head GEMV: norm_out [h] × lm_head [vocab, h] → logits [vocab]
+    encode_gemv_q4_or_f32(
+        cmd_buf, gemv_pl, gemv_q4_pl,
+        &bufs.scratch.norm_out, &bufs.lm_head_f32, &bufs.lm_head_q4,
+        &bufs.logits_buf,
+        vocab, &bufs.vocab_const, &bufs.consts.h,
+    );
+
+    // 6. ONE commit + wait
     cmd_buf.commit();
     cmd_buf.wait_until_completed();
 
-    // 6. Update position
+    // 7. Update position
     bufs.pos += 1;
 
-    // 7. Read scratch.x back to CPU
-    read_buffer(&bufs.scratch.x, hidden.len())
+    // 8. Read logits back to CPU
+    read_buffer(&bufs.logits_buf, vocab)
 }
 
 // ── GQA layer encoder ───────────────────────────────────────────────
@@ -475,7 +494,7 @@ fn encode_gemv_q4_or_f32(
     buf_k: &::metal::Buffer,
 ) {
     if let Some(q4_buf) = buf_b_q4 {
-        // Use Q4 GEMV: 4x less memory bandwidth
+        // Q4 GEMV: 1 thread per output row, 4x less bandwidth than f32
         let encoder = cmd_buf.new_compute_command_encoder();
         encoder.set_compute_pipeline_state(gemv_q4_pl);
         encoder.set_buffer(0, Some(buf_a), 0);

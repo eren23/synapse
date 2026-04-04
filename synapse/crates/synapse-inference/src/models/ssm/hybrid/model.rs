@@ -109,9 +109,12 @@ pub struct HybridModel {
     model_config: ModelConfig,
     /// Embedding table: `[vocab_size, hidden_size]`.
     pub embed_tokens: Vec<f32>,
+    /// Embedding norm weight: `[hidden_size]`. Applied right after embedding lookup.
+    /// LFM2.5 uses this instead of a final norm before LM head.
+    pub embed_norm_weight: Vec<f32>,
     /// Decoder layers in order (mix of DeltaNet and GQA).
     pub layers: Vec<HybridLayer>,
-    /// Final RMSNorm weight: `[hidden_size]`.
+    /// Final RMSNorm weight: `[hidden_size]`. May be empty if model uses embed_norm only.
     pub final_norm_weight: Vec<f32>,
     /// LM head weight: `[vocab_size, hidden_size]`. None if tied to embed_tokens.
     pub lm_head_weight: Option<Vec<f32>>,
@@ -130,6 +133,7 @@ impl HybridModel {
     pub fn new(
         config: HybridConfig,
         embed_tokens: Vec<f32>,
+        embed_norm_weight: Vec<f32>,
         layers: Vec<HybridLayer>,
         final_norm_weight: Vec<f32>,
         lm_head_weight: Option<Vec<f32>>,
@@ -143,6 +147,7 @@ impl HybridModel {
             config,
             model_config,
             embed_tokens,
+            embed_norm_weight,
             layers,
             final_norm_weight,
             lm_head_weight,
@@ -187,6 +192,11 @@ impl HybridModel {
                 hidden[t * d..(t + 1) * d]
                     .copy_from_slice(&self.embed_tokens[id * d..(id + 1) * d]);
             }
+        }
+
+        // 1b. Embedding norm (LFM2.5: RMSNorm right after embedding)
+        if !self.embed_norm_weight.is_empty() {
+            hidden = rmsnorm(&hidden, &self.embed_norm_weight, self.config.norm_eps as f32, d);
         }
 
         // 2. Process through all layers
@@ -236,6 +246,11 @@ impl HybridModel {
         let id = token as usize;
         if id < vocab {
             hidden.copy_from_slice(&self.embed_tokens[id * d..(id + 1) * d]);
+        }
+
+        // 1b. Embedding norm
+        if !self.embed_norm_weight.is_empty() {
+            hidden = rmsnorm(&hidden, &self.embed_norm_weight, self.config.norm_eps as f32, d);
         }
 
         // 2. Process through all layers
@@ -296,6 +311,9 @@ impl HybridModel {
     /// GPU-resident single-token decode: all layers in one Metal command buffer.
     ///
     /// Embedding and LM head run on CPU; the 16-layer forward pass runs entirely on GPU.
+    /// GPU-resident single-token decode: all layers + final norm + LM head in one command buffer.
+    ///
+    /// Only embedding lookup is on CPU. Everything else runs on GPU.
     #[cfg(feature = "metal")]
     pub fn forward_one_gpu_resident(
         &self,
@@ -306,25 +324,20 @@ impl HybridModel {
         let d = self.config.hidden_size;
         let vocab = self.config.vocab_size;
 
-        // 1. Embedding lookup (CPU)
+        // 1. Embedding lookup (CPU — tiny, not worth GPU dispatch)
         let mut hidden = vec![0.0f32; d];
         let id = token as usize;
         if id < vocab {
             hidden.copy_from_slice(&self.embed_tokens[id * d..(id + 1) * d]);
         }
 
-        // 2. All layers on GPU (single command buffer)
-        hidden = crate::metal::hybrid_gpu_forward::hybrid_forward_all_layers(
+        // 2. All layers + final norm + LM head on GPU (single command buffer)
+        // Returns [vocab] logits directly
+        let logits = crate::metal::hybrid_gpu_forward::hybrid_forward_all_layers(
             bufs, &hidden, backend,
         );
 
-        // 3. Final norm (CPU)
-        let normed = rmsnorm(&hidden, &self.final_norm_weight, self.config.norm_eps as f32, d);
-
-        // 4. LM head (CPU)
-        let logits = matmul_t(&normed, self.lm_head(), 1, d, vocab);
-
-        // 5. Sync position with internal state
+        // 3. Sync position
         self.state.borrow_mut().position += 1;
 
         ModelOutput {
@@ -517,6 +530,7 @@ impl HybridModel {
         Ok(HybridModel::new(
             config,
             embed_tokens,
+            vec![], // no embed norm for Qwen3.5
             layers,
             final_norm_weight,
             lm_head_weight,
@@ -553,8 +567,11 @@ impl HybridModel {
                 .ok_or_else(|| format!("missing weight: {name}"))
         };
 
-        // Embedding + output
+        // Embedding + norms
         let embed_tokens = get("token_embd.weight")?;
+        // LFM2.5: NO post-embedding norm. The "embedding_norm" in HF is actually
+        // the FINAL norm applied after all layers, before lm_head.
+        let embed_norm_weight = vec![]; // empty = disabled
         let final_norm_weight = get("token_embd_norm.weight")?;
         let lm_head_weight = if config.tie_embedding {
             None
@@ -646,6 +663,7 @@ impl HybridModel {
         Ok(HybridModel::new(
             config,
             embed_tokens,
+            embed_norm_weight,
             layers,
             final_norm_weight,
             lm_head_weight,
@@ -818,6 +836,7 @@ mod tests {
         HybridModel::new(
             config,
             embed_tokens,
+            vec![], // no embed norm in tests
             layers,
             final_norm_weight,
             Some(lm_head_weight),
@@ -1011,7 +1030,7 @@ mod tests {
         }
 
         HybridModel::new(
-            config, embed_tokens, layers, final_norm_weight,
+            config, embed_tokens, vec![], layers, final_norm_weight,
             Some(lm_head_weight), rope_cos, rope_sin, max_kv_seq,
         )
     }

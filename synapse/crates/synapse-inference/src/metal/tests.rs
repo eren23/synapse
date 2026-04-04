@@ -1,5 +1,6 @@
 use super::*;
 use crate::metal::device::KERNEL_NAMES;
+use crate::models::ssm::hybrid::layer::conv1d_step_single;
 
 /// Helper: get MetalBackend or skip test on non-Apple hardware.
 fn get_backend() -> Option<MetalBackend> {
@@ -1633,4 +1634,255 @@ fn lewm_metal_predict_matches_cpu() {
     assert_eq!(cpu_result.len(), gpu_result.len(), "output length mismatch");
     // Both paths run the same computation; tolerance accounts for floating-point order
     assert_approx(&gpu_result, &cpu_result, 1e-2, "lewm_metal_vs_cpu");
+}
+
+// ======================== Hybrid GPU shader tests ========================
+
+#[test]
+fn conv1d_step_shader_correctness() {
+    let backend = match get_backend() {
+        Some(b) => b,
+        None => return,
+    };
+    let dev = &backend.device;
+
+    let channels = 64;
+    let kernel_size = 3;
+
+    // Random weights and input
+    let conv_weight: Vec<f32> = (0..channels * kernel_size)
+        .map(|i| pseudo_rand(50, i))
+        .collect();
+    let x_in: Vec<f32> = (0..channels).map(|i| pseudo_rand(51, i)).collect();
+
+    // CPU reference: use the shared conv1d_step_single function
+    let mut cpu_state = vec![0.0f32; channels * kernel_size];
+    let mut cpu_out = vec![0.0f32; channels];
+    for ch in 0..channels {
+        cpu_out[ch] = conv1d_step_single(
+            x_in[ch], ch, &mut cpu_state, &conv_weight, &[], kernel_size,
+        );
+    }
+
+    // GPU
+    let buf_state = make_empty(dev, channels * kernel_size); // zeroed
+    let buf_x = make_buffer(dev, &x_in);
+    let buf_w = make_buffer(dev, &conv_weight);
+    let buf_out = make_empty(dev, channels);
+    let buf_channels = make_const_u32(dev, channels as u32);
+    let buf_ks = make_const_u32(dev, kernel_size as u32);
+
+    let pipeline = backend.pipeline("conv1d_step").unwrap();
+    let cmd_buf = backend.command_queue.new_command_buffer();
+    let encoder = cmd_buf.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(pipeline);
+    encoder.set_buffer(0, Some(&buf_state), 0);
+    encoder.set_buffer(1, Some(&buf_x), 0);
+    encoder.set_buffer(2, Some(&buf_w), 0);
+    encoder.set_buffer(3, Some(&buf_out), 0);
+    encoder.set_buffer(4, Some(&buf_channels), 0);
+    encoder.set_buffer(5, Some(&buf_ks), 0);
+    let grid = ::metal::MTLSize::new(channels as u64, 1, 1);
+    let tg = ::metal::MTLSize::new(channels.min(256) as u64, 1, 1);
+    encoder.dispatch_threads(grid, tg);
+    encoder.end_encoding();
+    cmd_buf.commit();
+    cmd_buf.wait_until_completed();
+
+    let result = read_buffer(&buf_out, channels);
+    assert_approx(&result, &cpu_out, 1e-5, "conv1d_step");
+}
+
+#[test]
+fn conv1d_step_shader_multi_step() {
+    let backend = match get_backend() {
+        Some(b) => b,
+        None => return,
+    };
+    let dev = &backend.device;
+
+    let channels = 32;
+    let kernel_size = 3;
+
+    let conv_weight: Vec<f32> = (0..channels * kernel_size)
+        .map(|i| pseudo_rand(60, i))
+        .collect();
+
+    let buf_state = make_empty(dev, channels * kernel_size);
+    let buf_w = make_buffer(dev, &conv_weight);
+    let buf_channels = make_const_u32(dev, channels as u32);
+    let buf_ks = make_const_u32(dev, kernel_size as u32);
+    let pipeline = backend.pipeline("conv1d_step").unwrap();
+
+    let mut cpu_state = vec![0.0f32; channels * kernel_size];
+
+    // Run 5 steps with different inputs, check each matches CPU
+    for step in 0..5 {
+        let x_in: Vec<f32> = (0..channels)
+            .map(|i| pseudo_rand(70 + step as u32, i))
+            .collect();
+
+        // CPU
+        let mut cpu_out = vec![0.0f32; channels];
+        for ch in 0..channels {
+            cpu_out[ch] = conv1d_step_single(
+                x_in[ch], ch, &mut cpu_state, &conv_weight, &[], kernel_size,
+            );
+        }
+
+        // GPU
+        let buf_x = make_buffer(dev, &x_in);
+        let buf_out = make_empty(dev, channels);
+
+        let cmd_buf = backend.command_queue.new_command_buffer();
+        let encoder = cmd_buf.new_compute_command_encoder();
+        encoder.set_compute_pipeline_state(pipeline);
+        encoder.set_buffer(0, Some(&buf_state), 0);
+        encoder.set_buffer(1, Some(&buf_x), 0);
+        encoder.set_buffer(2, Some(&buf_w), 0);
+        encoder.set_buffer(3, Some(&buf_out), 0);
+        encoder.set_buffer(4, Some(&buf_channels), 0);
+        encoder.set_buffer(5, Some(&buf_ks), 0);
+        let grid = ::metal::MTLSize::new(channels as u64, 1, 1);
+        let tg = ::metal::MTLSize::new(channels.min(256) as u64, 1, 1);
+        encoder.dispatch_threads(grid, tg);
+        encoder.end_encoding();
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
+
+        let result = read_buffer(&buf_out, channels);
+        assert_approx(&result, &cpu_out, 1e-5, &format!("conv1d_step_multi[{step}]"));
+    }
+}
+
+#[test]
+fn gemv_q4_correctness() {
+    let backend = match get_backend() {
+        Some(b) => b,
+        None => return,
+    };
+    let dev = &backend.device;
+
+    let k = 64usize;  // input dim (must be multiple of 32)
+    let n = 16usize;  // output dim
+
+    // Random f32 weights [n, k] and input [k]
+    let a: Vec<f32> = (0..k).map(|i| pseudo_rand(80, i)).collect();
+    let w: Vec<f32> = (0..n * k).map(|i| pseudo_rand(81, i)).collect();
+
+    // CPU reference: out[j] = sum_k(a[k] * w[j * K + k])
+    let mut expected = vec![0.0f32; n];
+    for j in 0..n {
+        for ki in 0..k {
+            expected[j] += a[ki] * w[j * k + ki];
+        }
+    }
+
+    // Quantize to Q4_0 blocks (GGUF format: f16 scale + 16 nibble bytes per 32 elements)
+    let blocks_per_row = k / 32;
+    let block_bytes = 18usize;
+    let mut q4_data = vec![0u8; n * blocks_per_row * block_bytes];
+
+    for row in 0..n {
+        for b in 0..blocks_per_row {
+            let start = row * k + b * 32;
+            let vals = &w[start..start + 32];
+
+            // Find scale
+            let max_abs = vals.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+            let scale = if max_abs == 0.0 { 0.0 } else { max_abs / 7.0 };
+            let inv_scale = if scale == 0.0 { 0.0 } else { 1.0 / scale };
+
+            // f16 scale (inline conversion)
+            let f16_bits = {
+                let bits = scale.to_bits();
+                let sign = (bits >> 16) & 0x8000;
+                let exp = ((bits >> 23) & 0xFF) as i32;
+                let man = bits & 0x7FFFFF;
+                if exp == 0 { sign as u16 }
+                else {
+                    let ne = exp - 127 + 15;
+                    if ne >= 31 { (sign | 0x7C00) as u16 }
+                    else if ne <= 0 { sign as u16 }
+                    else { (sign | ((ne as u32) << 10) | (man >> 13)) as u16 }
+                }
+            };
+            let offset = (row * blocks_per_row + b) * block_bytes;
+            q4_data[offset] = (f16_bits & 0xFF) as u8;
+            q4_data[offset + 1] = (f16_bits >> 8) as u8;
+
+            // Pack nibbles
+            for i in 0..16 {
+                let v0 = (vals[2 * i] * inv_scale).round().clamp(-8.0, 7.0) as i8;
+                let v1 = (vals[2 * i + 1] * inv_scale).round().clamp(-8.0, 7.0) as i8;
+                q4_data[offset + 2 + i] = ((v0 + 8) as u8) | (((v1 + 8) as u8) << 4);
+            }
+        }
+    }
+
+    // Compute Q4 reference (dequantized)
+    let mut q4_expected = vec![0.0f32; n];
+    for row in 0..n {
+        for b in 0..blocks_per_row {
+            let offset = (row * blocks_per_row + b) * block_bytes;
+            let f16_bits = (q4_data[offset] as u16) | ((q4_data[offset + 1] as u16) << 8);
+            let scale = crate::weight_loading::f16_to_f32(&[f16_bits])[0];
+            for i in 0..16 {
+                let byte = q4_data[offset + 2 + i];
+                let lo = ((byte & 0x0F) as i32 - 8) as f32 * scale;
+                let hi = ((byte >> 4) as i32 - 8) as f32 * scale;
+                let idx = b * 32 + 2 * i;
+                q4_expected[row] += a[idx] * lo;
+                q4_expected[row] += a[idx + 1] * hi;
+            }
+        }
+    }
+
+    // GPU
+    let buf_a = make_buffer(dev, &a);
+    let buf_q4 = dev.new_buffer_with_data(
+        q4_data.as_ptr() as *const _,
+        q4_data.len() as u64,
+        ::metal::MTLResourceOptions::StorageModeShared,
+    );
+    let buf_out = make_empty(dev, n);
+    let buf_n = make_const_u32(dev, n as u32);
+    let buf_k = make_const_u32(dev, k as u32);
+
+    let pipeline = backend.pipeline("gemv_q4").unwrap();
+    let cmd_buf = backend.command_queue.new_command_buffer();
+    let encoder = cmd_buf.new_compute_command_encoder();
+    encoder.set_compute_pipeline_state(pipeline);
+    encoder.set_buffer(0, Some(&buf_a), 0);
+    encoder.set_buffer(1, Some(&buf_q4), 0);
+    encoder.set_buffer(2, Some(&buf_out), 0);
+    encoder.set_buffer(3, Some(&buf_n), 0);
+    encoder.set_buffer(4, Some(&buf_k), 0);
+    let grid = ::metal::MTLSize::new(n as u64, 1, 1);
+    let tg = ::metal::MTLSize::new(n.min(256) as u64, 1, 1);
+    encoder.dispatch_threads(grid, tg);
+    encoder.end_encoding();
+    cmd_buf.commit();
+    cmd_buf.wait_until_completed();
+
+    let result = read_buffer(&buf_out, n);
+    // Q4 quantization introduces error — use looser tolerance
+    assert_approx(&result, &q4_expected, 1e-3, "gemv_q4");
+}
+
+#[test]
+fn hybrid_shaders_compiled() {
+    let backend = match get_backend() {
+        Some(b) => b,
+        None => return,
+    };
+    // Verify both new hybrid shaders are compiled and accessible
+    assert!(
+        backend.pipeline("conv1d_step").is_some(),
+        "conv1d_step shader not compiled"
+    );
+    assert!(
+        backend.pipeline("gemv_q4").is_some(),
+        "gemv_q4 shader not compiled"
+    );
 }
