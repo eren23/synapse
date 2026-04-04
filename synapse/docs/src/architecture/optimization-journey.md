@@ -90,6 +90,14 @@ Result: Q4 predict **3310us -> 983us** (3.4x faster) on Apple Silicon. Still 2.7
 | 64d baseline | 10.5 ms | 20.9 ms |
 | 64d elastic | 10.4 ms | 20.5 ms |
 
+### Host — 50-Step Rollout (192d PushT, Apple Silicon)
+
+| Mode | 50-step rollout | per step | Speedup |
+|------|----------------|----------|---------|
+| Sequential (50 × predict_next) | 318 ms | 6.4 ms | 1.0x |
+| Fused rollout (Zig tiled) | 163 ms | 3.3 ms | **1.9x** |
+| Fused + ESP + BLAS Accelerate | 118 ms | 2.4 ms | **2.7x** |
+
 ### Quantization Quality
 
 | Format | cos vs f32 | Notes |
@@ -98,6 +106,35 @@ Result: Q4 predict **3310us -> 983us** (3.4x faster) on Apple Silicon. Still 2.7
 | INT8 GEMV (Zig) | 5-9x faster than f32 | For M=1 decode |
 | Q4 GEMV (Zig) | 3.4x faster than pure Rust | Still 2.7x slower than f32 Accelerate |
 
+### Step 5: Fused Rollout + Accelerate BLAS (host-side)
+
+A 50-step rollout was calling `predict_next` 50 times sequentially -- 300 layer calls × 4 GEMMs each = **1,200 tiny M=3 GEMM calls** at ~2% of peak FLOPS.
+
+**Fix**: Three optimizations, each controlled by independent bitfield flags:
+
+1. **Fused rollout** (`fused_lewm_rollout.zig`): Process all 50 steps as one seq_len=150 sequence through each layer. Turns 1,200 M=3 GEMMs into 24 M=150 GEMMs. Required lifting the `small_bidirectional_attention` seq_len<=16 limit with a new `bidirectional_attention_dynamic` using scratch-allocated scores.
+
+2. **ESP-style inner fusions**: Fused bias+GELU and bias+gated_residual single-pass loops (ported from the ESP32 C firmware).
+
+3. **Apple Accelerate BLAS**: Runtime dispatch to `cblas_sgemm` on macOS via `extern "c"`. Transparent fallback to Zig tiled SGEMM elsewhere.
+
+All optimizations are toggled independently via a `u32` bitfield:
+
+```
+FUSED_ROLLOUT    = 0x01   ESP_FUSED    = 0x02
+PREPACK_WEIGHTS  = 0x04   BLAS_ACCEL   = 0x08
+SHARED_ADALN     = 0x10   QUANT_INT8   = 0x20
+QUANT_Q4         = 0x40
+```
+
+**Result** (50-step rollout, 192d PushT config, Apple Silicon):
+
+| Mode | Time | Speedup |
+|------|------|---------|
+| Sequential baseline (50 × seq=3) | 318 ms | 1.0x |
+| Fused rollout (Zig tiled) | 163 ms | **1.9x** |
+| Fused + ESP + BLAS Accelerate | 118 ms | **2.7x** |
+
 ## What's Left
 
 ### Parked (Phase 2)
@@ -105,7 +142,8 @@ Result: Q4 predict **3310us -> 983us** (3.4x faster) on Apple Silicon. Still 2.7
 - **Compile-time dimension specialization**: Zig `comptime K` variants for 64d/192d enable full loop unrolling.
 
 ### Future
-- **Fused Zig layer kernel**: One function call per predictor layer instead of 12+ FFI calls. Built and working (`fused_lewm_layer.zig`) but on macOS loses to Apple Accelerate. Win on ESP32/WASM.
+- **Weight prepacking**: Pre-pack B matrices once before rollout to skip redundant `packB` calls. Infrastructure built (`prepackBFull` in matmul.zig) but not yet wired into rollout dispatch.
+- **Q4/INT8 fused rollout**: The flag system supports QUANT_INT8 (0x20) and QUANT_Q4 (0x40) but dispatch currently falls through to f32. Needs pre-quantized weight buffers passed through FFI.
 - **Q4 integer accumulation**: Zig Q4 inner loop still dequants nibbles to f32. Native i8 path would close the 2.7x gap.
 - **Metal SSM shaders**: Mamba/RWKV on GPU (currently CPU-only).
 - **2-layer encoder**: Train a `64d_2e_4p` model to push encode under 600ms on ESP32.
