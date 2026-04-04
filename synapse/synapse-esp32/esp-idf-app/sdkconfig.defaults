@@ -17,7 +17,6 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # WiFi via esp_hosted + esp_wifi_remote (C6 companion over SDIO)
 # Do NOT set CONFIG_ESP_HOST_WIFI_ENABLED -- that's for chips with native WiFi
 CONFIG_ESP_WIFI_REMOTE_LIBRARY_HOSTED=y
-CONFIG_SLAVE_IDF_TARGET_ESP32C6=y
 
 # HTTP server tuning
 CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024

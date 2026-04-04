@@ -121,14 +121,17 @@ void run_full_encode_smoke(PredictorModel *model) {
         free(next);
         return;
     }
-    int64_t elapsed_us = esp_timer_get_time() - started_us;
-    ESP_LOGI(TAG, "encode latency: %.3f ms", (double)elapsed_us / 1000.0);
+    int64_t encode_elapsed_us = esp_timer_get_time() - started_us;
+    ESP_LOGI(TAG, "encode latency: %.3f ms", (double)encode_elapsed_us / 1000.0);
     vTaskDelay(pdMS_TO_TICKS(1));
 
     started_us = esp_timer_get_time();
     predict_next(model, latent, action, next);
-    elapsed_us = esp_timer_get_time() - started_us;
-    ESP_LOGI(TAG, "encode+predict_next latency: %.3f ms", (double)elapsed_us / 1000.0);
+    int64_t predict_elapsed_us = esp_timer_get_time() - started_us;
+    ESP_LOGI(TAG, "predict_next after encode latency: %.3f ms",
+             (double)predict_elapsed_us / 1000.0);
+    ESP_LOGI(TAG, "encode + predict_next total: %.3f ms",
+             (double)(encode_elapsed_us + predict_elapsed_us) / 1000.0);
     vTaskDelay(pdMS_TO_TICKS(1));
 
     free(image);

@@ -1,13 +1,102 @@
-//! DeltaNet and GQA decoder layers for hybrid models (Qwen3.5).
+//! Decoder layers for hybrid models: DeltaNet, GQA, and LIV Conv.
 //!
 //! Each layer type is self-contained with its own weights and forward methods,
 //! avoiding coupling with the transformer model builder infrastructure.
+//!
+//! Shared helpers (`conv1d_step_single`, `swiglu_ffn_forward`) are free
+//! functions reused across layer types.
 
 use crate::ops::activation::{silu, softmax_slice};
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
 use crate::models::ssm::deltanet::{deltanet_seq, deltanet_step, l2_normalize};
 use crate::models::ssm::deltanet_state::DeltaNetLayerState;
+use crate::quantization::primitives::Q4Linear;
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/// Apply conv1d to a single channel, shifting the rolling state buffer
+/// and computing the dot product with the kernel.
+///
+/// `conv_state` layout: `[channels, conv_kernel]`.
+#[inline]
+pub fn conv1d_step_single(
+    x_val: f32,
+    channel: usize,
+    conv_state: &mut [f32],
+    conv_weight: &[f32],
+    conv_bias: &[f32],
+    conv_kernel: usize,
+) -> f32 {
+    let buf = &mut conv_state[channel * conv_kernel..(channel + 1) * conv_kernel];
+    // Shift left
+    buf.copy_within(1.., 0);
+    // Insert new value
+    buf[conv_kernel - 1] = x_val;
+    // Dot product with kernel
+    let w = &conv_weight[channel * conv_kernel..(channel + 1) * conv_kernel];
+    let sum: f32 = buf.iter().zip(w.iter()).map(|(&b, &k)| b * k).sum();
+    if conv_bias.is_empty() { sum } else { sum + conv_bias[channel] }
+}
+
+/// SwiGLU FFN sub-block: norm → gate_proj → SiLU, up_proj, multiply, down_proj.
+///
+/// Used identically by DeltaNet, GQA, and LIV Conv layers.
+pub fn swiglu_ffn_forward(
+    x: &[f32],
+    seq_len: usize,
+    ffn_norm_weight: &[f32],
+    ffn_gate_weight: &[f32],
+    ffn_up_weight: &[f32],
+    ffn_down_weight: &[f32],
+    norm_eps: f32,
+    hidden_size: usize,
+    intermediate_size: usize,
+) -> Vec<f32> {
+    let normed = rmsnorm(x, ffn_norm_weight, norm_eps, hidden_size);
+    let gate = matmul_t(&normed, ffn_gate_weight, seq_len, hidden_size, intermediate_size);
+    let up = matmul_t(&normed, ffn_up_weight, seq_len, hidden_size, intermediate_size);
+    let fused: Vec<f32> = gate.iter().zip(up.iter()).map(|(&g, &u)| silu(g) * u).collect();
+    matmul_t(&fused, ffn_down_weight, seq_len, intermediate_size, hidden_size)
+}
+
+/// GEMV dispatch: use Q4Linear when available (M=1 decode), else f32 matmul_t.
+#[inline]
+fn gemv_or_matmul(
+    x: &[f32], f32_w: &[f32], q4_w: &Option<Q4Linear>,
+    m: usize, k: usize, n: usize,
+) -> Vec<f32> {
+    if m == 1 {
+        if let Some(q4) = q4_w {
+            return q4.forward(x, 1);
+        }
+    }
+    matmul_t(x, f32_w, m, k, n)
+}
+
+/// SwiGLU FFN with optional Q4 GEMV for decode.
+pub fn swiglu_ffn_forward_q4(
+    x: &[f32],
+    seq_len: usize,
+    ffn_norm_weight: &[f32],
+    ffn_gate_weight: &[f32],
+    ffn_up_weight: &[f32],
+    ffn_down_weight: &[f32],
+    q4_gate: &Option<Q4Linear>,
+    q4_up: &Option<Q4Linear>,
+    q4_down: &Option<Q4Linear>,
+    norm_eps: f32,
+    hidden_size: usize,
+    intermediate_size: usize,
+) -> Vec<f32> {
+    let normed = rmsnorm(x, ffn_norm_weight, norm_eps, hidden_size);
+    let gate = gemv_or_matmul(&normed, ffn_gate_weight, q4_gate, seq_len, hidden_size, intermediate_size);
+    let up = gemv_or_matmul(&normed, ffn_up_weight, q4_up, seq_len, hidden_size, intermediate_size);
+    let fused: Vec<f32> = gate.iter().zip(up.iter()).map(|(&g, &u)| silu(g) * u).collect();
+    gemv_or_matmul(&fused, ffn_down_weight, q4_down, seq_len, intermediate_size, hidden_size)
+}
 
 // ---------------------------------------------------------------------------
 // DeltaNet Decoder Layer
@@ -67,30 +156,6 @@ pub struct DeltaNetDecoderLayer {
 }
 
 impl DeltaNetDecoderLayer {
-    /// Apply conv1d to a single channel `x[i]`, shifting the state and computing
-    /// the dot product with the kernel.
-    ///
-    /// `conv_state` layout: `[channels, conv_kernel]`.
-    #[inline]
-    fn conv1d_step_single(
-        x_val: f32,
-        channel: usize,
-        conv_state: &mut [f32],
-        conv_weight: &[f32],
-        conv_bias: &[f32],
-        conv_kernel: usize,
-    ) -> f32 {
-        let buf = &mut conv_state[channel * conv_kernel..(channel + 1) * conv_kernel];
-        // Shift left
-        buf.copy_within(1.., 0);
-        // Insert new value
-        buf[conv_kernel - 1] = x_val;
-        // Dot product with kernel
-        let w = &conv_weight[channel * conv_kernel..(channel + 1) * conv_kernel];
-        let sum: f32 = buf.iter().zip(w.iter()).map(|(&b, &k)| b * k).sum();
-        sum + conv_bias[channel]
-    }
-
     /// Apply conv1d to all channels for a single timestep, using the rolling
     /// state buffers in `layer_state`.
     fn conv1d_step_all(
@@ -112,7 +177,7 @@ impl DeltaNetDecoderLayer {
         let mut v_out = vec![0.0f32; channels];
 
         for i in 0..channels {
-            q_out[i] = Self::conv1d_step_single(
+            q_out[i] = conv1d_step_single(
                 q_raw[i],
                 i,
                 &mut state.q_conv_state,
@@ -120,7 +185,7 @@ impl DeltaNetDecoderLayer {
                 q_conv_bias,
                 ck,
             );
-            k_out[i] = Self::conv1d_step_single(
+            k_out[i] = conv1d_step_single(
                 k_raw[i],
                 i,
                 &mut state.k_conv_state,
@@ -128,7 +193,7 @@ impl DeltaNetDecoderLayer {
                 k_conv_bias,
                 ck,
             );
-            v_out[i] = Self::conv1d_step_single(
+            v_out[i] = conv1d_step_single(
                 v_raw[i],
                 i,
                 &mut state.v_conv_state,
@@ -346,29 +411,6 @@ impl DeltaNetDecoderLayer {
         out
     }
 
-    /// SwiGLU FFN: gate_proj -> SiLU, up_proj, element multiply, down_proj.
-    fn ffn_forward(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
-        let h = self.hidden_size;
-        let im = self.intermediate_size;
-
-        // Norm
-        let normed = rmsnorm(x, &self.ffn_norm_weight, self.norm_eps, h);
-
-        // Gate and up projections
-        let gate = matmul_t(&normed, &self.ffn_gate_weight, seq_len, h, im);
-        let up = matmul_t(&normed, &self.ffn_up_weight, seq_len, h, im);
-
-        // SiLU(gate) * up
-        let fused: Vec<f32> = gate
-            .iter()
-            .zip(up.iter())
-            .map(|(&g, &u)| silu(g) * u)
-            .collect();
-
-        // Down projection
-        matmul_t(&fused, &self.ffn_down_weight, seq_len, im, h)
-    }
-
     /// Process a single token through this DeltaNet layer.
     ///
     /// `hidden`: input `[hidden_size]`.
@@ -386,7 +428,12 @@ impl DeltaNetDecoderLayer {
             .collect();
 
         // 2. FFN sub-block
-        let ffn_out = self.ffn_forward(&after_attn, 1);
+        let ffn_out = swiglu_ffn_forward(
+            &after_attn, 1,
+            &self.ffn_norm_weight, &self.ffn_gate_weight,
+            &self.ffn_up_weight, &self.ffn_down_weight,
+            self.norm_eps, self.hidden_size, self.intermediate_size,
+        );
 
         // Residual
         after_attn
@@ -420,7 +467,12 @@ impl DeltaNetDecoderLayer {
             .collect();
 
         // 2. FFN sub-block
-        let ffn_out = self.ffn_forward(&after_attn, seq_len);
+        let ffn_out = swiglu_ffn_forward(
+            &after_attn, seq_len,
+            &self.ffn_norm_weight, &self.ffn_gate_weight,
+            &self.ffn_up_weight, &self.ffn_down_weight,
+            self.norm_eps, h, self.intermediate_size,
+        );
 
         // Residual
         after_attn
@@ -428,6 +480,242 @@ impl DeltaNetDecoderLayer {
             .zip(ffn_out.iter())
             .map(|(&h, &f)| h + f)
             .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LIV Conv Decoder Layer (LFM2.5)
+// ---------------------------------------------------------------------------
+
+/// State for a single LIV Conv layer's depthwise convolution.
+pub struct ConvLayerState {
+    /// Rolling conv state: `[inner_size * (kernel_size - 1)]`.
+    /// Each channel stores `kernel_size - 1` past values.
+    pub conv_state: Vec<f32>,
+    pub inner_size: usize,
+    pub kernel_size: usize,
+}
+
+impl ConvLayerState {
+    pub fn new(inner_size: usize, kernel_size: usize) -> Self {
+        ConvLayerState {
+            conv_state: vec![0.0f32; inner_size * kernel_size],
+            inner_size,
+            kernel_size,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.conv_state.fill(0.0);
+    }
+
+    pub fn memory_bytes(&self) -> usize {
+        self.conv_state.len() * 4
+    }
+}
+
+/// A single LIV Conv (gated depthwise convolution) decoder layer.
+///
+/// Used by LFM2.5. Simpler than DeltaNet — no recurrent state matrix, just
+/// a small conv buffer for autoregressive decode.
+///
+/// Forward path (double-gated short convolution):
+/// 1. RMSNorm
+/// 2. Input projection: `[hidden_size] → [3 * inner_size]`
+///    Split into: `x_conv` (input to conv), `x_gate1` (pre-conv gate),
+///    `x_gate2` (post-conv gate)
+/// 3. Pre-conv gate: `silu(x_gate1) * x_conv`
+/// 4. Depthwise conv1d (causal, kernel_size typically 3)
+/// 5. Post-conv gate: `silu(conv_out) * x_gate2`
+/// 6. Output projection: `[inner_size] → [hidden_size]`
+/// 7. Residual
+/// 8. RMSNorm → SwiGLU FFN → Residual
+pub struct LivConvDecoderLayer {
+    pub hidden_size: usize,
+    pub inner_size: usize,
+    pub conv_kernel_size: usize,
+    pub intermediate_size: usize,
+    pub norm_eps: f32,
+
+    // Pre-conv norm
+    pub attn_norm_weight: Vec<f32>, // [hidden_size]
+
+    // Input projection: [3 * inner_size, hidden_size]
+    // Produces 3 streams: conv_input, gate1 (pre-conv), gate2 (post-conv)
+    pub input_proj_weight: Vec<f32>,
+
+    // Depthwise conv1d
+    pub conv_weight: Vec<f32>, // [inner_size, conv_kernel_size]
+    pub conv_bias: Vec<f32>,   // [inner_size] (may be empty if no bias)
+
+    // Output projection: [hidden_size, inner_size]
+    pub output_proj_weight: Vec<f32>,
+
+    // SwiGLU FFN
+    pub ffn_norm_weight: Vec<f32>,  // [hidden_size]
+    pub ffn_gate_weight: Vec<f32>,  // [intermediate_size, hidden_size]
+    pub ffn_up_weight: Vec<f32>,    // [intermediate_size, hidden_size]
+    pub ffn_down_weight: Vec<f32>,  // [hidden_size, intermediate_size]
+
+    // Q4 quantized weights for fast decode (lazily built)
+    pub q4_in_proj: Option<Q4Linear>,
+    pub q4_out_proj: Option<Q4Linear>,
+    pub q4_ffn_gate: Option<Q4Linear>,
+    pub q4_ffn_up: Option<Q4Linear>,
+    pub q4_ffn_down: Option<Q4Linear>,
+}
+
+impl LivConvDecoderLayer {
+    /// Quantize f32 weights to Q4 for fast GEMV decode.
+    pub fn quantize_for_decode(&mut self) {
+        let h = self.hidden_size;
+        let inner = self.inner_size;
+        let im = self.intermediate_size;
+        let proj_dim = self.input_proj_weight.len() / h;
+        self.q4_in_proj = Some(Q4Linear::from_f32(&self.input_proj_weight, proj_dim, h));
+        self.q4_out_proj = Some(Q4Linear::from_f32(&self.output_proj_weight, h, inner));
+        self.q4_ffn_gate = Some(Q4Linear::from_f32(&self.ffn_gate_weight, im, h));
+        self.q4_ffn_up = Some(Q4Linear::from_f32(&self.ffn_up_weight, im, h));
+        self.q4_ffn_down = Some(Q4Linear::from_f32(&self.ffn_down_weight, h, im));
+    }
+
+    /// Projection dimension: 3 * inner_size for double-gated, 2 * inner_size for single-gated.
+    fn proj_dim(&self) -> usize {
+        self.input_proj_weight.len() / self.hidden_size
+    }
+
+    /// Whether this layer uses the double-gated (3-way) projection.
+    fn is_double_gated(&self) -> bool {
+        self.proj_dim() == 3 * self.inner_size
+    }
+
+    /// Single-token forward pass (uses Q4 GEMV when quantized).
+    pub fn forward_one(&self, hidden: &[f32], state: &mut ConvLayerState) -> Vec<f32> {
+        let h = self.hidden_size;
+        let inner = self.inner_size;
+        let proj_dim = self.proj_dim();
+
+        // 1. Pre-norm
+        let normed = rmsnorm(hidden, &self.attn_norm_weight, self.norm_eps, h);
+
+        // 2. Input projection (Q4 GEMV when available)
+        let proj = gemv_or_matmul(&normed, &self.input_proj_weight, &self.q4_in_proj, 1, h, proj_dim);
+
+        // 3. Gate + conv
+        let ck = self.conv_kernel_size;
+        let has_bias = !self.conv_bias.is_empty();
+        let mut conv_out = vec![0.0f32; inner];
+
+        if self.is_double_gated() {
+            // HF order: B, C, x = in_proj(hidden).chunk(3)
+            // B = pre-conv gate, C = post-conv gate, x = signal
+            // Bx = B * x (plain multiply), conv(Bx), y = C * conv_out (plain multiply)
+            for i in 0..inner {
+                let b_gate = proj[i];             // proj[0..inner] = B
+                let c_gate = proj[inner + i];     // proj[inner..2*inner] = C
+                let x_sig = proj[2 * inner + i];  // proj[2*inner..3*inner] = x
+                let bx = b_gate * x_sig;          // pre-conv: plain multiply
+                let cv = conv1d_step_single(
+                    bx, i, &mut state.conv_state,
+                    &self.conv_weight, if has_bias { &self.conv_bias } else { &[] }, ck,
+                );
+                conv_out[i] = c_gate * cv;        // post-conv: plain multiply
+            }
+        } else {
+            for i in 0..inner {
+                let signal = proj[i];
+                let gate = 1.0 / (1.0 + (-proj[inner + i]).exp());
+                let gated = signal * gate;
+                let cv = conv1d_step_single(
+                    gated, i, &mut state.conv_state,
+                    &self.conv_weight, if has_bias { &self.conv_bias } else { &[] }, ck,
+                );
+                conv_out[i] = silu(cv);
+            }
+        }
+
+        // 4. Output projection (Q4 GEMV when available)
+        let conv_block_out = gemv_or_matmul(&conv_out, &self.output_proj_weight, &self.q4_out_proj, 1, inner, h);
+
+        // 5. Residual
+        let after_conv: Vec<f32> = hidden.iter().zip(conv_block_out.iter())
+            .map(|(&h, &c)| h + c).collect();
+
+        // 6. FFN sub-block + residual (Q4 GEMV when available)
+        let ffn_out = swiglu_ffn_forward_q4(
+            &after_conv, 1,
+            &self.ffn_norm_weight, &self.ffn_gate_weight,
+            &self.ffn_up_weight, &self.ffn_down_weight,
+            &self.q4_ffn_gate, &self.q4_ffn_up, &self.q4_ffn_down,
+            self.norm_eps, h, self.intermediate_size,
+        );
+        after_conv.iter().zip(ffn_out.iter()).map(|(&h, &f)| h + f).collect()
+    }
+
+    /// Sequence forward pass (prefill).
+    pub fn forward_seq(
+        &self,
+        hidden: &[f32],
+        seq_len: usize,
+        state: &mut ConvLayerState,
+    ) -> Vec<f32> {
+        let h = self.hidden_size;
+        let inner = self.inner_size;
+        let ck = self.conv_kernel_size;
+        let proj_dim = self.proj_dim();
+        let double_gated = self.is_double_gated();
+        let has_bias = !self.conv_bias.is_empty();
+
+        // 1. Pre-norm (batched)
+        let normed = rmsnorm(hidden, &self.attn_norm_weight, self.norm_eps, h);
+
+        // 2. Input projection (batched)
+        let proj = matmul_t(&normed, &self.input_proj_weight, seq_len, h, proj_dim);
+
+        // 3. Gate + conv per timestep (sequential due to conv state)
+        let mut conv_out_all = vec![0.0f32; seq_len * inner];
+        for t in 0..seq_len {
+            let off = t * proj_dim;
+            for i in 0..inner {
+                if double_gated {
+                    // HF: B, C, x = chunk(3); Bx = B*x; conv(Bx); y = C*conv_out
+                    let b_gate = proj[off + i];
+                    let c_gate = proj[off + inner + i];
+                    let x_sig = proj[off + 2 * inner + i];
+                    let bx = b_gate * x_sig;
+                    let cv = conv1d_step_single(
+                        bx, i, &mut state.conv_state,
+                        &self.conv_weight, if has_bias { &self.conv_bias } else { &[] }, ck,
+                    );
+                    conv_out_all[t * inner + i] = c_gate * cv;
+                } else {
+                    let signal = proj[off + i];
+                    let gate = 1.0 / (1.0 + (-proj[off + inner + i]).exp());
+                    let gated = signal * gate;
+                    let cv = conv1d_step_single(
+                        gated, i, &mut state.conv_state,
+                        &self.conv_weight, if has_bias { &self.conv_bias } else { &[] }, ck,
+                    );
+                    conv_out_all[t * inner + i] = silu(cv);
+                }
+            }
+        }
+
+        // 4. Output projection (batched)
+        let conv_block_out = matmul_t(&conv_out_all, &self.output_proj_weight, seq_len, inner, h);
+
+        // 5. Residual
+        let after_conv: Vec<f32> = hidden.iter().zip(conv_block_out.iter())
+            .map(|(&h, &c)| h + c).collect();
+
+        // 6. FFN sub-block + residual
+        let ffn_out = swiglu_ffn_forward(
+            &after_conv, seq_len,
+            &self.ffn_norm_weight, &self.ffn_gate_weight,
+            &self.ffn_up_weight, &self.ffn_down_weight,
+            self.norm_eps, h, self.intermediate_size,
+        );
+        after_conv.iter().zip(ffn_out.iter()).map(|(&h, &f)| h + f).collect()
     }
 }
 
@@ -528,9 +816,32 @@ pub struct GqaDecoderLayer {
     pub ffn_gate_weight: Vec<f32>,  // [intermediate_size, hidden_size]
     pub ffn_up_weight: Vec<f32>,    // [intermediate_size, hidden_size]
     pub ffn_down_weight: Vec<f32>,  // [hidden_size, intermediate_size]
+
+    // Q4 quantized weights for fast decode
+    pub q4_wq: Option<Q4Linear>,
+    pub q4_wk: Option<Q4Linear>,
+    pub q4_wv: Option<Q4Linear>,
+    pub q4_wo: Option<Q4Linear>,
+    pub q4_ffn_gate: Option<Q4Linear>,
+    pub q4_ffn_up: Option<Q4Linear>,
+    pub q4_ffn_down: Option<Q4Linear>,
 }
 
 impl GqaDecoderLayer {
+    /// Quantize f32 weights to Q4 for fast GEMV decode.
+    pub fn quantize_for_decode(&mut self) {
+        let h = self.hidden_size;
+        let q_dim = self.num_q_heads * self.head_dim;
+        let kv_dim = self.num_kv_heads * self.head_dim;
+        let im = self.intermediate_size;
+        self.q4_wq = Some(Q4Linear::from_f32(&self.w_q, q_dim, h));
+        self.q4_wk = Some(Q4Linear::from_f32(&self.w_k, kv_dim, h));
+        self.q4_wv = Some(Q4Linear::from_f32(&self.w_v, kv_dim, h));
+        self.q4_wo = Some(Q4Linear::from_f32(&self.w_o, h, q_dim));
+        self.q4_ffn_gate = Some(Q4Linear::from_f32(&self.ffn_gate_weight, im, h));
+        self.q4_ffn_up = Some(Q4Linear::from_f32(&self.ffn_up_weight, im, h));
+        self.q4_ffn_down = Some(Q4Linear::from_f32(&self.ffn_down_weight, h, im));
+    }
     /// Apply RoPE rotation to a single head's Q or K vector in-place.
     ///
     /// Uses the rotate-half convention: pairs `(i, i + head_dim/2)`.
@@ -579,10 +890,10 @@ impl GqaDecoderLayer {
         let q_dim = nq * hd;
         let kv_dim = nkv * hd;
 
-        // Project Q, K, V
-        let mut q = matmul_t(normed, &self.w_q, 1, self.hidden_size, q_dim);
-        let mut k = matmul_t(normed, &self.w_k, 1, self.hidden_size, kv_dim);
-        let v = matmul_t(normed, &self.w_v, 1, self.hidden_size, kv_dim);
+        // Project Q, K, V (Q4 GEMV when available)
+        let mut q = gemv_or_matmul(normed, &self.w_q, &self.q4_wq, 1, self.hidden_size, q_dim);
+        let mut k = gemv_or_matmul(normed, &self.w_k, &self.q4_wk, 1, self.hidden_size, kv_dim);
+        let v = gemv_or_matmul(normed, &self.w_v, &self.q4_wv, 1, self.hidden_size, kv_dim);
 
         // Per-head Q/K norms
         Self::head_rmsnorm(&mut q, &self.q_norm_weight, hd, self.norm_eps);
@@ -637,8 +948,8 @@ impl GqaDecoderLayer {
             }
         }
 
-        // Output projection
-        matmul_t(&attn_out, &self.w_o, 1, q_dim, self.hidden_size)
+        // Output projection (Q4 GEMV when available)
+        gemv_or_matmul(&attn_out, &self.w_o, &self.q4_wo, 1, q_dim, self.hidden_size)
     }
 
     /// Sequence (prefill) forward through the GQA attention sub-block.
@@ -740,24 +1051,6 @@ impl GqaDecoderLayer {
         matmul_t(&attn_out, &self.w_o, seq_len, q_dim, self.hidden_size)
     }
 
-    /// SwiGLU FFN sub-block.
-    fn ffn_forward(&self, x: &[f32], seq_len: usize) -> Vec<f32> {
-        let h = self.hidden_size;
-        let im = self.intermediate_size;
-
-        let normed = rmsnorm(x, &self.ffn_norm_weight, self.norm_eps, h);
-        let gate = matmul_t(&normed, &self.ffn_gate_weight, seq_len, h, im);
-        let up = matmul_t(&normed, &self.ffn_up_weight, seq_len, h, im);
-
-        let fused: Vec<f32> = gate
-            .iter()
-            .zip(up.iter())
-            .map(|(&g, &u)| silu(g) * u)
-            .collect();
-
-        matmul_t(&fused, &self.ffn_down_weight, seq_len, im, h)
-    }
-
     /// Process a single token through this GQA layer.
     pub fn forward_one(
         &self,
@@ -767,26 +1060,20 @@ impl GqaDecoderLayer {
         rope_sin: &[f32],
         position: usize,
     ) -> Vec<f32> {
-        // Attention sub-block
         let normed = rmsnorm(hidden, &self.attn_norm_weight, self.norm_eps, self.hidden_size);
         let attn_out = self.attn_forward_one(&normed, kv_state, rope_cos, rope_sin, position);
 
-        // Residual
-        let after_attn: Vec<f32> = hidden
-            .iter()
-            .zip(attn_out.iter())
-            .map(|(&h, &a)| h + a)
-            .collect();
+        let after_attn: Vec<f32> = hidden.iter().zip(attn_out.iter())
+            .map(|(&h, &a)| h + a).collect();
 
-        // FFN sub-block
-        let ffn_out = self.ffn_forward(&after_attn, 1);
-
-        // Residual
-        after_attn
-            .iter()
-            .zip(ffn_out.iter())
-            .map(|(&h, &f)| h + f)
-            .collect()
+        let ffn_out = swiglu_ffn_forward_q4(
+            &after_attn, 1,
+            &self.ffn_norm_weight, &self.ffn_gate_weight,
+            &self.ffn_up_weight, &self.ffn_down_weight,
+            &self.q4_ffn_gate, &self.q4_ffn_up, &self.q4_ffn_down,
+            self.norm_eps, self.hidden_size, self.intermediate_size,
+        );
+        after_attn.iter().zip(ffn_out.iter()).map(|(&h, &f)| h + f).collect()
     }
 
     /// Process a sequence of tokens through this GQA layer (prefill).
@@ -801,28 +1088,21 @@ impl GqaDecoderLayer {
     ) -> Vec<f32> {
         let h = self.hidden_size;
 
-        // Attention sub-block
         let normed = rmsnorm(hidden, &self.attn_norm_weight, self.norm_eps, h);
         let attn_out = self.attn_forward_seq(
             &normed, seq_len, kv_state, rope_cos, rope_sin, pos_offset,
         );
 
-        // Residual
-        let after_attn: Vec<f32> = hidden
-            .iter()
-            .zip(attn_out.iter())
-            .map(|(&h, &a)| h + a)
-            .collect();
+        let after_attn: Vec<f32> = hidden.iter().zip(attn_out.iter())
+            .map(|(&h, &a)| h + a).collect();
 
-        // FFN sub-block
-        let ffn_out = self.ffn_forward(&after_attn, seq_len);
-
-        // Residual
-        after_attn
-            .iter()
-            .zip(ffn_out.iter())
-            .map(|(&h, &f)| h + f)
-            .collect()
+        let ffn_out = swiglu_ffn_forward(
+            &after_attn, seq_len,
+            &self.ffn_norm_weight, &self.ffn_gate_weight,
+            &self.ffn_up_weight, &self.ffn_down_weight,
+            self.norm_eps, h, self.intermediate_size,
+        );
+        after_attn.iter().zip(ffn_out.iter()).map(|(&h, &f)| h + f).collect()
     }
 }
 
@@ -903,6 +1183,8 @@ mod tests {
             ffn_gate_weight: pseudo_random_vec(24, intermediate_size * hidden_size),
             ffn_up_weight: pseudo_random_vec(25, intermediate_size * hidden_size),
             ffn_down_weight: pseudo_random_vec(26, hidden_size * intermediate_size),
+            q4_wq: None, q4_wk: None, q4_wv: None, q4_wo: None,
+            q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
         }
     }
 
@@ -998,5 +1280,77 @@ mod tests {
 
         let _ = layer.forward_one(&input, &mut kv, &cos, &sin, 2);
         assert_eq!(kv.len, 3);
+    }
+
+    // --------------- LIV Conv tests ---------------
+
+    fn make_livconv_layer() -> LivConvDecoderLayer {
+        let hidden_size = 64;
+        let inner_size = 64;
+        let conv_kernel_size = 4;
+        let intermediate_size = 128;
+
+        LivConvDecoderLayer {
+            hidden_size,
+            inner_size,
+            conv_kernel_size,
+            intermediate_size,
+            norm_eps: 1e-6,
+            attn_norm_weight: vec![1.0; hidden_size],
+            input_proj_weight: pseudo_random_vec(40, 2 * inner_size * hidden_size),
+            conv_weight: pseudo_random_vec(41, inner_size * conv_kernel_size),
+            conv_bias: vec![0.0; inner_size],
+            output_proj_weight: pseudo_random_vec(42, hidden_size * inner_size),
+            ffn_norm_weight: vec![1.0; hidden_size],
+            ffn_gate_weight: pseudo_random_vec(43, intermediate_size * hidden_size),
+            ffn_up_weight: pseudo_random_vec(44, intermediate_size * hidden_size),
+            ffn_down_weight: pseudo_random_vec(45, hidden_size * intermediate_size),
+            q4_in_proj: None, q4_out_proj: None,
+            q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
+        }
+    }
+
+    #[test]
+    fn livconv_layer_forward_one_produces_finite_output() {
+        let layer = make_livconv_layer();
+        let mut state = ConvLayerState::new(64, 4);
+        let input = pseudo_random_vec(500, 64);
+
+        let output = layer.forward_one(&input, &mut state);
+
+        assert_eq!(output.len(), 64);
+        for (i, &v) in output.iter().enumerate() {
+            assert!(v.is_finite(), "output[{i}] = {v} is not finite");
+        }
+    }
+
+    #[test]
+    fn livconv_layer_forward_seq_produces_finite_output() {
+        let layer = make_livconv_layer();
+        let mut state = ConvLayerState::new(64, 4);
+        let seq_len = 5;
+        let input = pseudo_random_vec(501, seq_len * 64);
+
+        let output = layer.forward_seq(&input, seq_len, &mut state);
+
+        assert_eq!(output.len(), seq_len * 64);
+        for (i, &v) in output.iter().enumerate() {
+            assert!(v.is_finite(), "output[{i}] = {v} is not finite");
+        }
+    }
+
+    #[test]
+    fn livconv_state_reset_gives_same_output() {
+        let layer = make_livconv_layer();
+        let mut state = ConvLayerState::new(64, 4);
+        let input = pseudo_random_vec(502, 3 * 64);
+
+        let out1 = layer.forward_seq(&input, 3, &mut state);
+        state.reset();
+        let out2 = layer.forward_seq(&input, 3, &mut state);
+
+        for (i, (&a, &b)) in out1.iter().zip(out2.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-5, "output[{i}] differs after reset: {a} vs {b}");
+        }
     }
 }

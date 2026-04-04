@@ -833,6 +833,135 @@ pub fn lewm_predict_layer(
     }
 }
 
+/// V2 fused LEWM predictor layer with mode selection.
+/// mode=0: standard (separate loops), mode=1: ESP-fused (single-pass bias+GELU/residual loops).
+#[allow(clippy::too_many_arguments)]
+pub fn lewm_predict_layer_v2(
+    seq: &mut [f32],
+    conditioning: &[f32],
+    seq_len: usize,
+    hidden: usize,
+    num_heads: usize,
+    inner_dim: usize,
+    inter: usize,
+    adaln_weight: &[f32],
+    adaln_bias: &[f32],
+    attn_norm_weight: &[f32],
+    to_qkv: &[f32],
+    attn_out_weight: &[f32],
+    attn_out_bias: &[f32],
+    mlp_norm_weight: &[f32],
+    mlp_up_weight: &[f32],
+    mlp_up_bias: &[f32],
+    mlp_down_weight: &[f32],
+    mlp_down_bias: &[f32],
+    mod_buf: &mut [f32],
+    normed_buf: &mut [f32],
+    qkv_buf: &mut [f32],
+    attn_buf: &mut [f32],
+    proj_buf: &mut [f32],
+    mode: u8,
+) -> Result<(), SynapseError> {
+    unsafe {
+        check_status(ffi::syn_lewm_predict_layer_v2(
+            seq.as_mut_ptr(),
+            conditioning.as_ptr(),
+            seq_len,
+            hidden,
+            num_heads,
+            inner_dim,
+            inter,
+            adaln_weight.as_ptr(),
+            if adaln_bias.is_empty() { std::ptr::null() } else { adaln_bias.as_ptr() },
+            attn_norm_weight.as_ptr(),
+            to_qkv.as_ptr(),
+            attn_out_weight.as_ptr(),
+            if attn_out_bias.is_empty() { std::ptr::null() } else { attn_out_bias.as_ptr() },
+            mlp_norm_weight.as_ptr(),
+            mlp_up_weight.as_ptr(),
+            if mlp_up_bias.is_empty() { std::ptr::null() } else { mlp_up_bias.as_ptr() },
+            mlp_down_weight.as_ptr(),
+            if mlp_down_bias.is_empty() { std::ptr::null() } else { mlp_down_bias.as_ptr() },
+            mod_buf.as_mut_ptr(),
+            normed_buf.as_mut_ptr(),
+            qkv_buf.as_mut_ptr(),
+            attn_buf.as_mut_ptr(),
+            proj_buf.as_mut_ptr(),
+            mode,
+        ))
+    }
+}
+
+/// Fused LEWM rollout: process all N rollout steps through all layers in a single call.
+///
+/// Per-layer weight pointer arrays (`adaln_ws`, etc.) are slices of `*const f32`, one entry
+/// per layer. Scratch buffers must be pre-sized for `fused_seq_len = num_steps * 3`.
+/// `mode` is a u32 bitfield (FUSED_ROLLOUT=0x01, ESP_FUSED=0x02, BLAS=0x08, etc.).
+#[allow(clippy::too_many_arguments)]
+pub fn lewm_rollout_fused(
+    seq: &mut [f32],
+    conditioning: &[f32],
+    num_steps: usize,
+    hidden: usize,
+    num_heads: usize,
+    inner_dim: usize,
+    inter: usize,
+    num_layers: usize,
+    adaln_ws: &[*const f32],
+    adaln_bs: &[*const f32],
+    attn_norm_ws: &[*const f32],
+    to_qkvs: &[*const f32],
+    attn_out_ws: &[*const f32],
+    attn_out_bs: &[*const f32],
+    mlp_norm_ws: &[*const f32],
+    mlp_up_ws: &[*const f32],
+    mlp_up_bs: &[*const f32],
+    mlp_down_ws: &[*const f32],
+    mlp_down_bs: &[*const f32],
+    mod_buf: &mut [f32],
+    normed_buf: &mut [f32],
+    qkv_buf: &mut [f32],
+    attn_buf: &mut [f32],
+    proj_buf: &mut [f32],
+    scores_buf: &mut [f32],
+    packed_a: &mut [f32],
+    packed_b: &mut [f32],
+    mode: u32,
+) -> Result<(), SynapseError> {
+    unsafe {
+        check_status(ffi::syn_lewm_rollout_fused(
+            seq.as_mut_ptr(),
+            conditioning.as_ptr(),
+            num_steps,
+            hidden,
+            num_heads,
+            inner_dim,
+            inter,
+            num_layers,
+            adaln_ws.as_ptr(),
+            adaln_bs.as_ptr(),
+            attn_norm_ws.as_ptr(),
+            to_qkvs.as_ptr(),
+            attn_out_ws.as_ptr(),
+            attn_out_bs.as_ptr(),
+            mlp_norm_ws.as_ptr(),
+            mlp_up_ws.as_ptr(),
+            mlp_up_bs.as_ptr(),
+            mlp_down_ws.as_ptr(),
+            mlp_down_bs.as_ptr(),
+            mod_buf.as_mut_ptr(),
+            normed_buf.as_mut_ptr(),
+            qkv_buf.as_mut_ptr(),
+            attn_buf.as_mut_ptr(),
+            proj_buf.as_mut_ptr(),
+            scores_buf.as_mut_ptr(),
+            packed_a.as_mut_ptr(),
+            packed_b.as_mut_ptr(),
+            mode,
+        ))
+    }
+}
+
 /// Projection GEMV with fused bias: output[m,n] = input[m,k] * weight[n,k]^T + bias[n].
 ///
 /// `input` is `[m * k]`, `weight` is `[n * k]` (row-major, each row = one output neuron),

@@ -137,6 +137,10 @@ pub struct LeWMBuffers {
     pub mod_copy: Vec<f32>,   // [6 * hidden] — copy of mod_params for gate extraction
     pub latent_seq: Vec<f32>, // [seq_len * latent_dim] — bottleneck input sequence
     pub cond: Vec<f32>,       // [hidden] — conditioning vector
+    // Fused rollout buffers (used by lewm_rollout_fused FFI path)
+    pub scores_buf: Vec<f32>, // [seq_len * seq_len] — attention scores for dynamic attention
+    pub packed_a: Vec<f32>,   // GEMM packing scratch A
+    pub packed_b: Vec<f32>,   // GEMM packing scratch B
 }
 
 impl LeWMBuffers {
@@ -161,6 +165,9 @@ impl LeWMBuffers {
             mod_copy: vec![0.0; 6 * h],
             latent_seq: vec![0.0; seq_len * latent],
             cond: vec![0.0; h],
+            scores_buf: vec![0.0; seq_len * seq_len], // 3×3 = 9 for single step
+            packed_a: Vec::new(),
+            packed_b: Vec::new(),
         }
     }
 }
@@ -423,6 +430,9 @@ pub struct LeWorldModel {
     pub projector: ProjectionHead,
     // Pred_proj (predictor → output space)
     pub pred_proj: ProjectionHead,
+    /// Fuse mode for Zig FFI predictor layers.
+    /// 0 = standard (separate loops), 1 = ESP-fused (single-pass bias+GELU/residual loops).
+    pub fuse_mode: u8,
 }
 
 impl LeWorldModel {
@@ -465,7 +475,14 @@ impl LeWorldModel {
             cond_proj_bias: AlignedBuffer::new_zeroed(0),
             projector: ProjectionHead::new_zeroed(3),
             pred_proj: ProjectionHead::new_zeroed(3),
+            fuse_mode: 0,
         }
+    }
+
+    /// Set the fuse mode for Zig FFI predictor layers.
+    /// 0 = standard (separate loops), 1 = ESP-fused (single-pass bias+GELU/residual loops).
+    pub fn set_fuse_mode(&mut self, mode: u8) {
+        self.fuse_mode = mode;
     }
 
     /// Encode an observation image to a latent state in predictor space.
@@ -733,7 +750,7 @@ impl LeWorldModel {
             if bufs.proj.len() < proj_size { bufs.proj.resize(proj_size, 0.0); }
 
             for layer in &self.predictor_layers {
-                synapse_core::lewm_predict_layer(
+                synapse_core::lewm_predict_layer_v2(
                     &mut bufs.seq,
                     conditioning,
                     seq_len, hidden, num_heads, inner_dim, inter,
@@ -749,7 +766,8 @@ impl LeWorldModel {
                     &mut bufs.qkv,
                     &mut bufs.attn_out,
                     &mut bufs.proj,
-                ).expect("lewm_predict_layer failed");
+                    self.fuse_mode,
+                ).expect("lewm_predict_layer_v2 failed");
             }
         }
 
@@ -1002,24 +1020,101 @@ impl LeWorldModel {
                 bufs.proj.resize(proj_size, 0.0);
             }
 
-            for layer in &self.predictor_layers {
-                synapse_core::lewm_predict_layer(
+            if (self.fuse_mode as u32) & 0x01 != 0 {
+                // --- Fused rollout path: single FFI call for all layers ---
+                let nl = self.predictor_layers.len();
+
+                // Build per-layer weight pointer arrays
+                let mut adaln_ws: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut adaln_bs: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut attn_norm_ws: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut to_qkvs: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut attn_out_ws: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut attn_out_bs: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut mlp_norm_ws: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut mlp_up_ws: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut mlp_up_bs: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut mlp_down_ws: Vec<*const f32> = Vec::with_capacity(nl);
+                let mut mlp_down_bs: Vec<*const f32> = Vec::with_capacity(nl);
+
+                for layer in &self.predictor_layers {
+                    adaln_ws.push(layer.adaln_weight.as_ptr());
+                    adaln_bs.push(if layer.adaln_bias.is_empty() { layer.adaln_weight.as_ptr() } else { layer.adaln_bias.as_ptr() });
+                    attn_norm_ws.push(layer.attn_norm_weight.as_ptr());
+                    to_qkvs.push(layer.to_qkv.as_ptr());
+                    attn_out_ws.push(layer.attn_out_weight.as_ptr());
+                    attn_out_bs.push(if layer.attn_out_bias.is_empty() { layer.attn_out_weight.as_ptr() } else { layer.attn_out_bias.as_ptr() });
+                    mlp_norm_ws.push(layer.mlp_norm_weight.as_ptr());
+                    mlp_up_ws.push(layer.mlp_up_weight.as_ptr());
+                    mlp_up_bs.push(if layer.mlp_up_bias.is_empty() { layer.mlp_up_weight.as_ptr() } else { layer.mlp_up_bias.as_ptr() });
+                    mlp_down_ws.push(layer.mlp_down_weight.as_ptr());
+                    mlp_down_bs.push(if layer.mlp_down_bias.is_empty() { layer.mlp_down_weight.as_ptr() } else { layer.mlp_down_bias.as_ptr() });
+                }
+
+                // Resize scores_buf for dynamic attention: seq_len * seq_len
+                let scores_size = fused_seq_len * fused_seq_len;
+                if bufs.scores_buf.len() < scores_size {
+                    bufs.scores_buf.resize(scores_size, 0.0);
+                }
+
+                // Resize GEMM packing buffers (conservative upper bound)
+                // Max GEMM dimensions in the rollout: M=fused_seq_len, N=max(6*hidden, 3*inner_dim, inter), K=max(hidden, inner_dim, inter)
+                let max_n = (6 * hidden).max(3 * inner_dim).max(inter);
+                let max_k = hidden.max(inner_dim).max(inter);
+                // MR=8, NR=8, MC=64, KC=256, NC=256 (from Zig matmul tiling constants)
+                let mc = 64usize.min(fused_seq_len);
+                let kc = 256usize.min(max_k);
+                let nc = 256usize.min(max_n);
+                let mr = 8usize;
+                let nr = 8usize;
+                let pa_size = ((mc + mr - 1) / mr) * mr * kc;
+                let pb_size = ((nc + nr - 1) / nr) * nr * kc;
+                if bufs.packed_a.len() < pa_size {
+                    bufs.packed_a.resize(pa_size, 0.0);
+                }
+                if bufs.packed_b.len() < pb_size {
+                    bufs.packed_b.resize(pb_size, 0.0);
+                }
+
+                synapse_core::lewm_rollout_fused(
                     &mut bufs.seq[..seq_size],
                     conditioning,
-                    fused_seq_len, hidden, num_heads, inner_dim, inter,
-                    &layer.adaln_weight, &layer.adaln_bias,
-                    &layer.attn_norm_weight,
-                    &layer.to_qkv,
-                    &layer.attn_out_weight, &layer.attn_out_bias,
-                    &layer.mlp_norm_weight,
-                    &layer.mlp_up_weight, &layer.mlp_up_bias,
-                    &layer.mlp_down_weight, &layer.mlp_down_bias,
+                    num_steps, hidden, num_heads, inner_dim, inter, nl,
+                    &adaln_ws, &adaln_bs, &attn_norm_ws, &to_qkvs,
+                    &attn_out_ws, &attn_out_bs, &mlp_norm_ws,
+                    &mlp_up_ws, &mlp_up_bs, &mlp_down_ws, &mlp_down_bs,
                     &mut bufs.mod_params,
                     &mut bufs.normed,
                     &mut bufs.qkv,
                     &mut bufs.attn_out,
                     &mut bufs.proj,
-                ).expect("lewm_predict_layer failed");
+                    &mut bufs.scores_buf,
+                    &mut bufs.packed_a,
+                    &mut bufs.packed_b,
+                    self.fuse_mode as u32,
+                ).expect("lewm_rollout_fused failed");
+            } else {
+                // --- Per-layer path (fuse_mode bit 0 not set) ---
+                for layer in &self.predictor_layers {
+                    synapse_core::lewm_predict_layer_v2(
+                        &mut bufs.seq[..seq_size],
+                        conditioning,
+                        fused_seq_len, hidden, num_heads, inner_dim, inter,
+                        &layer.adaln_weight, &layer.adaln_bias,
+                        &layer.attn_norm_weight,
+                        &layer.to_qkv,
+                        &layer.attn_out_weight, &layer.attn_out_bias,
+                        &layer.mlp_norm_weight,
+                        &layer.mlp_up_weight, &layer.mlp_up_bias,
+                        &layer.mlp_down_weight, &layer.mlp_down_bias,
+                        &mut bufs.mod_params,
+                        &mut bufs.normed,
+                        &mut bufs.qkv,
+                        &mut bufs.attn_out,
+                        &mut bufs.proj,
+                        self.fuse_mode,
+                    ).expect("lewm_predict_layer_v2 failed");
+                }
             }
         }
 

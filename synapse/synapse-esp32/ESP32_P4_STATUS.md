@@ -38,6 +38,18 @@ Last updated: 2026-04-03
    - PIE SIMD batch patch embedding (256 patches in one INT8 GEMM)
    - Binary size: 3.9 MB (vs 9.8 MB for 96d)
    - **Hybrid-64d-full: predict 152ms, encode 922ms, 3-step rollout 460ms**
+8. **Live HTTP validation on board** (2026-04-03):
+   - Hosted transport fixed for the Waveshare P4 + on-board C6 over SDIO
+   - Board now boots through smoke tests, joins WiFi, and serves HTTP inference
+   - Endpoint medians over 5 live trials with deterministic smoke-test seeds:
+     - `predict_next`: **145.56 ms**
+     - `encode`: **832.93 ms**
+     - `encode + 1 predict`: **978.21 ms**
+     - `3-step rollout` (`/rollout`, sequential/autoregressive): **436.36 ms**
+     - `encode + 3-step rollout`: **1,270.12 ms**
+     - `3-step rollout_fused`: **275.00 ms**
+     - `encode + 3-step rollout_fused`: **1,108.22 ms**
+   - `/rollout` matches chained `/predict` exactly on-device; `/rollout_fused` is faster but not semantically equivalent after step 0
 
 ### ESP32-P4 Performance Timeline
 
@@ -51,13 +63,21 @@ Last updated: 2026-04-03
 | + kernel-trick attention | 152 ms | 922 ms | 1,382 ms | 3.9 MB |
 | + fused ops + exp LUT (2026-04-03) | **143 ms** | **782 ms** | **1,211 ms** | **3.9 MB** |
 
+Live endpoint validation on the current April 3 hardware image:
+
+| Path | predict_next | encode | enc + 3 predict | Notes |
+|------|--------------|--------|-----------------|-------|
+| Chained `/predict` | **145.56 ms** | **832.93 ms** | **1,269.22 ms** | 5-trial median, live board |
+| `/rollout` | - | - | **1,270.12 ms** | Sequential/autoregressive, matches chained `/predict` |
+| `/rollout_fused` | - | - | **1,108.22 ms** | Parallel-futures path, faster but not equivalent |
+
 Encode breakdown (hybrid ALAL, after optimization):
-- Patch embedding: 52ms (INT8 batch GEMM)
-- Layer 0 (A, softmax): 191ms (norm 2, qkv 11, attn 82, oproj 7, ffn 89)
-- Layer 1 (L, kernel-trick): 161ms (norm 2, qkv 10, attn 53, oproj 6, ffn 89)
-- Layer 2 (A, softmax): 192ms
-- Layer 3 (L, kernel-trick): 161ms
-- Overhead (norms, projectors): ~25ms
+- Patch embedding: 51.9ms (INT8 batch GEMM)
+- Layer 0 (A, softmax): 202ms (norm 2, qkv 11, attn 82, oproj 7, ffn 100)
+- Layer 1 (L, kernel-trick): 172ms (norm 2, qkv 10, attn 53, oproj 6, ffn 100)
+- Layer 2 (A, softmax): 202ms
+- Layer 3 (L, kernel-trick): 172ms
+- Overhead (norms, projectors): ~26ms
 
 Optimizations applied (2026-04-03):
 - Exp LUT (256-entry) replacing expf() in softmax and elu_plus1
@@ -66,6 +86,11 @@ Optimizations applied (2026-04-03):
 - Reciprocal multiply in softmax (1 div instead of N)
 - -O3 compiler flag, vTaskDelay→esp_task_wdt_reset
 - 50-step fused rollout (MAX_PREDICTOR_SEQ_LEN=150)
+
+Important measurement notes:
+- The old `782 / 143 / 1,211 ms` line is an earlier April 3 optimized reference, not the current live HTTP endpoint median.
+- The smoke-test log previously printed `encode+predict_next latency` while timing only the predictor after encode; that label has been corrected.
+- The current live board answer is still: `encode + 3-step rollout` is **not** below 1 second.
 
 ## What Does NOT Work
 

@@ -5,6 +5,29 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+
+/*
+ * esp_wifi_remote injects a custom WIFI_INIT_CONFIG_DEFAULT() that expects
+ * CONFIG_WIFI_RMT_* macros. In this app build those Kconfig values are not
+ * exported into sdkconfig.h, so provide the documented P4+C6 defaults here
+ * to keep the hosted WiFi path buildable.
+ */
+#ifndef CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM
+#define CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM 16
+#endif
+#ifndef CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM
+#define CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM 64
+#endif
+#ifndef CONFIG_WIFI_RMT_TX_BUFFER_TYPE
+#define CONFIG_WIFI_RMT_TX_BUFFER_TYPE 1
+#endif
+#ifndef CONFIG_WIFI_RMT_DYNAMIC_RX_MGMT_BUF
+#define CONFIG_WIFI_RMT_DYNAMIC_RX_MGMT_BUF 0
+#endif
+#ifndef CONFIG_WIFI_RMT_ESPNOW_MAX_ENCRYPT_NUM
+#define CONFIG_WIFI_RMT_ESPNOW_MAX_ENCRYPT_NUM 7
+#endif
+
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"

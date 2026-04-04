@@ -1,9 +1,7 @@
-//! HybridModel: a full Qwen3.5-style hybrid model implementing the `Model` trait.
+//! HybridModel: a generalized hybrid model implementing the `Model` trait.
 //!
-//! Combines DeltaNet (linear attention) and GQA (full attention) layers in a
-//! repeating pattern. DeltaNet layers use constant-size recurrent state, while
-//! GQA layers use a traditional KV cache. The model manages both state types
-//! internally via `RefCell`.
+//! Supports arbitrary mixes of DeltaNet, GQA, and LIV Conv layers in any
+//! interleaving pattern. Each layer type manages its own state variant.
 
 use std::cell::RefCell;
 
@@ -13,88 +11,110 @@ use crate::models::traits::{Model, ModelState};
 use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::rmsnorm;
 use crate::models::ssm::deltanet_state::DeltaNetLayerState;
-use super::config::HybridConfig;
-use super::layer::{DeltaNetDecoderLayer, GqaDecoderLayer, KvLayerState};
+use super::config::{HybridConfig, LayerKind};
+use super::layer::{
+    DeltaNetDecoderLayer, GqaDecoderLayer, KvLayerState,
+    LivConvDecoderLayer, ConvLayerState,
+};
 
-/// A layer in the hybrid model: either DeltaNet or GQA.
+/// A layer in the hybrid model.
 pub enum HybridLayer {
     DeltaNet(DeltaNetDecoderLayer),
     Gqa(GqaDecoderLayer),
+    LivConv(LivConvDecoderLayer),
+}
+
+/// Per-layer state variant, matching the layer type.
+pub enum LayerState {
+    DeltaNet(DeltaNetLayerState),
+    Kv(KvLayerState),
+    Conv(ConvLayerState),
 }
 
 /// Combined state for all layers in the hybrid model.
 pub struct HybridState {
-    /// DeltaNet recurrent states, indexed by DeltaNet-layer ordinal.
-    pub deltanet_states: Vec<DeltaNetLayerState>,
-    /// KV cache entries, indexed by GQA-layer ordinal.
-    pub kv_states: Vec<KvLayerState>,
+    /// One state entry per layer, matching the layer type.
+    pub layer_states: Vec<LayerState>,
     /// Current position (number of tokens processed so far).
     pub position: usize,
 }
 
 impl HybridState {
     pub fn new(config: &HybridConfig, max_kv_seq: usize) -> Self {
-        let num_dn = config.num_deltanet_layers();
-        let num_gqa = config.num_gqa_layers();
-
-        let deltanet_states = (0..num_dn)
-            .map(|_| {
-                DeltaNetLayerState::new(
-                    config.deltanet_num_heads,
-                    config.deltanet_head_dim,
-                    config.deltanet_conv_kernel,
-                )
+        let layer_states = (0..config.num_layers)
+            .map(|i| match config.layer_kind(i) {
+                LayerKind::DeltaNet => LayerState::DeltaNet(
+                    DeltaNetLayerState::new(
+                        config.deltanet_num_heads,
+                        config.deltanet_head_dim,
+                        config.deltanet_conv_kernel,
+                    ),
+                ),
+                LayerKind::Gqa => LayerState::Kv(
+                    KvLayerState::new(max_kv_seq, config.num_kv_heads, config.gqa_head_dim),
+                ),
+                LayerKind::LivConv => LayerState::Conv(
+                    ConvLayerState::new(config.livconv_inner_size, config.livconv_kernel_size),
+                ),
             })
             .collect();
 
-        let kv_states = (0..num_gqa)
-            .map(|_| KvLayerState::new(max_kv_seq, config.num_kv_heads, config.gqa_head_dim))
-            .collect();
-
         HybridState {
-            deltanet_states,
-            kv_states,
+            layer_states,
             position: 0,
         }
     }
 
     pub fn reset(&mut self) {
-        for s in &mut self.deltanet_states {
-            s.reset();
-        }
-        for s in &mut self.kv_states {
-            s.reset();
+        for s in &mut self.layer_states {
+            match s {
+                LayerState::DeltaNet(ds) => ds.reset(),
+                LayerState::Kv(ks) => ks.reset(),
+                LayerState::Conv(cs) => cs.reset(),
+            }
         }
         self.position = 0;
     }
 
     /// Total heap memory used by all state buffers (bytes).
     pub fn memory_bytes(&self) -> usize {
-        let dn: usize = self.deltanet_states.iter().map(|s| s.memory_bytes()).sum();
-        let kv: usize = self.kv_states.iter().map(|s| s.memory_bytes()).sum();
-        dn + kv
+        self.layer_states.iter().map(|s| match s {
+            LayerState::DeltaNet(ds) => ds.memory_bytes(),
+            LayerState::Kv(ks) => ks.memory_bytes(),
+            LayerState::Conv(cs) => cs.memory_bytes(),
+        }).sum()
     }
 
     /// Memory used by DeltaNet states only (bytes). This is constant.
     pub fn deltanet_memory_bytes(&self) -> usize {
-        self.deltanet_states.iter().map(|s| s.memory_bytes()).sum()
+        self.layer_states.iter().filter_map(|s| match s {
+            LayerState::DeltaNet(ds) => Some(ds.memory_bytes()),
+            _ => None,
+        }).sum()
     }
 
-    /// Memory used by KV caches only (bytes). The allocation is constant
-    /// (pre-allocated to max_kv_seq), but logical occupancy grows.
+    /// Memory used by KV caches only (bytes).
     pub fn kv_memory_bytes(&self) -> usize {
-        self.kv_states.iter().map(|s| s.memory_bytes()).sum()
+        self.layer_states.iter().filter_map(|s| match s {
+            LayerState::Kv(ks) => Some(ks.memory_bytes()),
+            _ => None,
+        }).sum()
     }
 }
 
-/// A hybrid DeltaNet + GQA language model (e.g. Qwen3.5).
+/// A hybrid language model combining multiple layer types (e.g. Qwen3.5, LFM2.5).
 pub struct HybridModel {
     pub config: HybridConfig,
+    /// Minimal ModelConfig for trait compliance.
+    model_config: ModelConfig,
     /// Embedding table: `[vocab_size, hidden_size]`.
     pub embed_tokens: Vec<f32>,
+    /// Embedding norm weight: `[hidden_size]`. Applied right after embedding lookup.
+    /// LFM2.5 uses this instead of a final norm before LM head.
+    pub embed_norm_weight: Vec<f32>,
     /// Decoder layers in order (mix of DeltaNet and GQA).
     pub layers: Vec<HybridLayer>,
-    /// Final RMSNorm weight: `[hidden_size]`.
+    /// Final RMSNorm weight: `[hidden_size]`. May be empty if model uses embed_norm only.
     pub final_norm_weight: Vec<f32>,
     /// LM head weight: `[vocab_size, hidden_size]`. None if tied to embed_tokens.
     pub lm_head_weight: Option<Vec<f32>>,
@@ -103,7 +123,7 @@ pub struct HybridModel {
     /// Precomputed RoPE sin table: `[max_pos, head_dim/2]`.
     pub rope_sin: Vec<f32>,
     /// Internal hybrid state, managed via RefCell for interior mutability.
-    state: RefCell<HybridState>,
+    pub(crate) state: RefCell<HybridState>,
 }
 
 impl HybridModel {
@@ -113,6 +133,7 @@ impl HybridModel {
     pub fn new(
         config: HybridConfig,
         embed_tokens: Vec<f32>,
+        embed_norm_weight: Vec<f32>,
         layers: Vec<HybridLayer>,
         final_norm_weight: Vec<f32>,
         lm_head_weight: Option<Vec<f32>>,
@@ -121,15 +142,29 @@ impl HybridModel {
         max_kv_seq: usize,
     ) -> Self {
         let state = HybridState::new(&config, max_kv_seq);
+        let model_config = minimal_config_for_hybrid(&config);
         HybridModel {
             config,
+            model_config,
             embed_tokens,
+            embed_norm_weight,
             layers,
             final_norm_weight,
             lm_head_weight,
             rope_cos,
             rope_sin,
             state: RefCell::new(state),
+        }
+    }
+
+    /// Quantize all layer weights to Q4 for fast GEMV decode.
+    pub fn quantize_layers_for_decode(&mut self) {
+        for layer in &mut self.layers {
+            match layer {
+                HybridLayer::LivConv(l) => l.quantize_for_decode(),
+                HybridLayer::Gqa(l) => l.quantize_for_decode(),
+                HybridLayer::DeltaNet(_) => {} // TODO if needed
+            }
         }
     }
 
@@ -159,33 +194,30 @@ impl HybridModel {
             }
         }
 
+        // 1b. Embedding norm (LFM2.5: RMSNorm right after embedding)
+        if !self.embed_norm_weight.is_empty() {
+            hidden = rmsnorm(&hidden, &self.embed_norm_weight, self.config.norm_eps as f32, d);
+        }
+
         // 2. Process through all layers
         let mut state = self.state.borrow_mut();
         let pos_offset = state.position;
-        let mut dn_idx = 0usize;
-        let mut gqa_idx = 0usize;
 
-        for layer in self.layers.iter() {
-            match layer {
-                HybridLayer::DeltaNet(dn_layer) => {
-                    hidden = dn_layer.forward_seq(
-                        &hidden,
-                        seq_len,
-                        &mut state.deltanet_states[dn_idx],
-                    );
-                    dn_idx += 1;
+        for (layer, layer_state) in self.layers.iter().zip(state.layer_states.iter_mut()) {
+            match (layer, layer_state) {
+                (HybridLayer::DeltaNet(dn_layer), LayerState::DeltaNet(dn_state)) => {
+                    hidden = dn_layer.forward_seq(&hidden, seq_len, dn_state);
                 }
-                HybridLayer::Gqa(gqa_layer) => {
+                (HybridLayer::Gqa(gqa_layer), LayerState::Kv(kv_state)) => {
                     hidden = gqa_layer.forward_seq(
-                        &hidden,
-                        seq_len,
-                        &mut state.kv_states[gqa_idx],
-                        &self.rope_cos,
-                        &self.rope_sin,
-                        pos_offset,
+                        &hidden, seq_len, kv_state,
+                        &self.rope_cos, &self.rope_sin, pos_offset,
                     );
-                    gqa_idx += 1;
                 }
+                (HybridLayer::LivConv(conv_layer), LayerState::Conv(conv_state)) => {
+                    hidden = conv_layer.forward_seq(&hidden, seq_len, conv_state);
+                }
+                _ => panic!("layer/state type mismatch"),
             }
         }
 
@@ -216,31 +248,30 @@ impl HybridModel {
             hidden.copy_from_slice(&self.embed_tokens[id * d..(id + 1) * d]);
         }
 
+        // 1b. Embedding norm
+        if !self.embed_norm_weight.is_empty() {
+            hidden = rmsnorm(&hidden, &self.embed_norm_weight, self.config.norm_eps as f32, d);
+        }
+
         // 2. Process through all layers
         let mut state = self.state.borrow_mut();
         let position = state.position;
-        let mut dn_idx = 0usize;
-        let mut gqa_idx = 0usize;
 
-        for layer in self.layers.iter() {
-            match layer {
-                HybridLayer::DeltaNet(dn_layer) => {
-                    hidden = dn_layer.forward_one(
-                        &hidden,
-                        &mut state.deltanet_states[dn_idx],
-                    );
-                    dn_idx += 1;
+        for (layer, layer_state) in self.layers.iter().zip(state.layer_states.iter_mut()) {
+            match (layer, layer_state) {
+                (HybridLayer::DeltaNet(dn_layer), LayerState::DeltaNet(dn_state)) => {
+                    hidden = dn_layer.forward_one(&hidden, dn_state);
                 }
-                HybridLayer::Gqa(gqa_layer) => {
+                (HybridLayer::Gqa(gqa_layer), LayerState::Kv(kv_state)) => {
                     hidden = gqa_layer.forward_one(
-                        &hidden,
-                        &mut state.kv_states[gqa_idx],
-                        &self.rope_cos,
-                        &self.rope_sin,
-                        position,
+                        &hidden, kv_state,
+                        &self.rope_cos, &self.rope_sin, position,
                     );
-                    gqa_idx += 1;
                 }
+                (HybridLayer::LivConv(conv_layer), LayerState::Conv(conv_state)) => {
+                    hidden = conv_layer.forward_one(&hidden, conv_state);
+                }
+                _ => panic!("layer/state type mismatch"),
             }
         }
 
@@ -271,7 +302,48 @@ impl HybridModel {
     /// Current number of tokens in the KV cache (grows with each decode step).
     pub fn kv_cache_len(&self) -> usize {
         let st = self.state.borrow();
-        st.kv_states.first().map_or(0, |s| s.len)
+        st.layer_states.iter().find_map(|s| match s {
+            LayerState::Kv(ks) => Some(ks.len),
+            _ => None,
+        }).unwrap_or(0)
+    }
+
+    /// GPU-resident single-token decode: all layers in one Metal command buffer.
+    ///
+    /// Embedding and LM head run on CPU; the 16-layer forward pass runs entirely on GPU.
+    /// GPU-resident single-token decode: all layers + final norm + LM head in one command buffer.
+    ///
+    /// Only embedding lookup is on CPU. Everything else runs on GPU.
+    #[cfg(feature = "metal")]
+    pub fn forward_one_gpu_resident(
+        &self,
+        token: u32,
+        bufs: &mut crate::metal::hybrid_gpu_buffers::MetalHybridBuffers,
+        backend: &crate::metal::MetalBackend,
+    ) -> ModelOutput {
+        let d = self.config.hidden_size;
+        let vocab = self.config.vocab_size;
+
+        // 1. Embedding lookup (CPU — tiny, not worth GPU dispatch)
+        let mut hidden = vec![0.0f32; d];
+        let id = token as usize;
+        if id < vocab {
+            hidden.copy_from_slice(&self.embed_tokens[id * d..(id + 1) * d]);
+        }
+
+        // 2. All layers + final norm + LM head on GPU (single command buffer)
+        // Returns [vocab] logits directly
+        let logits = crate::metal::hybrid_gpu_forward::hybrid_forward_all_layers(
+            bufs, &hidden, backend,
+        );
+
+        // 3. Sync position
+        self.state.borrow_mut().position += 1;
+
+        ModelOutput {
+            logits,
+            shape: [1, 1, vocab],
+        }
     }
 }
 
@@ -295,7 +367,7 @@ impl Model for HybridModel {
     }
 
     fn config(&self) -> &ModelConfig {
-        unimplemented!("HybridModel uses HybridConfig, not ModelConfig")
+        &self.model_config
     }
 }
 
@@ -364,7 +436,7 @@ impl HybridModel {
         let lm_head_weight = weights.get("lm_head.weight").map(|t| t.data.to_vec());
 
         // RoPE tables
-        let (rope_cos, rope_sin) = compute_rope_tables(max_kv_seq, hd_gqa);
+        let (rope_cos, rope_sin) = compute_rope_tables(max_kv_seq, hd_gqa, config.rope_theta);
 
         // Layers
         let mut layers = Vec::with_capacity(config.num_layers);
@@ -404,6 +476,8 @@ impl HybridModel {
                     ffn_gate_weight: ffn_gate,
                     ffn_up_weight: ffn_up,
                     ffn_down_weight: ffn_down,
+                    q4_wq: None, q4_wk: None, q4_wv: None, q4_wo: None,
+                    q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
                 }));
             } else {
                 // DeltaNet layer
@@ -456,6 +530,140 @@ impl HybridModel {
         Ok(HybridModel::new(
             config,
             embed_tokens,
+            vec![], // no embed norm for Qwen3.5
+            layers,
+            final_norm_weight,
+            lm_head_weight,
+            rope_cos,
+            rope_sin,
+            max_kv_seq,
+        ))
+    }
+
+    /// Build a HybridModel from GGUF-style weight dictionary (LFM2.5).
+    ///
+    /// Expects llama.cpp GGUF tensor names:
+    /// - `token_embd.weight`, `token_embd_norm.weight`, `output.weight`
+    /// - Conv layers: `blk.{i}.shortconv.{in_proj,conv,out_proj}.weight`
+    /// - GQA layers: `blk.{i}.attn_{q,k,v}.weight`, `attn_output.weight`,
+    ///   `attn_q_norm.weight`, `attn_k_norm.weight`
+    /// - Both: `blk.{i}.attn_norm.weight`, `ffn_{gate,up,down,norm}.weight`
+    pub fn from_weights_lfm25(
+        config: HybridConfig,
+        weights: &HashMap<String, RawTensor>,
+        max_kv_seq: usize,
+    ) -> Result<Self, String> {
+        let d = config.hidden_size;
+        let inner = config.livconv_inner_size;
+        let ck = config.livconv_kernel_size;
+        let nq = config.num_attention_heads;
+        let nkv = config.num_kv_heads;
+        let hd = config.gqa_head_dim;
+
+        let get = |name: &str| -> Result<Vec<f32>, String> {
+            weights
+                .get(name)
+                .map(|t| t.data.to_vec())
+                .ok_or_else(|| format!("missing weight: {name}"))
+        };
+
+        // Embedding + norms
+        let embed_tokens = get("token_embd.weight")?;
+        // LFM2.5: NO post-embedding norm. The "embedding_norm" in HF is actually
+        // the FINAL norm applied after all layers, before lm_head.
+        let embed_norm_weight = vec![]; // empty = disabled
+        let final_norm_weight = get("token_embd_norm.weight")?;
+        let lm_head_weight = if config.tie_embedding {
+            None
+        } else {
+            Some(get("output.weight")?)
+        };
+
+        // RoPE tables
+        let (rope_cos, rope_sin) = compute_rope_tables(max_kv_seq, hd, config.rope_theta);
+
+        // Layers
+        let mut layers = Vec::with_capacity(config.num_layers);
+        for i in 0..config.num_layers {
+            let b = format!("blk.{i}");
+
+            match config.layer_kind(i) {
+                LayerKind::LivConv => {
+                    let attn_norm = get(&format!("{b}.attn_norm.weight"))?;
+                    let in_proj = get(&format!("{b}.shortconv.in_proj.weight"))?;
+                    let conv_w = get(&format!("{b}.shortconv.conv.weight"))?;
+                    let out_proj = get(&format!("{b}.shortconv.out_proj.weight"))?;
+                    let ffn_norm = get(&format!("{b}.ffn_norm.weight"))?;
+                    let ffn_gate = get(&format!("{b}.ffn_gate.weight"))?;
+                    let ffn_up = get(&format!("{b}.ffn_up.weight"))?;
+                    let ffn_down = get(&format!("{b}.ffn_down.weight"))?;
+
+                    // Detect actual intermediate size from weight shapes
+                    let actual_im = ffn_gate.len() / d;
+
+                    layers.push(HybridLayer::LivConv(LivConvDecoderLayer {
+                        hidden_size: d,
+                        inner_size: inner,
+                        conv_kernel_size: ck,
+                        intermediate_size: actual_im,
+                        norm_eps: config.norm_eps as f32,
+                        attn_norm_weight: attn_norm,
+                        input_proj_weight: in_proj,
+                        conv_weight: conv_w,
+                        conv_bias: vec![], // LFM2.5 has no conv bias
+                        output_proj_weight: out_proj,
+                        ffn_norm_weight: ffn_norm,
+                        ffn_gate_weight: ffn_gate,
+                        ffn_up_weight: ffn_up,
+                        ffn_down_weight: ffn_down,
+                        q4_in_proj: None, q4_out_proj: None,
+                        q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
+                    }));
+                }
+                LayerKind::Gqa => {
+                    let attn_norm = get(&format!("{b}.attn_norm.weight"))?;
+                    let w_q = get(&format!("{b}.attn_q.weight"))?;
+                    let w_k = get(&format!("{b}.attn_k.weight"))?;
+                    let w_v = get(&format!("{b}.attn_v.weight"))?;
+                    let w_o = get(&format!("{b}.attn_output.weight"))?;
+                    let q_norm = get(&format!("{b}.attn_q_norm.weight"))?;
+                    let k_norm = get(&format!("{b}.attn_k_norm.weight"))?;
+                    let ffn_norm = get(&format!("{b}.ffn_norm.weight"))?;
+                    let ffn_gate = get(&format!("{b}.ffn_gate.weight"))?;
+                    let ffn_up = get(&format!("{b}.ffn_up.weight"))?;
+                    let ffn_down = get(&format!("{b}.ffn_down.weight"))?;
+
+                    let actual_im = ffn_gate.len() / d;
+
+                    layers.push(HybridLayer::Gqa(GqaDecoderLayer {
+                        hidden_size: d,
+                        num_q_heads: nq,
+                        num_kv_heads: nkv,
+                        head_dim: hd,
+                        intermediate_size: actual_im,
+                        norm_eps: config.norm_eps as f32,
+                        attn_norm_weight: attn_norm,
+                        w_q, w_k, w_v, w_o,
+                        q_norm_weight: q_norm,
+                        k_norm_weight: k_norm,
+                        ffn_norm_weight: ffn_norm,
+                        ffn_gate_weight: ffn_gate,
+                        ffn_up_weight: ffn_up,
+                        ffn_down_weight: ffn_down,
+                        q4_wq: None, q4_wk: None, q4_wv: None, q4_wo: None,
+                        q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
+                    }));
+                }
+                LayerKind::DeltaNet => {
+                    return Err(format!("LFM2.5 config has unexpected DeltaNet layer at index {i}"));
+                }
+            }
+        }
+
+        Ok(HybridModel::new(
+            config,
+            embed_tokens,
+            embed_norm_weight,
             layers,
             final_norm_weight,
             lm_head_weight,
@@ -466,14 +674,44 @@ impl HybridModel {
     }
 }
 
+/// Build a minimal `ModelConfig` from a `HybridConfig` for trait compliance.
+fn minimal_config_for_hybrid(hybrid: &HybridConfig) -> ModelConfig {
+    use crate::config::*;
+    ModelConfig {
+        name: "hybrid".to_string(),
+        architecture: ArchitectureConfig {
+            hidden_size: hybrid.hidden_size,
+            num_layers: hybrid.num_layers,
+            vocab_size: hybrid.vocab_size,
+            max_sequence_length: 4096,
+            tie_word_embeddings: hybrid.tie_embedding,
+            embed_scale: None,
+        },
+        attention: AttentionConfig::GQA {
+            num_heads: hybrid.num_attention_heads,
+            num_kv_heads: hybrid.num_kv_heads,
+            head_dim: hybrid.gqa_head_dim,
+        },
+        norm: NormConfig::RMSNorm { eps: hybrid.norm_eps },
+        ffn: FFNConfig::SwiGLU { intermediate_size: hybrid.intermediate_size },
+        position: PositionConfig::RoPE {
+            base: hybrid.rope_theta as f64,
+            max_position_embeddings: 4096,
+            style: Default::default(),
+            scaling: Default::default(),
+        },
+        quantization: QuantConfig::F32,
+    }
+}
+
 /// Compute RoPE cos/sin tables for the given max position and head dimension.
-fn compute_rope_tables(max_pos: usize, head_dim: usize) -> (Vec<f32>, Vec<f32>) {
+fn compute_rope_tables(max_pos: usize, head_dim: usize, rope_theta: f32) -> (Vec<f32>, Vec<f32>) {
     let half_d = head_dim / 2;
     let mut cos = vec![0.0f32; max_pos * half_d];
     let mut sin = vec![0.0f32; max_pos * half_d];
     for pos in 0..max_pos {
         for i in 0..half_d {
-            let freq = 1.0 / (10000.0f32).powf(2.0 * i as f32 / head_dim as f32);
+            let freq = 1.0 / rope_theta.powf(2.0 * i as f32 / head_dim as f32);
             let angle = pos as f32 * freq;
             cos[pos * half_d + i] = angle.cos();
             sin[pos * half_d + i] = angle.sin();
@@ -562,6 +800,8 @@ mod tests {
                     ffn_gate_weight: pseudo_random_vec(seed_base + 5, im * d),
                     ffn_up_weight: pseudo_random_vec(seed_base + 6, im * d),
                     ffn_down_weight: pseudo_random_vec(seed_base + 7, d * im),
+                    q4_wq: None, q4_wk: None, q4_wv: None, q4_wo: None,
+                    q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
                 }));
             } else {
                 // DeltaNet layer
@@ -596,6 +836,7 @@ mod tests {
         HybridModel::new(
             config,
             embed_tokens,
+            vec![], // no embed norm in tests
             layers,
             final_norm_weight,
             Some(lm_head_weight),
@@ -707,16 +948,126 @@ mod tests {
 
         // Layers 0, 1, 2 should be DeltaNet; layer 3 should be GQA
         for (i, layer) in model.layers.iter().enumerate() {
-            match layer {
-                HybridLayer::DeltaNet(_) => assert!(
-                    !model.config.is_full_attention(i),
-                    "layer {i} is DeltaNet but config says full attention"
-                ),
-                HybridLayer::Gqa(_) => assert!(
-                    model.config.is_full_attention(i),
-                    "layer {i} is GQA but config says DeltaNet"
-                ),
+            let kind = model.config.layer_kind(i);
+            match (layer, kind) {
+                (HybridLayer::DeltaNet(_), LayerKind::DeltaNet) => {}
+                (HybridLayer::Gqa(_), LayerKind::Gqa) => {}
+                (HybridLayer::LivConv(_), LayerKind::LivConv) => {}
+                _ => panic!("layer {i}: type/config mismatch"),
             }
+        }
+    }
+
+    // ---- LIV Conv hybrid model tests ----
+
+    fn make_livconv_test_model() -> HybridModel {
+        let config = HybridConfig::tiny_test_livconv();
+        let d = config.hidden_size;       // 64
+        let vocab = config.vocab_size;    // 128
+        let nq = config.num_attention_heads;    // 4
+        let nkv = config.num_kv_heads;          // 2
+        let hd_gqa = config.gqa_head_dim;       // 16
+        let im = config.intermediate_size;      // 128
+        let inner = config.livconv_inner_size;   // 64
+        let ck = config.livconv_kernel_size;     // 4
+
+        let embed_tokens = pseudo_random_vec(100, vocab * d);
+        let final_norm_weight = vec![1.0f32; d];
+        let lm_head_weight = pseudo_random_vec(200, vocab * d);
+
+        let max_kv_seq = 64;
+        let (rope_cos, rope_sin) = make_rope_tables(max_kv_seq, hd_gqa);
+
+        let mut layers = Vec::new();
+        for layer_idx in 0..config.num_layers {
+            let seed_base = (layer_idx as u64 + 1) * 1000;
+            match config.layer_kind(layer_idx) {
+                LayerKind::LivConv => {
+                    layers.push(HybridLayer::LivConv(LivConvDecoderLayer {
+                        hidden_size: d,
+                        inner_size: inner,
+                        conv_kernel_size: ck,
+                        intermediate_size: im,
+                        norm_eps: config.norm_eps as f32,
+                        attn_norm_weight: vec![1.0; d],
+                        input_proj_weight: pseudo_random_vec(seed_base + 1, 2 * inner * d),
+                        conv_weight: pseudo_random_vec(seed_base + 2, inner * ck),
+                        conv_bias: vec![0.0; inner],
+                        output_proj_weight: pseudo_random_vec(seed_base + 3, d * inner),
+                        ffn_norm_weight: vec![1.0; d],
+                        ffn_gate_weight: pseudo_random_vec(seed_base + 4, im * d),
+                        ffn_up_weight: pseudo_random_vec(seed_base + 5, im * d),
+                        ffn_down_weight: pseudo_random_vec(seed_base + 6, d * im),
+                        q4_in_proj: None, q4_out_proj: None,
+                        q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
+                    }));
+                }
+                LayerKind::Gqa => {
+                    layers.push(HybridLayer::Gqa(GqaDecoderLayer {
+                        hidden_size: d,
+                        num_q_heads: nq,
+                        num_kv_heads: nkv,
+                        head_dim: hd_gqa,
+                        intermediate_size: im,
+                        norm_eps: config.norm_eps as f32,
+                        attn_norm_weight: vec![1.0; d],
+                        w_q: pseudo_random_vec(seed_base + 1, nq * hd_gqa * d),
+                        w_k: pseudo_random_vec(seed_base + 2, nkv * hd_gqa * d),
+                        w_v: pseudo_random_vec(seed_base + 3, nkv * hd_gqa * d),
+                        w_o: pseudo_random_vec(seed_base + 4, d * nq * hd_gqa),
+                        q_norm_weight: vec![1.0; hd_gqa],
+                        k_norm_weight: vec![1.0; hd_gqa],
+                        ffn_norm_weight: vec![1.0; d],
+                        ffn_gate_weight: pseudo_random_vec(seed_base + 5, im * d),
+                        ffn_up_weight: pseudo_random_vec(seed_base + 6, im * d),
+                        ffn_down_weight: pseudo_random_vec(seed_base + 7, d * im),
+                        q4_wq: None, q4_wk: None, q4_wv: None, q4_wo: None,
+                        q4_ffn_gate: None, q4_ffn_up: None, q4_ffn_down: None,
+                    }));
+                }
+                LayerKind::DeltaNet => unreachable!("livconv test config has no DeltaNet"),
+            }
+        }
+
+        HybridModel::new(
+            config, embed_tokens, vec![], layers, final_norm_weight,
+            Some(lm_head_weight), rope_cos, rope_sin, max_kv_seq,
+        )
+    }
+
+    #[test]
+    fn test_livconv_hybrid_forward() {
+        let model = make_livconv_test_model();
+        let output = model.forward(&[1, 2, 3]);
+        assert_eq!(output.shape, [1, 1, model.config.vocab_size]);
+        for (i, &v) in output.logits.iter().enumerate() {
+            assert!(v.is_finite(), "logit[{i}] = {v} is not finite");
+        }
+    }
+
+    #[test]
+    fn test_livconv_hybrid_prefill_then_decode() {
+        let model = make_livconv_test_model();
+        model.reset_state();
+        let out1 = model.prefill(&[1, 2, 3]);
+        for (i, &v) in out1.logits.iter().enumerate() {
+            assert!(v.is_finite(), "prefill logit[{i}] = {v} is not finite");
+        }
+        let out2 = model.decode_one(4);
+        for (i, &v) in out2.logits.iter().enumerate() {
+            assert!(v.is_finite(), "decode logit[{i}] = {v} is not finite");
+        }
+    }
+
+    #[test]
+    fn test_livconv_hybrid_reset() {
+        let model = make_livconv_test_model();
+        model.reset_state();
+        let out1 = model.prefill(&[1, 2, 3]);
+        model.reset_state();
+        let out2 = model.prefill(&[1, 2, 3]);
+        for (i, (&a, &b)) in out1.logits.iter().zip(out2.logits.iter()).enumerate() {
+            assert!((a - b).abs() < 1e-5, "logit[{i}] differs: {a} vs {b}");
         }
     }
 

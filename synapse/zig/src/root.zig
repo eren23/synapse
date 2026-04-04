@@ -27,4 +27,5 @@ pub const ops = struct {
     pub const wkv7 = @import("ops/wkv7.zig");
     pub const projection = @import("ops/projection.zig");
     pub const fused_lewm_layer = @import("ops/fused_lewm_layer.zig");
+    pub const fused_lewm_rollout = @import("ops/fused_lewm_rollout.zig");
 };

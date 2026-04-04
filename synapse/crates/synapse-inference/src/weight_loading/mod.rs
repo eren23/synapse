@@ -7,7 +7,7 @@ pub mod weight_map;
 
 pub use converter::{bf16_to_f32, f16_to_f32, transpose};
 #[cfg(not(target_os = "espidf"))]
-pub use gguf::{load_gguf, parse_gguf};
+pub use gguf::{load_gguf, load_gguf_with_raw_q4, parse_gguf, RawQ4Tensor};
 #[cfg(not(target_os = "espidf"))]
 pub use safetensors::{load_safetensors, load_safetensors_sharded, parse_safetensors};
 pub use weight_map::WeightMapper;

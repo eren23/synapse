@@ -447,6 +447,72 @@ extern "C" {
         proj_buf: *mut f32,
     ) -> syn_status_t;
 
+    /// V2: same as syn_lewm_predict_layer but with mode flag.
+    /// mode=0: standard (separate loops), mode=1: ESP-fused (single-pass loops).
+    pub fn syn_lewm_predict_layer_v2(
+        seq: *mut f32,
+        conditioning: *const f32,
+        seq_len: usize,
+        hidden: usize,
+        num_heads: usize,
+        inner_dim: usize,
+        inter: usize,
+        adaln_weight: *const f32,
+        adaln_bias: *const f32,
+        attn_norm_weight: *const f32,
+        to_qkv: *const f32,
+        attn_out_weight: *const f32,
+        attn_out_bias: *const f32,
+        mlp_norm_weight: *const f32,
+        mlp_up_weight: *const f32,
+        mlp_up_bias: *const f32,
+        mlp_down_weight: *const f32,
+        mlp_down_bias: *const f32,
+        mod_buf: *mut f32,
+        normed_buf: *mut f32,
+        qkv_buf: *mut f32,
+        attn_buf: *mut f32,
+        proj_buf: *mut f32,
+        mode: u8,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
+    // Fused LEWM rollout (all layers, all steps in one call)
+    // ------------------------------------------------------------------
+    pub fn syn_lewm_rollout_fused(
+        seq: *mut f32,
+        conditioning: *const f32,
+        num_steps: usize,
+        hidden: usize,
+        num_heads: usize,
+        inner_dim: usize,
+        inter: usize,
+        num_layers: usize,
+        // Per-layer weight pointer arrays
+        adaln_ws: *const *const f32,
+        adaln_bs: *const *const f32,
+        attn_norm_ws: *const *const f32,
+        to_qkvs: *const *const f32,
+        attn_out_ws: *const *const f32,
+        attn_out_bs: *const *const f32,
+        mlp_norm_ws: *const *const f32,
+        mlp_up_ws: *const *const f32,
+        mlp_up_bs: *const *const f32,
+        mlp_down_ws: *const *const f32,
+        mlp_down_bs: *const *const f32,
+        // Scratch buffers
+        mod_buf: *mut f32,
+        normed_buf: *mut f32,
+        qkv_buf: *mut f32,
+        attn_buf: *mut f32,
+        proj_buf: *mut f32,
+        scores_buf: *mut f32,
+        packed_a: *mut f32,
+        packed_b: *mut f32,
+        // Mode flags
+        mode: u32,
+    ) -> syn_status_t;
+
     // ------------------------------------------------------------------
     // KV-Cache
     // ------------------------------------------------------------------

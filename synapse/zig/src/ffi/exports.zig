@@ -1683,6 +1683,133 @@ pub export fn syn_lewm_predict_layer(
     return SYN_OK;
 }
 
+/// V2: Same as syn_lewm_predict_layer but with a mode flag.
+/// mode=0: standard (separate loops), mode=1: ESP-fused (single-pass loops).
+pub export fn syn_lewm_predict_layer_v2(
+    seq: ?[*]f32,
+    conditioning: ?[*]const f32,
+    seq_len: usize,
+    hidden: usize,
+    num_heads: usize,
+    inner_dim: usize,
+    inter: usize,
+    adaln_weight: ?[*]const f32,
+    adaln_bias: ?[*]const f32,
+    attn_norm_weight: ?[*]const f32,
+    to_qkv: ?[*]const f32,
+    attn_out_weight: ?[*]const f32,
+    attn_out_bias: ?[*]const f32,
+    mlp_norm_weight: ?[*]const f32,
+    mlp_up_weight: ?[*]const f32,
+    mlp_up_bias: ?[*]const f32,
+    mlp_down_weight: ?[*]const f32,
+    mlp_down_bias: ?[*]const f32,
+    mod_buf: ?[*]f32,
+    normed_buf: ?[*]f32,
+    qkv_buf: ?[*]f32,
+    attn_buf: ?[*]f32,
+    proj_buf: ?[*]f32,
+    mode: u8,
+) c_int {
+    const seq_ptr = seq orelse return SYN_ERR_NULL_PTR;
+    const cond_ptr = conditioning orelse return SYN_ERR_NULL_PTR;
+    const adaln_w = adaln_weight orelse return SYN_ERR_NULL_PTR;
+    const anorm = attn_norm_weight orelse return SYN_ERR_NULL_PTR;
+    const qkv_w = to_qkv orelse return SYN_ERR_NULL_PTR;
+    const ao_w = attn_out_weight orelse return SYN_ERR_NULL_PTR;
+    const mnorm = mlp_norm_weight orelse return SYN_ERR_NULL_PTR;
+    const mu_w = mlp_up_weight orelse return SYN_ERR_NULL_PTR;
+    const md_w = mlp_down_weight orelse return SYN_ERR_NULL_PTR;
+    const mb = mod_buf orelse return SYN_ERR_NULL_PTR;
+    const nb = normed_buf orelse return SYN_ERR_NULL_PTR;
+    const qb = qkv_buf orelse return SYN_ERR_NULL_PTR;
+    const ab = attn_buf orelse return SYN_ERR_NULL_PTR;
+    const pb = proj_buf orelse return SYN_ERR_NULL_PTR;
+    if (seq_len == 0 or hidden == 0) return SYN_OK;
+
+    const fused = @import("synapse").ops.fused_lewm_layer;
+    fused.lewmPredictorLayerV2(
+        seq_ptr, cond_ptr, seq_len, hidden, num_heads, inner_dim, inter,
+        adaln_w, adaln_bias, anorm, qkv_w, ao_w, attn_out_bias,
+        mnorm, mu_w, mlp_up_bias, md_w, mlp_down_bias,
+        mb, nb, qb, ab, pb,
+        mode,
+    );
+    return SYN_OK;
+}
+
+/// Fused LEWM rollout: process all N rollout steps through all layers in one call.
+/// Per-layer weight arrays are [num_layers] pointers. Scratch buffers must be pre-sized
+/// for fused_seq_len = num_steps * 3.
+pub export fn syn_lewm_rollout_fused(
+    seq: ?[*]f32,
+    conditioning: ?[*]const f32,
+    num_steps: usize,
+    hidden: usize,
+    num_heads: usize,
+    inner_dim: usize,
+    inter: usize,
+    num_layers: usize,
+    // Per-layer weight pointer arrays
+    adaln_ws: ?[*]const ?[*]const f32,
+    adaln_bs: ?[*]const ?[*]const f32,
+    attn_norm_ws: ?[*]const ?[*]const f32,
+    to_qkvs: ?[*]const ?[*]const f32,
+    attn_out_ws: ?[*]const ?[*]const f32,
+    attn_out_bs: ?[*]const ?[*]const f32,
+    mlp_norm_ws: ?[*]const ?[*]const f32,
+    mlp_up_ws: ?[*]const ?[*]const f32,
+    mlp_up_bs: ?[*]const ?[*]const f32,
+    mlp_down_ws: ?[*]const ?[*]const f32,
+    mlp_down_bs: ?[*]const ?[*]const f32,
+    // Scratch buffers
+    mod_buf: ?[*]f32,
+    normed_buf: ?[*]f32,
+    qkv_buf: ?[*]f32,
+    attn_buf: ?[*]f32,
+    proj_buf: ?[*]f32,
+    scores_buf: ?[*]f32,
+    packed_a: ?[*]f32,
+    packed_b: ?[*]f32,
+    // Mode flags
+    mode: u32,
+) c_int {
+    const s = seq orelse return SYN_ERR_NULL_PTR;
+    const cond = conditioning orelse return SYN_ERR_NULL_PTR;
+    const aw = adaln_ws orelse return SYN_ERR_NULL_PTR;
+    const ab = adaln_bs orelse return SYN_ERR_NULL_PTR;
+    const anw = attn_norm_ws orelse return SYN_ERR_NULL_PTR;
+    const qkvw = to_qkvs orelse return SYN_ERR_NULL_PTR;
+    const aow = attn_out_ws orelse return SYN_ERR_NULL_PTR;
+    const aob = attn_out_bs orelse return SYN_ERR_NULL_PTR;
+    const mnw = mlp_norm_ws orelse return SYN_ERR_NULL_PTR;
+    const muw = mlp_up_ws orelse return SYN_ERR_NULL_PTR;
+    const mub = mlp_up_bs orelse return SYN_ERR_NULL_PTR;
+    const mdw = mlp_down_ws orelse return SYN_ERR_NULL_PTR;
+    const mdb = mlp_down_bs orelse return SYN_ERR_NULL_PTR;
+    const mb = mod_buf orelse return SYN_ERR_NULL_PTR;
+    const nb = normed_buf orelse return SYN_ERR_NULL_PTR;
+    const qb = qkv_buf orelse return SYN_ERR_NULL_PTR;
+    const atb = attn_buf orelse return SYN_ERR_NULL_PTR;
+    const pb = proj_buf orelse return SYN_ERR_NULL_PTR;
+    const sb = scores_buf orelse return SYN_ERR_NULL_PTR;
+    const pa = packed_a orelse return SYN_ERR_NULL_PTR;
+    const pbb = packed_b orelse return SYN_ERR_NULL_PTR;
+    if (num_steps == 0 or hidden == 0 or num_layers == 0) return SYN_OK;
+
+    // Cast from nullable C-ABI pointers to the non-optional slice pointers the Zig function expects.
+    const rollout = @import("synapse").ops.fused_lewm_rollout;
+    rollout.lewmRolloutFused(
+        s, cond, num_steps, hidden, num_heads, inner_dim, inter, num_layers,
+        @ptrCast(aw), @ptrCast(ab), @ptrCast(anw), @ptrCast(qkvw),
+        @ptrCast(aow), @ptrCast(aob), @ptrCast(mnw), @ptrCast(muw),
+        @ptrCast(mub), @ptrCast(mdw), @ptrCast(mdb),
+        mb, nb, qb, atb, pb, sb, pa, pbb,
+        mode,
+    );
+    return SYN_OK;
+}
+
 // ============================================================
 // KV-Cache management
 // ============================================================

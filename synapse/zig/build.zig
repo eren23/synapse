@@ -729,4 +729,45 @@ pub fn build(b: *std.Build) void {
     const run_bench_kvcache = b.addRunArtifact(bench_kvcache);
     const bench_kvcache_step = b.step("bench-kvcache", "Run KV-Cache benchmarks");
     bench_kvcache_step.dependOn(&run_bench_kvcache.step);
+
+    // Fused LEWM layer unit tests (inline tests in fused_lewm_layer.zig)
+    const fused_lewm_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_fused_lewm.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "synapse", .module = lib_mod },
+            },
+        }),
+    });
+    if (fused_lewm_tests.rootModuleTarget().os.tag == .macos) {
+        fused_lewm_tests.linkFramework("Accelerate");
+    }
+    const run_fused_lewm_tests = b.addRunArtifact(fused_lewm_tests);
+    test_step.dependOn(&run_fused_lewm_tests.step);
+
+    const fused_lewm_test_step = b.step("test-fused-lewm", "Run fused LEWM layer unit tests only");
+    fused_lewm_test_step.dependOn(&run_fused_lewm_tests.step);
+
+    // Fused LEWM layer benchmarks — standard vs ESP-fused, compiled with ReleaseFast
+    const bench_fused_lewm = b.addExecutable(.{
+        .name = "bench_fused_lewm",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/bench_fused_lewm.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "synapse", .module = bench_synapse_mod },
+            },
+        }),
+    });
+    if (bench_fused_lewm.rootModuleTarget().os.tag == .macos) {
+        bench_fused_lewm.linkFramework("Accelerate");
+    }
+    b.installArtifact(bench_fused_lewm);
+
+    const run_bench_fused_lewm = b.addRunArtifact(bench_fused_lewm);
+    const bench_fused_lewm_step = b.step("bench-fused-lewm", "Run fused LEWM layer benchmarks (standard vs ESP-fused)");
+    bench_fused_lewm_step.dependOn(&run_bench_fused_lewm.step);
 }
