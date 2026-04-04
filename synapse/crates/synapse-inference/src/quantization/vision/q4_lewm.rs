@@ -538,6 +538,7 @@ impl QuantizedQ4LeWM {
             cond_proj_bias: AlignedBuffer::from_vec(self.cond_proj_bias.clone()),
             projector: clone_projection_head(&self.projector),
             pred_proj: clone_projection_head(&self.pred_proj),
+            fuse_mode: 0,
         }
     }
 }
