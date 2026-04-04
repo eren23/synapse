@@ -741,6 +741,9 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    if (fused_lewm_tests.rootModuleTarget().os.tag == .macos) {
+        fused_lewm_tests.linkFramework("Accelerate");
+    }
     const run_fused_lewm_tests = b.addRunArtifact(fused_lewm_tests);
     test_step.dependOn(&run_fused_lewm_tests.step);
 
@@ -759,6 +762,9 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    if (bench_fused_lewm.rootModuleTarget().os.tag == .macos) {
+        bench_fused_lewm.linkFramework("Accelerate");
+    }
     b.installArtifact(bench_fused_lewm);
 
     const run_bench_fused_lewm = b.addRunArtifact(bench_fused_lewm);

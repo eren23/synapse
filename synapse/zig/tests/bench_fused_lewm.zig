@@ -6,6 +6,7 @@
 //! Tests both single-step (seq_len=3) and 50-step rollout (seq_len=150).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const fused = @import("synapse").ops.fused_lewm_layer;
 const rollout = @import("synapse").ops.fused_lewm_rollout;
 
@@ -390,6 +391,45 @@ pub fn main() !void {
     print("  Fused+ESP+ADALN (0x13):  {d:.1} ms/rollout  ({d:.1}x vs sequential)\n", .{ fused_esp_roll_ms, fused_esp_vs_seq });
 
     // ================================================================
+    // 5. Fused Rollout with BLAS Accelerate (macOS only)
+    // ================================================================
+    var blas_roll_ms: f64 = 0;
+    if (comptime builtin.os.tag == .macos) {
+        print("\n--- Fused Rollout + BLAS Accelerate ({d} steps batched, {d} layers, {d} iters) ---\n", .{ ROLLOUT_STEPS, LAYERS, ROLLOUT_ITERS });
+
+        const blas_mode = rollout.FUSED_ROLLOUT | rollout.ESP_FUSED | rollout.SHARED_ADALN | rollout.BLAS_ACCELERATE;
+        // Warmup
+        for (0..WARMUP) |_| {
+            fillDeterministic(seq_fused[0 .. ROLLOUT_SEQ_LEN * HIDDEN], 42);
+            rollout.lewmRolloutFused(
+                seq_fused.ptr, conditioning.ptr,
+                ROLLOUT_STEPS, HIDDEN, NUM_HEADS, INNER_DIM, INTER, LAYERS,
+                &adaln_ws, &adaln_bs_arr, &attn_norm_ws, &to_qkvs, &attn_out_ws, &attn_out_bs_arr,
+                &mlp_norm_ws, &mlp_up_ws, &mlp_up_bs_arr, &mlp_down_ws, &mlp_down_bs_arr,
+                mod_buf.ptr, normed_buf.ptr, qkv_buf.ptr, attn_buf.ptr, proj_buf.ptr, scores_buf.ptr,
+                packed_a_buf.ptr, packed_b_buf.ptr,
+                blas_mode,
+            );
+        }
+        timer = try std.time.Timer.start();
+        for (0..ROLLOUT_ITERS) |_| {
+            fillDeterministic(seq_fused[0 .. ROLLOUT_SEQ_LEN * HIDDEN], 42);
+            rollout.lewmRolloutFused(
+                seq_fused.ptr, conditioning.ptr,
+                ROLLOUT_STEPS, HIDDEN, NUM_HEADS, INNER_DIM, INTER, LAYERS,
+                &adaln_ws, &adaln_bs_arr, &attn_norm_ws, &to_qkvs, &attn_out_ws, &attn_out_bs_arr,
+                &mlp_norm_ws, &mlp_up_ws, &mlp_up_bs_arr, &mlp_down_ws, &mlp_down_bs_arr,
+                mod_buf.ptr, normed_buf.ptr, qkv_buf.ptr, attn_buf.ptr, proj_buf.ptr, scores_buf.ptr,
+                packed_a_buf.ptr, packed_b_buf.ptr,
+                blas_mode,
+            );
+        }
+        const blas_roll_ns = timer.read();
+        blas_roll_ms = @as(f64, @floatFromInt(blas_roll_ns)) / 1_000_000.0 / @as(f64, @floatFromInt(ROLLOUT_ITERS));
+        print("  Fused+BLAS (0x1B):       {d:.1} ms/rollout  ({d:.1}x vs sequential)\n", .{ blas_roll_ms, std_roll_ms / blas_roll_ms });
+    }
+
+    // ================================================================
     // Summary
     // ================================================================
     print("\n=================================================================\n", .{});
@@ -413,5 +453,10 @@ pub fn main() !void {
         fused_vs_seq,
         fused_esp_vs_seq,
     });
+    if (comptime builtin.os.tag == .macos) {
+        print("  Fused+BLAS rollout:         {d:.1}ms  ({d:.1}x vs seq)\n", .{
+            blas_roll_ms, std_roll_ms / blas_roll_ms,
+        });
+    }
     print("=================================================================\n\n", .{});
 }

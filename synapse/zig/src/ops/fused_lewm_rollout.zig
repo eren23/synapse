@@ -8,8 +8,32 @@
 //!   FUSED_ROLLOUT | ESP_FUSED | PREPACK_WEIGHTS | BLAS_ACCELERATE | SHARED_ADALN | QUANT_*
 
 const std = @import("std");
+const builtin = @import("builtin");
 const layer_ops = @import("fused_lewm_layer.zig");
 const matmul_ops = @import("matmul.zig");
+
+const is_macos = builtin.os.tag == .macos;
+
+const CblasRowMajor: c_int = 101;
+const CblasNoTrans: c_int = 111;
+const CblasTrans: c_int = 112;
+
+extern "c" fn cblas_sgemm(
+    order: c_int,
+    transA: c_int,
+    transB: c_int,
+    m: c_int,
+    n: c_int,
+    k: c_int,
+    alpha: f32,
+    a: [*]const f32,
+    lda: c_int,
+    b: [*]const f32,
+    ldb: c_int,
+    beta: f32,
+    c_out: [*]f32,
+    ldc: c_int,
+) void;
 
 // ================================================================
 // Flag constants (u32 bitfield)
@@ -50,7 +74,28 @@ pub fn gemm_dispatch(
     packed_b: [*]f32,
     mode: u32,
 ) void {
-    _ = mode;
+    // BLAS Accelerate path (macOS only)
+    if (comptime is_macos) {
+        if (hasFlag(mode, BLAS_ACCELERATE)) {
+            cblas_sgemm(
+                CblasRowMajor,
+                CblasNoTrans,
+                CblasTrans,
+                @intCast(m),
+                @intCast(n),
+                @intCast(k),
+                1.0,
+                a,
+                @intCast(k),
+                b,
+                @intCast(k),
+                0.0,
+                c,
+                @intCast(n),
+            );
+            return;
+        }
+    }
     // Zero output before tiled SGEMM (required: sgemmTiled accumulates into C)
     const total = m * n;
     for (0..total) |i| c[i] = 0;
