@@ -80,7 +80,12 @@ impl CodeWorldModelConfig {
     pub fn from_json(path: &std::path::Path) -> Result<Self, String> {
         let data = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read config: {e}"))?;
-        let v: serde_json::Value = serde_json::from_str(&data)
+        Self::from_json_str(&data)
+    }
+
+    /// Parse config directly from a JSON string (WASM-friendly, no filesystem).
+    pub fn from_json_str(data: &str) -> Result<Self, String> {
+        let v: serde_json::Value = serde_json::from_str(data)
             .map_err(|e| format!("Failed to parse config JSON: {e}"))?;
         let model_dim = v["model_dim"].as_u64().unwrap_or(128) as usize;
         let num_heads = v["num_heads"].as_u64().unwrap_or(4) as usize;

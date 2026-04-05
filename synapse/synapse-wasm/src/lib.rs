@@ -3901,3 +3901,67 @@ impl RealLeWMFullQ4 {
 
     pub fn action_dim(&self) -> usize { ACTION_DIM }
 }
+
+// ════════════════════════════════════════════════════════════════════
+// Code WM — zero-drift text-token world model for code edits
+// ════════════════════════════════════════════════════════════════════
+
+use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig};
+
+/// Code WM running in WASM. Zero drift vs PyTorch reference (<1e-6 max_abs).
+///
+/// Usage from JS:
+/// ```js
+/// const configJson = await (await fetch("code_wm_g8.json")).text();
+/// const weightsBytes = new Uint8Array(await (await fetch("g8.safetensors")).arrayBuffer());
+/// const model = WasmCodeWM.create(configJson, weightsBytes);
+/// // tokens is an Int32Array of ids from the ast_tokenizer (< 662)
+/// const embedding = model.encode(new Int32Array([1,2,3,...]));   // length 128
+/// ```
+#[wasm_bindgen]
+pub struct WasmCodeWM {
+    model: CodeWorldModel,
+}
+
+#[wasm_bindgen]
+impl WasmCodeWM {
+    /// Build from config JSON string + safetensors bytes.
+    pub fn create(config_json: &str, weights_bytes: &[u8]) -> Result<WasmCodeWM, JsError> {
+        console_error_panic_hook::set_once();
+        let cfg = CodeWorldModelConfig::from_json_str(config_json)
+            .map_err(|e| JsError::new(&format!("Config error: {e}")))?;
+        let weights = parse_safetensors(weights_bytes)
+            .map_err(|e| JsError::new(&format!("Failed to parse weights: {e:?}")))?;
+        let mut model = CodeWorldModel::from_config(&cfg);
+        let stats = model.load_weights(weights)
+            .map_err(|e| JsError::new(&format!("load_weights failed: {e:?}")))?;
+        if stats.loaded != 47 {
+            return Err(JsError::new(&format!(
+                "Expected 47 weight tensors, got {}. Missing keys likely.", stats.loaded
+            )));
+        }
+        Ok(WasmCodeWM { model })
+    }
+
+    /// Encode a token sequence to a 128-d latent. Accepts i32 for JS ergonomics;
+    /// values must be < vocab_size (662).
+    pub fn encode(&self, tokens: &[i32]) -> Vec<f32> {
+        let tokens_i64: Vec<i64> = tokens.iter().map(|&t| t as i64).collect();
+        self.model.encode(&tokens_i64)
+    }
+
+    /// Encode an action vector (length action_dim = 7) to a 128-d latent.
+    pub fn encode_action(&self, action: &[f32]) -> Vec<f32> {
+        self.model.encode_action(action)
+    }
+
+    /// Predict the next-state latent from (z_state, z_action).
+    pub fn predict(&self, z_state: &[f32], z_action: &[f32]) -> Vec<f32> {
+        self.model.predict(z_state, z_action)
+    }
+
+    pub fn model_dim(&self) -> usize { self.model.config.model_dim }
+    pub fn vocab_size(&self) -> usize { self.model.config.vocab_size }
+    pub fn max_seq_len(&self) -> usize { self.model.config.max_seq_len }
+}
+

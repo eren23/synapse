@@ -225,6 +225,14 @@ name = "bench_code_wm"
 path = "examples/bench_code_wm.rs"
 
 [[example]]
+name = "code_wm_retrieve"
+path = "examples/code_wm_retrieve.rs"
+
+[[example]]
+name = "code_wm_int8_compare"
+path = "examples/code_wm_int8_compare.rs"
+
+[[example]]
 name = "geometric_attention_demo"
 path = "examples/geometric_attention_demo.rs"
 

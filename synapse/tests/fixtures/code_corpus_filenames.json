@@ -1,0 +1,39 @@
+{
+  "filenames": [
+    "benchmark_matrix.py",
+    "convert_code_wm_ckpt.py",
+    "convert_lewm_ckpt.py",
+    "debug_rwkv_baseline.py",
+    "lfm25_baseline_comparison.py",
+    "lfm25_generate.py",
+    "reference/code_wm_pytorch_baseline.py",
+    "reference/convert_rwkv_checkpoint.py",
+    "reference/generate_mamba_reference.py",
+    "reference/generate_reference.py",
+    "reference/generate_rwkv_reference.py",
+    "reference/inspect_checkpoint.py",
+    "reference/lewm_pytorch_baseline.py",
+    "sync_public_status.py",
+    "tokenize_code_dir.py",
+    "verify_logits.py"
+  ],
+  "sizes_bytes": [
+    28204,
+    7248,
+    21279,
+    2087,
+    3646,
+    1556,
+    8539,
+    9249,
+    4297,
+    2827,
+    3369,
+    2594,
+    9604,
+    8502,
+    2982,
+    1333
+  ],
+  "max_len": 512
+}
