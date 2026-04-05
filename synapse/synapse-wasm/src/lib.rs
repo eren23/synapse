@@ -3963,5 +3963,20 @@ impl WasmCodeWM {
     pub fn model_dim(&self) -> usize { self.model.config.model_dim }
     pub fn vocab_size(&self) -> usize { self.model.config.vocab_size }
     pub fn max_seq_len(&self) -> usize { self.model.config.max_seq_len }
+
+    /// Tokenize Python source via the native AST tokenizer, then encode
+    /// → 128-d latent in one JS call. Fully self-contained pipeline.
+    pub fn encode_source(&self, source: &str) -> Vec<f32> {
+        let max_len = self.model.config.max_seq_len;
+        let toks_u16 = synapse_code_tokenizer::tokenize(source, max_len);
+        let toks_i64: Vec<i64> = toks_u16.iter().map(|&t| t as i64).collect();
+        self.model.encode(&toks_i64)
+    }
+}
+
+/// Standalone Python AST tokenizer (doesn't need a model). Returns u16 tokens.
+#[wasm_bindgen]
+pub fn tokenize_python(source: &str, max_len: usize) -> Vec<u16> {
+    synapse_code_tokenizer::tokenize(source, max_len)
 }
 

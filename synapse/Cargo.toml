@@ -246,6 +246,10 @@ name = "tokenizer_cross_check"
 path = "examples/tokenizer_cross_check.rs"
 
 [[example]]
+name = "code_wm_pipeline"
+path = "examples/code_wm_pipeline.rs"
+
+[[example]]
 name = "geometric_attention_demo"
 path = "examples/geometric_attention_demo.rs"
 
