@@ -204,3 +204,33 @@ fn code_wm_g1b_end_to_end_golden() {
     let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
     validate_end_to_end("g1b", &m, &goldens);
 }
+
+/// ExpA: 192d, 2.4M params, trained on 500K samples, 15K steps (research champion).
+#[test]
+fn code_wm_expa_end_to_end_golden() {
+    let weights = "models/code_wm/expa.safetensors";
+    let config = "configs/code_wm_expa.json";
+    let goldens_path = "tests/fixtures/code_wm_reference_expa.safetensors";
+    if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+        eprintln!("SKIP: missing expa artifacts.");
+        return;
+    }
+    let m = load_model(weights, config);
+    let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+    validate_end_to_end("expa", &m, &goldens);
+}
+
+/// G10: 128d, 1.1M params, 500K samples training (minimum-size fallback).
+#[test]
+fn code_wm_g10_end_to_end_golden() {
+    let weights = "models/code_wm/g10.safetensors";
+    let config = "configs/code_wm_g10.json";
+    let goldens_path = "tests/fixtures/code_wm_reference_g10.safetensors";
+    if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+        eprintln!("SKIP: missing g10 artifacts.");
+        return;
+    }
+    let m = load_model(weights, config);
+    let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+    validate_end_to_end("g10", &m, &goldens);
+}
