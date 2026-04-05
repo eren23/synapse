@@ -14,6 +14,7 @@ repository = "https://github.com/eren23/synapse"
 
 [features]
 metal = ["synapse-inference/metal"]
+debug_activations = ["synapse-inference/debug_activations"]
 
 [dependencies]
 synapse-autograd = { path = "crates/synapse-autograd" }
@@ -136,6 +137,10 @@ name = "multi_model_validation"
 path = "tests/integration/multi_model_validation.rs"
 
 [[test]]
+name = "code_wm_golden"
+path = "tests/integration/code_wm_golden.rs"
+
+[[test]]
 name = "kvcache_speedup"
 path = "tests/benchmarks/kvcache_speedup.rs"
 
@@ -210,6 +215,14 @@ path = "examples/world_model_rollout.rs"
 [[example]]
 name = "lewm_demo"
 path = "examples/lewm_demo.rs"
+
+[[example]]
+name = "code_wm_demo"
+path = "examples/code_wm_demo.rs"
+
+[[example]]
+name = "bench_code_wm"
+path = "examples/bench_code_wm.rs"
 
 [[example]]
 name = "geometric_attention_demo"

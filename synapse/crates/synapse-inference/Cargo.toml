@@ -9,6 +9,7 @@ zig-ffi = ["dep:synapse-core", "dep:synapse-sys"]
 pure-rust = []
 metal = ["dep:metal", "zig-ffi"]
 diffusion = []
+debug_activations = []
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
