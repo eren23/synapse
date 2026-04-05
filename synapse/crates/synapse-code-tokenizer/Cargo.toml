@@ -1,0 +1,8 @@
+[package]
+name = "synapse-code-tokenizer"
+version = "0.1.0"
+edition = "2021"
+description = "Python AST tokenizer for Code WM — no Python runtime dependency"
+
+[dependencies]
+rustpython-parser = "0.4"

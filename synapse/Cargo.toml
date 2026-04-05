@@ -26,6 +26,7 @@ synapse-train = { path = "crates/synapse-train" }
 synapse-core = { path = "crates/synapse-core" }
 synapse-inference = { path = "crates/synapse-inference", features = ["diffusion"] }
 synapse-sys = { path = "crates/synapse-sys" }
+synapse-code-tokenizer = { path = "crates/synapse-code-tokenizer" }
 rand = "0.8"
 rand_distr = "0.4"
 
@@ -231,6 +232,18 @@ path = "examples/code_wm_retrieve.rs"
 [[example]]
 name = "code_wm_int8_compare"
 path = "examples/code_wm_int8_compare.rs"
+
+[[example]]
+name = "code_wm_semantic_test"
+path = "examples/code_wm_semantic_test.rs"
+
+[[example]]
+name = "code_wm_edit_pairs"
+path = "examples/code_wm_edit_pairs.rs"
+
+[[example]]
+name = "tokenizer_cross_check"
+path = "examples/tokenizer_cross_check.rs"
 
 [[example]]
 name = "geometric_attention_demo"

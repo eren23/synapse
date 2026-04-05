@@ -1,0 +1,66 @@
+{
+  "pairs": [
+    {
+      "pair": "rename_single",
+      "category": "rename",
+      "nonpad_before": 36,
+      "nonpad_after": 36
+    },
+    {
+      "pair": "rename_many",
+      "category": "rename",
+      "nonpad_before": 80,
+      "nonpad_after": 80
+    },
+    {
+      "pair": "rename_function",
+      "category": "rename",
+      "nonpad_before": 59,
+      "nonpad_after": 59
+    },
+    {
+      "pair": "if_to_ternary",
+      "category": "idiom",
+      "nonpad_before": 62,
+      "nonpad_after": 55
+    },
+    {
+      "pair": "str_to_fstring",
+      "category": "idiom",
+      "nonpad_before": 54,
+      "nonpad_after": 40
+    },
+    {
+      "pair": "loop_to_sum",
+      "category": "idiom",
+      "nonpad_before": 62,
+      "nonpad_after": 25
+    },
+    {
+      "pair": "is_none_check",
+      "category": "idiom",
+      "nonpad_before": 36,
+      "nonpad_after": 26
+    },
+    {
+      "pair": "dict_literal",
+      "category": "idiom",
+      "nonpad_before": 64,
+      "nonpad_after": 25
+    },
+    {
+      "pair": "loop_to_comp",
+      "category": "structural",
+      "nonpad_before": 83,
+      "nonpad_after": 53
+    },
+    {
+      "pair": "nested_to_flat",
+      "category": "structural",
+      "nonpad_before": 68,
+      "nonpad_after": 73
+    }
+  ],
+  "max_len": 256,
+  "num_pairs": 10
+}

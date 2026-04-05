@@ -1,0 +1,78 @@
+{
+  "pairs": [
+    {
+      "pair": "bug_off_by_one",
+      "category": "bug_fix",
+      "nonpad_before": 80,
+      "nonpad_after": 72
+    },
+    {
+      "pair": "bug_wrong_op",
+      "category": "bug_fix",
+      "nonpad_before": 78,
+      "nonpad_after": 78
+    },
+    {
+      "pair": "add_param_timeout",
+      "category": "add_param",
+      "nonpad_before": 60,
+      "nonpad_after": 72
+    },
+    {
+      "pair": "add_param_default",
+      "category": "add_param",
+      "nonpad_before": 28,
+      "nonpad_after": 40
+    },
+    {
+      "pair": "add_try_except",
+      "category": "add_errors",
+      "nonpad_before": 51,
+      "nonpad_after": 79
+    },
+    {
+      "pair": "add_logging",
+      "category": "add_logging",
+      "nonpad_before": 67,
+      "nonpad_after": 119
+    },
+    {
+      "pair": "add_docstring",
+      "category": "docstring",
+      "nonpad_before": 212,
+      "nonpad_after": 217
+    },
+    {
+      "pair": "early_return",
+      "category": "early_return",
+      "nonpad_before": 103,
+      "nonpad_after": 76
+    },
+    {
+      "pair": "loop_to_comp",
+      "category": "comprehension",
+      "nonpad_before": 100,
+      "nonpad_after": 70
+    },
+    {
+      "pair": "extract_helper",
+      "category": "extract_helper",
+      "nonpad_before": 101,
+      "nonpad_after": 86
+    },
+    {
+      "pair": "add_type_hints",
+      "category": "type_hints",
+      "nonpad_before": 77,
+      "nonpad_after": 124
+    },
+    {
+      "pair": "rename_var",
+      "category": "rename_var",
+      "nonpad_before": 71,
+      "nonpad_after": 71
+    }
+  ],
+  "max_len": 256,
+  "num_pairs": 12
+}
