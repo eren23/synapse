@@ -234,6 +234,10 @@ name = "code_wm_int8_compare"
 path = "examples/code_wm_int8_compare.rs"
 
 [[example]]
+name = "code_wm_q4_compare"
+path = "examples/code_wm_q4_compare.rs"
+
+[[example]]
 name = "code_wm_semantic_test"
 path = "examples/code_wm_semantic_test.rs"
 
