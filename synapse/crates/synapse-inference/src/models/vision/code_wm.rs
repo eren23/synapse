@@ -514,6 +514,79 @@ impl CodeWorldModel {
         self.encoder_final_norm.forward(&cls_out)
     }
 
+    /// Encode tokens via the fused Zig kernel (experimental scaffolding).
+    ///
+    /// **Performance**: currently SLOWER than `encode()` because the inner
+    /// attention call uses a scalar implementation while `encode()` dispatches
+    /// to the SIMD-tiled `syn_fused_attention_bidi`. The fused kernel's value
+    /// is as infrastructure for future specializations (quantized weights,
+    /// Metal GPU forward, etc.), not as a current-day speedup.
+    ///
+    /// Correctness: verified byte-for-byte vs sequential path (cos ≈ 1.0).
+    #[cfg(feature = "zig-ffi")]
+    pub fn encode_fused(&self, tokens: &[i64]) -> Vec<f32> {
+        let d = self.config.model_dim;
+        let s = tokens.len();
+        let seq_with_cls = s + 1;
+        let mlp_h = self.config.mlp_hidden;
+
+        // 1. Build initial seq: CLS at [0..d], embedding rows, + PE.
+        let mut seq = vec![0.0_f32; seq_with_cls * d];
+        seq[..d].copy_from_slice(&self.cls_token);
+        for (i, &tok) in tokens.iter().enumerate() {
+            let t = tok as usize;
+            debug_assert!(t < self.config.vocab_size);
+            let src = &self.token_embedding[t * d..(t + 1) * d];
+            seq[(i + 1) * d..(i + 2) * d].copy_from_slice(src);
+        }
+        for i in 0..seq_with_cls {
+            let off = i * d;
+            for j in 0..d { seq[off + j] += self.pos_enc[off + j]; }
+        }
+
+        // 2. Pre-allocate scratch buffers large enough for max(seq_len*d, seq_len*mlp_h).
+        let big = seq_with_cls * std::cmp::max(d, mlp_h);
+        let mut normed_buf = vec![0.0_f32; big];
+        let mut qkv_buf = vec![0.0_f32; seq_with_cls * 3 * d];
+        let mut attn_buf = vec![0.0_f32; seq_with_cls * d];
+        let mut proj_buf = vec![0.0_f32; big];
+        let mut scores_buf = vec![0.0_f32; seq_with_cls * seq_with_cls];
+        // GEMM packing buffers (match Synapse's MC/KC/NC constants via matmul_ops)
+        let max_n = std::cmp::max(3 * d, mlp_h);
+        let max_k = std::cmp::max(d, mlp_h);
+        // Rough upper bound (MR=NR=8, MC=64, KC=256, NC=256 in matmul.zig)
+        let pa_size = ((64 + 7) / 8) * 8 * 256.min(max_k);
+        let pb_size = ((256 + 7) / 8) * 8 * 256.min(max_k);
+        let _ = max_n;
+        let mut packed_a = vec![0.0_f32; pa_size];
+        let mut packed_b = vec![0.0_f32; pb_size];
+
+        // 3. Dispatch to Zig. On macOS we can set mode=0x08 (BLAS_ACCELERATE).
+        #[cfg(target_os = "macos")]
+        let mode: u32 = 0x08;
+        #[cfg(not(target_os = "macos"))]
+        let mode: u32 = 0;
+
+        let block = &self.encoder_block;
+        synapse_core::code_wm_encoder_fused(
+            &mut seq, seq_with_cls, d, self.config.num_heads, mlp_h, self.config.encoder_loops,
+            &block.norm1.weight, &block.norm1.bias,
+            &block.attn_in_proj.weight, &block.attn_in_proj.bias,
+            &block.attn_out_proj.weight, &block.attn_out_proj.bias,
+            &block.norm2.weight, &block.norm2.bias,
+            &block.mlp_up.weight, &block.mlp_up.bias,
+            &block.mlp_down.weight, &block.mlp_down.bias,
+            &mut normed_buf, &mut qkv_buf, &mut attn_buf,
+            &mut proj_buf, &mut scores_buf,
+            &mut packed_a, &mut packed_b,
+            mode,
+        ).expect("code_wm_encoder_fused failed");
+
+        // 4. Extract CLS token and apply final LayerNorm.
+        let cls_out: Vec<f32> = seq[..d].to_vec();
+        self.encoder_final_norm.forward(&cls_out)
+    }
+
     /// Encode action vector (length action_dim = 7) to 128-d latent.
     pub fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         debug_assert_eq!(action.len(), self.config.action_dim);

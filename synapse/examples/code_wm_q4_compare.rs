@@ -12,6 +12,7 @@ use std::path::Path;
 use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig};
 use synapse_inference::quantization::vision::int8_code_wm::quantize_code_wm;
 use synapse_inference::quantization::vision::q4_code_wm::quantize_code_wm_q4;
+use synapse_inference::quantization::vision::q4_code_wm_full::quantize_code_wm_q4_full;
 use synapse_inference::weight_loading::load_safetensors;
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -41,10 +42,12 @@ fn main() {
 
     let int8_model = quantize_code_wm(&f32_model);
     let q4_model = quantize_code_wm_q4(&f32_model);
+    let q4_full_model = quantize_code_wm_q4_full(&f32_model);
 
     // Sizes
     let int8_bytes = int8_model.memory_bytes();
     let q4_bytes = q4_model.memory_bytes();
+    let q4_full_bytes = q4_full_model.memory_bytes();
     // Approximate f32 size from the checkpoint params
     let f32_bytes = (cfg.vocab_size * cfg.model_dim
         + cfg.model_dim  // cls
@@ -62,16 +65,17 @@ fn main() {
     ) * 4;
 
     println!("Code WM size comparison:");
-    println!("  f32:   {:>6.1} KB        (baseline)", f32_bytes as f64 / 1024.0);
-    println!("  INT8:  {:>6.1} KB   {:.2}x smaller", int8_bytes as f64 / 1024.0, f32_bytes as f64 / int8_bytes as f64);
-    println!("  Q4:    {:>6.1} KB   {:.2}x smaller", q4_bytes as f64 / 1024.0, f32_bytes as f64 / q4_bytes as f64);
+    println!("  f32:     {:>6.1} KB        (baseline)", f32_bytes as f64 / 1024.0);
+    println!("  INT8:    {:>6.1} KB   {:.2}x smaller", int8_bytes as f64 / 1024.0, f32_bytes as f64 / int8_bytes as f64);
+    println!("  Q4:      {:>6.1} KB   {:.2}x smaller", q4_bytes as f64 / 1024.0, f32_bytes as f64 / q4_bytes as f64);
+    println!("  Q4-full: {:>6.1} KB   {:.2}x smaller (Q4 matmul + INT8 embedding/PE)", q4_full_bytes as f64 / 1024.0, f32_bytes as f64 / q4_full_bytes as f64);
 
     let goldens = load_safetensors(Path::new(&goldens)).unwrap();
 
-    println!("\nQuality vs PyTorch goldens (seed 0):");
-    println!("{}", "─".repeat(86));
-    println!("  stage      | f32 cos        | INT8 cos       | Q4 cos         | Q4 max_abs  ");
-    println!("{}", "─".repeat(86));
+    println!("\nQuality vs PyTorch goldens:");
+    println!("{}", "─".repeat(102));
+    println!("  stage      | f32 cos        | INT8 cos       | Q4 cos         | Q4-full cos    | Q4-full max_abs");
+    println!("{}", "─".repeat(102));
 
     for seed in 0..3 {
         let pfx = format!("seed{seed}_");
@@ -84,30 +88,33 @@ fn main() {
         let z_f32 = f32_model.encode(&tokens);
         let z_i8 = int8_model.encode(&tokens);
         let z_q4 = q4_model.encode(&tokens);
+        let z_q4f = q4_full_model.encode(&tokens);
         let z_ref = &goldens[&format!("{pfx}encoder_final")].data;
         println!(
-            "  enc s={seed}    | {:.10} | {:.10} | {:.10} | {:.3e}",
-            cosine(&z_f32, z_ref), cosine(&z_i8, z_ref), cosine(&z_q4, z_ref), max_abs(&z_q4, z_ref)
+            "  enc s={seed}    | {:.10} | {:.10} | {:.10} | {:.10} | {:.3e}",
+            cosine(&z_f32, z_ref), cosine(&z_i8, z_ref), cosine(&z_q4, z_ref), cosine(&z_q4f, z_ref), max_abs(&z_q4f, z_ref)
         );
 
         // Action
         let a_f32 = f32_model.encode_action(action);
         let a_i8 = int8_model.encode_action(action);
         let a_q4 = q4_model.encode_action(action);
+        let a_q4f = q4_full_model.encode_action(action);
         let a_ref = &goldens[&format!("{pfx}action_final")].data;
         println!(
-            "  act s={seed}    | {:.10} | {:.10} | {:.10} | {:.3e}",
-            cosine(&a_f32, a_ref), cosine(&a_i8, a_ref), cosine(&a_q4, a_ref), max_abs(&a_q4, a_ref)
+            "  act s={seed}    | {:.10} | {:.10} | {:.10} | {:.10} | {:.3e}",
+            cosine(&a_f32, a_ref), cosine(&a_i8, a_ref), cosine(&a_q4, a_ref), cosine(&a_q4f, a_ref), max_abs(&a_q4f, a_ref)
         );
 
         // Predictor
         let p_f32 = f32_model.predict(zs, za);
         let p_i8 = int8_model.predict(zs, za);
         let p_q4 = q4_model.predict(zs, za);
+        let p_q4f = q4_full_model.predict(zs, za);
         let p_ref = &goldens[&format!("{pfx}pred_final")].data;
         println!(
-            "  pred s={seed}   | {:.10} | {:.10} | {:.10} | {:.3e}",
-            cosine(&p_f32, p_ref), cosine(&p_i8, p_ref), cosine(&p_q4, p_ref), max_abs(&p_q4, p_ref)
+            "  pred s={seed}   | {:.10} | {:.10} | {:.10} | {:.10} | {:.3e}",
+            cosine(&p_f32, p_ref), cosine(&p_i8, p_ref), cosine(&p_q4, p_ref), cosine(&p_q4f, p_ref), max_abs(&p_q4f, p_ref)
         );
     }
 }

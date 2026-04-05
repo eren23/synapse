@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Code WM — semantic code search in the browser</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      margin: 0; padding: 24px;
+      background: #0f1419; color: #d4d4d4;
+      max-width: 960px; margin: 0 auto;
+    }
+    h1 { color: #e6e1cf; margin: 0 0 4px 0; font-size: 28px; }
+    .subtitle { color: #768390; margin-bottom: 24px; font-size: 14px; }
+    .stats {
+      background: #1a1f29; padding: 12px 16px; border-radius: 6px;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
+      color: #95b1c7; border-left: 3px solid #5ccfe6; margin-bottom: 16px;
+    }
+    .stats.error { border-left-color: #ff3333; color: #ff6b6b; }
+    textarea {
+      width: 100%; min-height: 180px; padding: 12px;
+      background: #1a1f29; color: #d4d4d4; border: 1px solid #2d3443;
+      border-radius: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 13px; resize: vertical;
+    }
+    textarea:focus { outline: none; border-color: #5ccfe6; }
+    button {
+      background: #5ccfe6; color: #0f1419; border: none;
+      padding: 10px 20px; border-radius: 6px; font-weight: 600;
+      cursor: pointer; font-size: 14px; margin-top: 12px;
+    }
+    button:hover { background: #73d0f4; }
+    button:disabled { background: #2d3443; color: #768390; cursor: not-allowed; }
+    .results { margin-top: 24px; }
+    .result {
+      background: #1a1f29; padding: 12px 16px; border-radius: 6px;
+      margin-bottom: 8px; border-left: 3px solid transparent;
+    }
+    .result:hover { border-left-color: #5ccfe6; }
+    .result-path { font-weight: 600; color: #e6e1cf; font-size: 14px; }
+    .result-score { color: #5ccfe6; float: right; font-family: monospace; }
+    .result-preview {
+      color: #768390; font-size: 12px; font-family: ui-monospace, monospace;
+      margin-top: 6px; white-space: pre-wrap; word-break: break-all;
+    }
+    .example-links { font-size: 12px; color: #768390; margin-top: 8px; }
+    .example-links a { color: #5ccfe6; cursor: pointer; text-decoration: underline; margin-right: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Code WM — semantic code search</h1>
+  <p class="subtitle">
+    Browser-native AST tokenizer + Code WM encoder (G1b, 1.1M params).
+    Paste Python code → find structurally-similar files in the corpus.
+  </p>
+
+  <div id="status" class="stats">Loading WASM module…</div>
+
+  <textarea id="query" placeholder="Paste Python code here…">def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    mid = [x for x in arr if x == pivot]
+    right = [x for x in arr if x > pivot]
+    return quicksort(left) + mid + quicksort(right)</textarea>
+  <br>
+  <button id="search" disabled>Find Similar (cmd/ctrl+enter)</button>
+  <div class="example-links">
+    Examples:
+    <a data-code="import json
+def load_config(path):
+    with open(path) as f:
+        return json.load(f)">load_config</a>
+    <a data-code="class Server:
+    def __init__(self, port):
+        self.port = port
+    def run(self):
+        print(f'serving on {self.port}')">class Server</a>
+    <a data-code="def fibonacci(n):
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b
+    return a">fibonacci</a>
+  </div>
+
+  <div class="results" id="results"></div>
+
+  <script type="module">
+    import init, { WasmCodeWM, tokenize_python } from "../synapse-wasm-pkg/synapse_wasm.js";
+
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    const searchBtn = document.getElementById("search");
+    const queryEl = document.getElementById("query");
+
+    let model = null;
+    let corpus = null;
+
+    function setStatus(msg, isError = false) {
+      statusEl.textContent = msg;
+      statusEl.className = isError ? "stats error" : "stats";
+    }
+
+    function cosine(a, b) {
+      let d = 0;
+      for (let i = 0; i < a.length; i++) d += a[i] * b[i];
+      return d;  // assuming both L2-normalized
+    }
+
+    function l2norm(v) {
+      let n = 0;
+      for (let i = 0; i < v.length; i++) n += v[i] * v[i];
+      n = Math.sqrt(n);
+      if (n < 1e-30) return v;
+      const out = new Float32Array(v.length);
+      for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
+      return out;
+    }
+
+    async function main() {
+      setStatus("Loading WASM runtime…");
+      await init();
+
+      setStatus("Loading model weights (3 MB)…");
+      const [configJson, weightsBytes, corpusJson] = await Promise.all([
+        fetch("g1b.config.json").then(r => r.text()),
+        fetch("g1b.safetensors").then(r => r.arrayBuffer()).then(b => new Uint8Array(b)),
+        fetch("corpus.json").then(r => r.json()),
+      ]);
+
+      setStatus("Initializing model…");
+      model = WasmCodeWM.create(configJson, weightsBytes);
+      corpus = corpusJson;
+      corpus.files.forEach(f => { f.embedding = l2norm(f.embedding); });
+
+      setStatus(`Ready — corpus: ${corpus.count} files, model_dim=${model.model_dim()}, vocab=${model.vocab_size()}`);
+      searchBtn.disabled = false;
+    }
+
+    function renderResults(scored) {
+      while (resultsEl.firstChild) resultsEl.removeChild(resultsEl.firstChild);
+      scored.slice(0, 5).forEach(r => {
+        const div = document.createElement("div");
+        div.className = "result";
+        const score = document.createElement("span");
+        score.className = "result-score";
+        score.textContent = `cos=${r.score.toFixed(4)}`;
+        const path = document.createElement("span");
+        path.className = "result-path";
+        path.textContent = r.path;
+        const preview = document.createElement("div");
+        preview.className = "result-preview";
+        preview.textContent = r.preview;
+        div.appendChild(score);
+        div.appendChild(path);
+        div.appendChild(preview);
+        resultsEl.appendChild(div);
+      });
+    }
+
+    function runSearch() {
+      const code = queryEl.value;
+      if (!code.trim() || !model) return;
+
+      const t0 = performance.now();
+      const tokens = tokenize_python(code, model.max_seq_len());
+      const t1 = performance.now();
+      const tokens_i32 = new Int32Array(tokens.length);
+      for (let i = 0; i < tokens.length; i++) tokens_i32[i] = tokens[i];
+      const z_raw = model.encode(tokens_i32);
+      const z = l2norm(z_raw);
+      const t2 = performance.now();
+
+      const scored = corpus.files.map(f => ({
+        path: f.path, preview: f.preview, score: cosine(z, f.embedding)
+      }));
+      scored.sort((a, b) => b.score - a.score);
+      const t3 = performance.now();
+
+      setStatus(
+        `Search complete — tokenize: ${(t1-t0).toFixed(1)}ms, ` +
+        `encode: ${(t2-t1).toFixed(1)}ms, ` +
+        `cosine: ${(t3-t2).toFixed(1)}ms, ` +
+        `total: ${(t3-t0).toFixed(1)}ms`
+      );
+
+      renderResults(scored);
+    }
+
+    searchBtn.addEventListener("click", runSearch);
+    queryEl.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runSearch();
+    });
+    document.querySelectorAll(".example-links a").forEach(a => {
+      a.addEventListener("click", () => { queryEl.value = a.dataset.code; runSearch(); });
+    });
+
+    main().catch(e => setStatus(`Error: ${e.message || e}`, true));
+  </script>
+</body>
+</html>

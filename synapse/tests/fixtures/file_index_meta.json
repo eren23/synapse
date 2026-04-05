@@ -1,0 +1,3007 @@
+{
+  "count": 500,
+  "max_len": 512,
+  "root": "/Users/eren/Documents/AI/attocodepy_swarmtester_14/synapse/.venv-rwkv-debug/lib/python3.14/site-packages",
+  "entries": [
+    {
+      "path": "sympy/physics/units/systems/si.py",
+      "preview": "\"\"\"\nSI unit system.",
+      "src_len": 14478,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/training_args_seq2seq.py",
+      "preview": "# Copyright 2020 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 4308,
+      "nonpad": 423
+    },
+    {
+      "path": "torch/testing/_internal/torchbind_impls.py",
+      "preview": "# mypy: allow-untyped-defs\nimport contextlib",
+      "src_len": 5686,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/pruning/_experimental/data_sparsifier/base_data_sparsifier.py",
+      "preview": "# mypy: allow-untyped-defs\nimport abc",
+      "src_len": 13552,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/dax.py",
+      "preview": "\"\"\"\n    pygments.lexers.dax",
+      "src_len": 8101,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/blueprint.py",
+      "preview": "\"\"\"\n    pygments.lexers.blueprint",
+      "src_len": 6191,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/onnx/_internal/_lazy_import.py",
+      "preview": "\"\"\"Utility to lazily import modules.\"\"\"\n",
+      "src_len": 1213,
+      "nonpad": 312
+    },
+    {
+      "path": "torch/backends/mkldnn/__init__.py",
+      "preview": "# mypy: allow-untyped-defs\nimport sys",
+      "src_len": 4388,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/inference/_generated/types/text_classification.py",
+      "preview": "# Inference code generated from the JSON schema spec in @huggingface/tasks.\n#",
+      "src_len": 1445,
+      "nonpad": 237
+    },
+    {
+      "path": "setuptools/command/__init__.py",
+      "preview": "# mypy: disable_error_code=call-overload\n# pyright: reportCallIssue=false, reportArgumentType=false",
+      "src_len": 803,
+      "nonpad": 134
+    },
+    {
+      "path": "torch/_inductor/aoti_eager.py",
+      "preview": "import json\nimport logging",
+      "src_len": 11165,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/flow/tests/test_maxflow_large_graph.py",
+      "preview": "\"\"\"Maximum flow algorithms test suite on large graphs.\"\"\"\n",
+      "src_len": 4612,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_vendor/cachecontrol/caches/redis_cache.py",
+      "preview": "# SPDX-FileCopyrightText: 2015 Eric Larson\n#",
+      "src_len": 1386,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/index_propagation.py",
+      "preview": "# mypy: allow-untyped-defs\n\"\"\"This file implements the IndexPropagation ops handler, which wraps an",
+      "src_len": 13345,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_vendor/distro/__init__.py",
+      "preview": "from .distro import (\n    NORMALIZED_DISTRO_ID,",
+      "src_len": 981,
+      "nonpad": 147
+    },
+    {
+      "path": "transformers/models/parakeet/processing_parakeet.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3688,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/cohere2_vision/image_processing_cohere2_vision.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 13206,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/recurrent_gemma/modeling_recurrent_gemma.py",
+      "preview": "# Copyright 2024 Google Inc. HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 35717,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_lowrank.py",
+      "preview": "\"\"\"Implement various linear algebra algorithms for low rank matrices.\"\"\"\n",
+      "src_len": 10497,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/mistral/__init__.py",
+      "preview": "# Copyright 2023 Mistral AI and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1015,
+      "nonpad": 118
+    },
+    {
+      "path": "networkx/generators/tests/test_expanders.py",
+      "preview": "\"\"\"Unit tests for the :mod:`networkx.generators.expanders` module.\"\"\"\n",
+      "src_len": 6363,
+      "nonpad": 512
+    },
+    {
+      "path": "httpcore/_utils.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 1537,
+      "nonpad": 321
+    },
+    {
+      "path": "transformers/models/videomae/modeling_videomae.py",
+      "preview": "# Copyright 2022 Multimedia Computing Group, Nanjing University and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 31192,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/tests/test_polyutils.py",
+      "preview": "\"\"\"Tests for useful utilities for higher level polynomial classes. \"\"\"\n",
+      "src_len": 11547,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/link_analysis/hits_alg.py",
+      "preview": "\"\"\"Hubs and authorities analysis of graph structure.\"\"\"\n",
+      "src_len": 10439,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/bridges.py",
+      "preview": "\"\"\"Bridge-finding algorithms.\"\"\"\n",
+      "src_len": 6066,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/rpc/backend_registry.py",
+      "preview": "# mypy: allow-untyped-defs\n",
+      "src_len": 16234,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/readwrite/tests/test_p2g.py",
+      "preview": "import io\n",
+      "src_len": 1319,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/onnx/_internal/exporter/_schemas.py",
+      "preview": "# mypy: allow-untyped-defs\n\"\"\"Helpers for constructing ONNX operator signatures from Python functions.\"\"\"",
+      "src_len": 12351,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/approximation/tests/test_ramsey.py",
+      "preview": "import networkx as nx\nimport networkx.algorithms.approximation as apxa",
+      "src_len": 1143,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/markuplm/processing_markuplm.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team.\n#",
+      "src_len": 5710,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/layoutlmv2/configuration_layoutlmv2.py",
+      "preview": "# Copyright Microsoft Research and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 7051,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/mechanics/actuator.py",
+      "preview": "\"\"\"Implementations of actuators for linked force and torque application.\"\"\"\n",
+      "src_len": 43633,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/codegen/cpp_grouped_gemm_template.py",
+      "preview": "import contextlib\nimport logging",
+      "src_len": 20921,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/sets/fancysets.py",
+      "preview": "from functools import reduce\nfrom itertools import product",
+      "src_len": 48187,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/falcon_h1/__init__.py",
+      "preview": "# Copyright 2025 TII and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1012,
+      "nonpad": 118
+    },
+    {
+      "path": "sympy/series/tests/test_order.py",
+      "preview": "from sympy.core.add import Add\nfrom sympy.core.function import (Function, expand)",
+      "src_len": 17901,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/granitemoeshared/configuration_granitemoeshared.py",
+      "preview": "# Copyright 2024 EleutherAI and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3566,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_vendor/requests/auth.py",
+      "preview": "\"\"\"\nrequests.auth",
+      "src_len": 10186,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/bipartite/tests/test_project.py",
+      "preview": "import pytest\n",
+      "src_len": 15294,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/jamba/configuration_jamba.py",
+      "preview": "# Copyright 2024 AI21 Labs Ltd. and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 4564,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_library/autograd.py",
+      "preview": "# mypy: allow-untyped-defs\nimport dataclasses",
+      "src_len": 9063,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/matrices/expressions/tests/test_matmul.py",
+      "preview": "from sympy.core import I, symbols, Basic, Mul, S\nfrom sympy.core.mul import mul",
+      "src_len": 6187,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/dag.py",
+      "preview": "\"\"\"Algorithms for directed acyclic graphs (DAGs).\n",
+      "src_len": 44667,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/mechanics/inertia.py",
+      "preview": "from sympy import sympify\nfrom sympy.physics.vector import Point, Dyadic, ReferenceFrame, outer",
+      "src_len": 6172,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/integrations/bitnet.py",
+      "preview": "from ..quantizers.quantizers_utils import should_convert_module\nfrom ..utils import is_torch_available, logging",
+      "src_len": 14763,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/strategies/branch/tests/test_tools.py",
+      "preview": "from sympy.strategies.branch.tools import canon\nfrom sympy.core.basic import Basic",
+      "src_len": 942,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/onnx/_internal/exporter/_reporting.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom __future__ import annotations",
+      "src_len": 7405,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/elastic/metrics/__init__.py",
+      "preview": "#!/usr/bin/env/python3\n# mypy: allow-untyped-defs",
+      "src_len": 4899,
+      "nonpad": 82
+    },
+    {
+      "path": "transformers/models/gemma3/modular_gemma3.py",
+      "preview": "# Copyright 2025 Google Inc. HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 43181,
+      "nonpad": 512
+    },
+    {
+      "path": "rwkv/rwkv_tokenizer.py",
+      "preview": "########################################################################################################\n# The RWKV Language Model - https:/",
+      "src_len": 3201,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/utils/data/sampler.py",
+      "preview": "# mypy: allow-untyped-defs\nimport itertools",
+      "src_len": 12738,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/ministral/__init__.py",
+      "preview": "# Copyright 2023 Mistral AI and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1019,
+      "nonpad": 118
+    },
+    {
+      "path": "networkx/algorithms/centrality/tests/test_group.py",
+      "preview": "\"\"\"\nTests for Group Centrality Measures",
+      "src_len": 8685,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/checkpoint/format_utils.py",
+      "preview": "# mypy: allow-untyped-defs\nimport argparse",
+      "src_len": 10733,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_core/tests/test_half.py",
+      "preview": "import platform\n",
+      "src_len": 25260,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/llama/tokenization_llama.py",
+      "preview": "# Copyright 2020 The HuggingFace Inc. team.\n#",
+      "src_len": 6342,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/cli/parser.py",
+      "preview": "\"\"\"Base option parser setup\"\"\"\n",
+      "src_len": 13827,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/mt5/configuration_mt5.py",
+      "preview": "# Copyright 2020, The T5 Authors and HuggingFace Inc.\n#",
+      "src_len": 3600,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/videomae/image_processing_pil_videomae.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3548,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/doge/__init__.py",
+      "preview": "# Copyright 2025 Jingze Shi and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1009,
+      "nonpad": 118
+    },
+    {
+      "path": "torch/distributed/elastic/utils/log_level.py",
+      "preview": "#!/usr/bin/env python3\n",
+      "src_len": 339,
+      "nonpad": 24
+    },
+    {
+      "path": "torch/nn/parallel/data_parallel.py",
+      "preview": "# mypy: allow-untyped-defs\nimport operator",
+      "src_len": 11957,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/fx_passes/auto_chunker/common.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 2256,
+      "nonpad": 510
+    },
+    {
+      "path": "sympy/utilities/source.py",
+      "preview": "\"\"\"\nThis module adds several functions for interactive source code inspection.",
+      "src_len": 1127,
+      "nonpad": 296
+    },
+    {
+      "path": "torch/nn/intrinsic/modules/__init__.py",
+      "preview": "from torch.nn.intrinsic.modules.fused import (\n    _FusedModule,",
+      "src_len": 517,
+      "nonpad": 85
+    },
+    {
+      "path": "torch/ao/quantization/quantization_mappings.py",
+      "preview": "import copy\nfrom collections.abc import Callable",
+      "src_len": 13865,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/solvers/tests/test_decompogen.py",
+      "preview": "from sympy.solvers.decompogen import decompogen, compogen\nfrom sympy.core.symbol import symbols",
+      "src_len": 2943,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/tests/test_time_dependent.py",
+      "preview": "\"\"\"Unit testing for time dependent algorithms.\"\"\"\n",
+      "src_len": 13342,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_pyinstaller/hook-numpy.py",
+      "preview": "\"\"\"This hook should collect all binary files and any hidden modules that numpy\nneeds.",
+      "src_len": 1362,
+      "nonpad": 124
+    },
+    {
+      "path": "sympy/physics/quantum/tests/test_matrixutils.py",
+      "preview": "from sympy.core.random import randint\n",
+      "src_len": 4115,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/tensor/_ops/_common_rules.py",
+      "preview": "# Copyright (c) Meta Platforms, Inc. and affiliates\nimport string",
+      "src_len": 11896,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/onnx/_internal/torchscript_exporter/symbolic_opset19.py",
+      "preview": "\"\"\"This file exports ONNX ops for opset 19.\n",
+      "src_len": 536,
+      "nonpad": 34
+    },
+    {
+      "path": "transformers/models/modernbert_decoder/configuration_modernbert_decoder.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 6728,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/tensor/experimental/_tp_transform.py",
+      "preview": "# mypy: allow-untyped-defs\nimport copy",
+      "src_len": 20663,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/sam3_video/__init__.py",
+      "preview": "# Copyright 2025 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1042,
+      "nonpad": 123
+    },
+    {
+      "path": "torch/nn/utils/__init__.py",
+      "preview": "from . import parametrizations, parametrize, rnn, stateless\nfrom .clip_grad import (",
+      "src_len": 1274,
+      "nonpad": 148
+    },
+    {
+      "path": "networkx/algorithms/centrality/tests/test_degree_centrality.py",
+      "preview": "\"\"\"\nUnit tests for degree centrality.",
+      "src_len": 4101,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/elastic/agent/server/api.py",
+      "preview": "# mypy: ignore-errors\n",
+      "src_len": 38927,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_vendor/pygments/formatters/_mapping.py",
+      "preview": "# Automatically generated by scripts/gen_mapfiles.py.\n# DO NOT EDIT BY HAND; run `tox -e mapfiles` instead.",
+      "src_len": 4176,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/core/coreerrors.py",
+      "preview": "\"\"\"Definitions of common exceptions for :mod:`sympy.core` module. \"\"\"\n",
+      "src_len": 642,
+      "nonpad": 146
+    },
+    {
+      "path": "transformers/models/higgs_audio_v2_tokenizer/configuration_higgs_audio_v2_tokenizer.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 7246,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_functorch/make_functional.py",
+      "preview": "# Copyright (c) Facebook, Inc. and its affiliates.\n# All rights reserved.",
+      "src_len": 24492,
+      "nonpad": 512
+    },
+    {
+      "path": "pkg_resources/tests/test_integration_zope_interface.py",
+      "preview": "import platform\nfrom inspect import cleandoc",
+      "src_len": 1652,
+      "nonpad": 271
+    },
+    {
+      "path": "numpy/random/_pickle.py",
+      "preview": "from ._generator import Generator\nfrom ._mt19937 import MT19937",
+      "src_len": 2742,
+      "nonpad": 388
+    },
+    {
+      "path": "transformers/models/dpt/configuration_dpt.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 7759,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/nn/quantized/reference/modules/conv.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom typing import Any, Literal, Optional",
+      "src_len": 16062,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/metaclip_2/modular_metaclip_2.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 27651,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/tests/test_groebnertools.py",
+      "preview": "\"\"\"Tests for Groebner bases. \"\"\"\n",
+      "src_len": 18584,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/beit/image_processing_beit.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 9349,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/utils/datetime.py",
+      "preview": "\"\"\"For when pip wants to check the date or time.\"\"\"\n",
+      "src_len": 868,
+      "nonpad": 303
+    },
+    {
+      "path": "networkx/algorithms/approximation/density.py",
+      "preview": "\"\"\"Fast algorithms for the densest subgraph problem\"\"\"\n",
+      "src_len": 15256,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/layoutxlm/tokenization_layoutxlm.py",
+      "preview": "# Copyright 2021 The HuggingFace Inc. team.\n#",
+      "src_len": 46145,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/__init__.py",
+      "preview": "\"\"\"torchgen\n",
+      "src_len": 348,
+      "nonpad": 9
+    },
+    {
+      "path": "sympy/parsing/latex/lark/latex_parser.py",
+      "preview": "import os\nimport logging",
+      "src_len": 4430,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/agca/tests/test_homomorphisms.py",
+      "preview": "\"\"\"Tests for homomorphisms.\"\"\"\n",
+      "src_len": 4224,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/decision_transformer/configuration_decision_transformer.py",
+      "preview": "# Copyright 2022 The HuggingFace Team and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3353,
+      "nonpad": 507
+    },
+    {
+      "path": "pygments/lexers/_luau_builtins.py",
+      "preview": "\"\"\"\n    pygments.lexers._luau_builtins",
+      "src_len": 958,
+      "nonpad": 165
+    },
+    {
+      "path": "pip/_internal/resolution/resolvelib/resolver.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 13437,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/lib/tests/test_regression.py",
+      "preview": "import os\n",
+      "src_len": 7716,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/styles/abap.py",
+      "preview": "\"\"\"\n    pygments.styles.abap",
+      "src_len": 752,
+      "nonpad": 146
+    },
+    {
+      "path": "sympy/parsing/autolev/test-examples/ruletest11.py",
+      "preview": "import sympy.physics.mechanics as _me\nimport sympy as _sm",
+      "src_len": 475,
+      "nonpad": 471
+    },
+    {
+      "path": "transformers/models/layoutlmv3/modeling_layoutlmv3.py",
+      "preview": "# Copyright 2022 Microsoft Research and The HuggingFace Inc. team.\n#",
+      "src_len": 49252,
+      "nonpad": 512
+    },
+    {
+      "path": "typer/colors.py",
+      "preview": "# Variable names to colors, just for completion\nBLACK = \"black\"",
+      "src_len": 430,
+      "nonpad": 174
+    },
+    {
+      "path": "setuptools/command/develop.py",
+      "preview": "import site\nimport subprocess",
+      "src_len": 1751,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/fx/experimental/normalize.py",
+      "preview": "# mypy: allow-untyped-defs\nimport operator",
+      "src_len": 5811,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/splinter/modeling_splinter.py",
+      "preview": "# Copyright 2021 Tel AViv University, AllenAI and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 31881,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_vendor/platformdirs/api.py",
+      "preview": "\"\"\"Base API.\"\"\"\n",
+      "src_len": 9281,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/timesfm/modular_timesfm.py",
+      "preview": "# Copyright 2025 Google LLC and HuggingFace Inc. team.\n#",
+      "src_len": 30544,
+      "nonpad": 512
+    },
+    {
+      "path": "fsspec/implementations/jupyter.py",
+      "preview": "import base64\nimport io",
+      "src_len": 4002,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/utils/_safetensors.py",
+      "preview": "import functools\nimport operator",
+      "src_len": 4439,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/utils/notebook.py",
+      "preview": "# Copyright 2020 Hugging Face\n#",
+      "src_len": 16031,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/utils/_xet.py",
+      "preview": "import time\nfrom dataclasses import dataclass",
+      "src_len": 9907,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/printing/fortran.py",
+      "preview": "\"\"\"\nFortran code printer",
+      "src_len": 28635,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/utils/type_validators.py",
+      "preview": "from collections.abc import Callable, Sequence\nfrom functools import partial",
+      "src_len": 10634,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/readwrite/json_graph/cytoscape.py",
+      "preview": "import networkx as nx\n",
+      "src_len": 5841,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/community/tests/test_kclique.py",
+      "preview": "from itertools import combinations\n",
+      "src_len": 2413,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/videomae/video_processing_videomae.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team.\n#",
+      "src_len": 1582,
+      "nonpad": 304
+    },
+    {
+      "path": "transformers/models/megatron_bert/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1007,
+      "nonpad": 118
+    },
+    {
+      "path": "pygments/lexers/thingsdb.py",
+      "preview": "\"\"\"\n    pygments.lexers.thingsdb",
+      "src_len": 6257,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributions/pareto.py",
+      "preview": "from typing import Optional\n",
+      "src_len": 2522,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/inference/_mcp/utils.py",
+      "preview": "\"\"\"\nUtility functions for MCPClient and Tiny Agents.",
+      "src_len": 4245,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/roberta/tokenization_roberta_old.py",
+      "preview": "# Copyright 2018 The Open AI Team Authors and The HuggingFace Inc. team.\n#",
+      "src_len": 10935,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/numberfields/subfield.py",
+      "preview": "r\"\"\"\nFunctions in ``polys.numberfields.subfield`` solve the \"Subfield Problem\" and",
+      "src_len": 16668,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/hubert/modular_hubert.py",
+      "preview": "# Copyright 2021 The Fairseq Authors and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 11980,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/autoheuristic/artifacts/_MMRankingH100.py",
+      "preview": "# flake8: noqa: B950\n# fmt: off",
+      "src_len": 30668,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/quantum/qubit.py",
+      "preview": "\"\"\"Qubits for quantum computing.\n",
+      "src_len": 25997,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/logic/tests/test_lra_theory.py",
+      "preview": "from sympy.core.numbers import Rational, I, oo\nfrom sympy.core.relational import Eq",
+      "src_len": 16834,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/core/records.py",
+      "preview": "def __getattr__(attr_name):\n    from numpy._core import records",
+      "src_len": 327,
+      "nonpad": 108
+    },
+    {
+      "path": "setuptools/_distutils/cygwinccompiler.py",
+      "preview": "from .compilers.C import cygwin\nfrom .compilers.C.cygwin import (",
+      "src_len": 594,
+      "nonpad": 108
+    },
+    {
+      "path": "transformers/models/squeezebert/configuration_squeezebert.py",
+      "preview": "# Copyright 2020 The SqueezeBert authors and The HuggingFace Inc. team.\n#",
+      "src_len": 2815,
+      "nonpad": 466
+    },
+    {
+      "path": "torch/fx/experimental/_constant_symnode.py",
+      "preview": "from typing import *  # noqa: F403\n",
+      "src_len": 1751,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_dynamo/graph_break_hints.py",
+      "preview": "USER_ERROR = [\n    \"Your code may result in an error when running in eager. \"",
+      "src_len": 1657,
+      "nonpad": 116
+    },
+    {
+      "path": "sympy/physics/vector/point.py",
+      "preview": "from .vector import Vector, _check_vector\nfrom .frame import _check_frame",
+      "src_len": 20569,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/linalg/tests/test_spectrum.py",
+      "preview": "import pytest\n",
+      "src_len": 2769,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_distutils/command/clean.py",
+      "preview": "\"\"\"distutils.command.clean\n",
+      "src_len": 2551,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/chameleon/modeling_chameleon.py",
+      "preview": "# Copyright 2024 Meta Inc. and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 49144,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/depth_pro/configuration_depth_pro.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 9390,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/emu3/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1070,
+      "nonpad": 128
+    },
+    {
+      "path": "torch/distributed/checkpoint/staging.py",
+      "preview": "import os\nimport tempfile",
+      "src_len": 19467,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_core/tests/test_arrayobject.py",
+      "preview": "import sys\n",
+      "src_len": 3336,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/autotune_process.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom __future__ import annotations",
+      "src_len": 47212,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributions/relaxed_bernoulli.py",
+      "preview": "# mypy: allow-untyped-defs\n",
+      "src_len": 6121,
+      "nonpad": 512
+    },
+    {
+      "path": "rich/_unicode_data/unicode17-0-0.py",
+      "preview": "# Auto generated by tools/make_width_tables.py\n# Data from wcwidth project (https://github.com/jquast/wcwidth)",
+      "src_len": 16209,
+      "nonpad": 512
+    },
+    {
+      "path": "anyio/abc/_subprocesses.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 2067,
+      "nonpad": 300
+    },
+    {
+      "path": "transformers/models/cohere2_vision/modular_cohere2_vision.py",
+      "preview": "# Copyright 2025 the Cohere Inc. team. All rights reserved.\n#",
+      "src_len": 13546,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/network/session.py",
+      "preview": "\"\"\"PipSession and supporting code, containing all pip-specific\nnetwork request configuration and behavior.",
+      "src_len": 19555,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/pp_ocrv5_server_rec/__init__.py",
+      "preview": "# Copyright 2026 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1077,
+      "nonpad": 123
+    },
+    {
+      "path": "pygments/lexers/verifpal.py",
+      "preview": "\"\"\"\n    pygments.lexers.verifpal",
+      "src_len": 2660,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/data/datasets/squad.py",
+      "preview": "# Copyright 2020 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 9145,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/plotting/intervalmath/tests/test_interval_membership.py",
+      "preview": "from sympy.core.symbol import Symbol\nfrom sympy.plotting.intervalmath import interval",
+      "src_len": 4216,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/units/tests/test_dimensions.py",
+      "preview": "from sympy.physics.units.systems.si import dimsys_SI\n",
+      "src_len": 6122,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/checkpoint/_experimental/types.py",
+      "preview": "\"\"\"\nType definitions for distributed training and checkpointing.",
+      "src_len": 759,
+      "nonpad": 93
+    },
+    {
+      "path": "pkg_resources/tests/test_working_set.py",
+      "preview": "import functools\nimport inspect",
+      "src_len": 8602,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/voxtral_realtime/__init__.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1065,
+      "nonpad": 123
+    },
+    {
+      "path": "networkx/drawing/tests/test_image_comparison_pylab_mpl.py",
+      "preview": "\"\"\"Unit tests for explicit image comparison with pytest-mpl.\"\"\"\n",
+      "src_len": 6340,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/approximation/tests/test_connectivity.py",
+      "preview": "import pytest\n",
+      "src_len": 5952,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/utils/data/datapipes/iter/combining.py",
+      "preview": "# mypy: allow-untyped-defs\nimport copy as copymodule",
+      "src_len": 28128,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/gcodelexer.py",
+      "preview": "\"\"\"\n    pygments.lexers.gcodelexer",
+      "src_len": 877,
+      "nonpad": 212
+    },
+    {
+      "path": "sympy/polys/numberfields/tests/test_galoisgroups.py",
+      "preview": "\"\"\"Tests for computing Galois groups. \"\"\"\n",
+      "src_len": 5036,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/qwen2/tokenization_qwen2.py",
+      "preview": "# Copyright 2024 The Qwen team, Alibaba Group and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3323,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/matrices/determinant.py",
+      "preview": "from types import FunctionType\n",
+      "src_len": 34550,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_dynamo/polyfills/functools.py",
+      "preview": "\"\"\"\nPython polyfills for functools",
+      "src_len": 961,
+      "nonpad": 327
+    },
+    {
+      "path": "sympy/series/tests/test_aseries.py",
+      "preview": "from sympy.core.function import PoleError\nfrom sympy.core.numbers import oo",
+      "src_len": 2377,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/domains/modularinteger.py",
+      "preview": "\"\"\"Implementation of :class:`ModularInteger` class. \"\"\"\n",
+      "src_len": 6042,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/layoutxlm/processing_layoutxlm.py",
+      "preview": "# Copyright 2021 The HuggingFace Inc. team.\n#",
+      "src_len": 5294,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/diffllama/modular_diffllama.py",
+      "preview": "# Copyright 2024 weak-kajuma and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 18311,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/pipelines/depth_estimation.py",
+      "preview": "from typing import Any, Union, overload\n",
+      "src_len": 6115,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/gemma3n/feature_extraction_gemma3n.py",
+      "preview": "# Copyright 2025 Google LLC\n#",
+      "src_len": 14875,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/quantization/fx/_model_report/model_report_visualizer.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom collections import OrderedDict, OrderedDict as OrdDict",
+      "src_len": 32667,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/agca/extensions.py",
+      "preview": "\"\"\"Finite extensions of ring domains.\"\"\"\n",
+      "src_len": 9388,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/matrices/inverse.py",
+      "preview": "from sympy.polys.matrices.exceptions import DMNonInvertibleMatrixError\nfrom sympy.polys.domains import EX",
+      "src_len": 13166,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/sam2_video/video_processing_sam2_video.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 4868,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/qwen3_vl_moe/modular_qwen3_vl_moe.py",
+      "preview": "# Copyright 2025 The Qwen Team and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 17850,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/random/_examples/numba/extending_distributions.py",
+      "preview": "r\"\"\"\nBuilding the required library in this example requires a source distribution",
+      "src_len": 2036,
+      "nonpad": 422
+    },
+    {
+      "path": "huggingface_hub/cli/lfs.py",
+      "preview": "\"\"\"\nImplementation of a custom transfer agent for the transfer type \"multipart\" for",
+      "src_len": 5889,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/bipartite/basic.py",
+      "preview": "\"\"\"\n==========================",
+      "src_len": 8375,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/testing/_internal/common_ops_unbacked.py",
+      "preview": "# Owner(s): [\"oncall: pt2\"]\n",
+      "src_len": 8655,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/runtime/static_triton_launcher.py",
+      "preview": "import functools\nimport os",
+      "src_len": 14144,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_core/tests/test_limited_api.py",
+      "preview": "import os\nimport subprocess",
+      "src_len": 3463,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/assortativity/tests/test_pairs.py",
+      "preview": "import networkx as nx\n",
+      "src_len": 3008,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/plotting/pygletplot/plot_mode_base.py",
+      "preview": "import pyglet.gl as pgl\nfrom sympy.core import S",
+      "src_len": 11502,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/floscript.py",
+      "preview": "\"\"\"\n    pygments.lexers.floscript",
+      "src_len": 2670,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/sew/modeling_sew.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 45958,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/tests/config/test_pyprojecttoml_dynamic_deps.py",
+      "preview": "from inspect import cleandoc\n",
+      "src_len": 3265,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/req/req_set.py",
+      "preview": "import logging\nfrom collections import OrderedDict",
+      "src_len": 2828,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/parsing/autolev/test-examples/ruletest12.py",
+      "preview": "import sympy.physics.mechanics as _me\nimport sympy as _sm",
+      "src_len": 472,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/albert/__init__.py",
+      "preview": "# Copyright 2020 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1032,
+      "nonpad": 123
+    },
+    {
+      "path": "torch/_vendor/packaging/_structures.py",
+      "preview": "# This file is dual licensed under the terms of the Apache License, Version\n# 2.0, and the BSD License. See the LICENSE file in the root of ",
+      "src_len": 1431,
+      "nonpad": 462
+    },
+    {
+      "path": "torch/backends/mkl/__init__.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 1823,
+      "nonpad": 237
+    },
+    {
+      "path": "sympy/physics/quantum/tests/test_piab.py",
+      "preview": "\"\"\"Tests for piab.py\"\"\"\n",
+      "src_len": 1086,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_vendor/wheel/macosx_libfile.py",
+      "preview": "\"\"\"\nIMPORTANT: DO NOT IMPORT THIS MODULE DIRECTLY.",
+      "src_len": 16712,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_prims/executor.py",
+      "preview": "from collections.abc import Callable\nfrom typing import Any, TypeVar",
+      "src_len": 1923,
+      "nonpad": 465
+    },
+    {
+      "path": "huggingface_hub/repocard.py",
+      "preview": "import os\nimport re",
+      "src_len": 34972,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/flava/image_processing_flava.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 21417,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_distutils/archive_util.py",
+      "preview": "\"\"\"distutils.archive_util\n",
+      "src_len": 8484,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_vendor/tomli/_re.py",
+      "preview": "# SPDX-License-Identifier: MIT\n# SPDX-FileCopyrightText: 2021 Taneli Hukkinen",
+      "src_len": 3396,
+      "nonpad": 512
+    },
+    {
+      "path": "rich/spinner.py",
+      "preview": "from typing import TYPE_CHECKING, List, Optional, Union, cast\n",
+      "src_len": 4214,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_functorch/pytree_hacks.py",
+      "preview": "# Copyright (c) Facebook, Inc. and its affiliates.\n# All rights reserved.",
+      "src_len": 698,
+      "nonpad": 92
+    },
+    {
+      "path": "transformers/models/pp_chart2table/image_processing_pp_chart2table.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 1637,
+      "nonpad": 142
+    },
+    {
+      "path": "torch/ao/quantization/quant_type.py",
+      "preview": "import enum\n",
+      "src_len": 760,
+      "nonpad": 262
+    },
+    {
+      "path": "torch/utils/data/datapipes/iter/utils.py",
+      "preview": "import copy\nimport warnings",
+      "src_len": 2109,
+      "nonpad": 361
+    },
+    {
+      "path": "torch/_guards.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 48938,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/quantum/tests/test_transforms.py",
+      "preview": "\"\"\"Tests of transforms of quantum expressions for Mul and Pow.\"\"\"\n",
+      "src_len": 2346,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/glm4_moe_lite/modeling_glm4_moe_lite.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 31982,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/quantum/fermion.py",
+      "preview": "\"\"\"Fermionic quantum operators.\"\"\"\n",
+      "src_len": 4983,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/config/_validate_pyproject/formats.py",
+      "preview": "\"\"\"\nThe functions in this module are used to validate schemas with the",
+      "src_len": 13564,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/codegen/xpu/device_op_overrides.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 1884,
+      "nonpad": 489
+    },
+    {
+      "path": "pip/_internal/distributions/wheel.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 1364,
+      "nonpad": 243
+    },
+    {
+      "path": "torch/_inductor/fx_passes/serialized_patterns/_sfdp_pattern_25.py",
+      "preview": "# mypy: ignore-errors\n",
+      "src_len": 27818,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/packaged/autograd/gen_inplace_or_view_type.py",
+      "preview": "# Generates ADInplaceOrViewType.h/cpp\n#",
+      "src_len": 22914,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/functions/special/singularity_functions.py",
+      "preview": "from sympy.core import S, oo, diff\nfrom sympy.core.function import DefinedFunction, ArgumentIndexError",
+      "src_len": 8346,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_distutils/command/install_headers.py",
+      "preview": "\"\"\"distutils.command.install_headers\n",
+      "src_len": 1272,
+      "nonpad": 452
+    },
+    {
+      "path": "torch/_library/infer_schema.py",
+      "preview": "# mypy: allow-untyped-defs\nimport collections",
+      "src_len": 13873,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/combinatorics/homomorphisms.py",
+      "preview": "import itertools\nfrom sympy.combinatorics.fp_groups import FpGroup, FpSubgroup, simplify_presentation",
+      "src_len": 18844,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/f2py/tests/__init__.py",
+      "preview": "import pytest\n",
+      "src_len": 329,
+      "nonpad": 73
+    },
+    {
+      "path": "numpy/_core/tests/test_abc.py",
+      "preview": "import numbers\n",
+      "src_len": 2221,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/pixtral/image_processing_pixtral.py",
+      "preview": "# Copyright 2024 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 9922,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/herbert/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 958,
+      "nonpad": 113
+    },
+    {
+      "path": "torch/backends/mha/__init__.py",
+      "preview": "# Config options to enable/disable C++ kernel for nn.functional.MHA\n# and nn.TransformerEncoder",
+      "src_len": 718,
+      "nonpad": 108
+    },
+    {
+      "path": "torch/ao/nn/intrinsic/quantized/dynamic/modules/linear_relu.py",
+      "preview": "from typing import Any\nfrom typing_extensions import Self",
+      "src_len": 2223,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/domains/pythonintegerring.py",
+      "preview": "\"\"\"Implementation of :class:`PythonIntegerRing` class. \"\"\"\n",
+      "src_len": 2962,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/bridgetower/processing_bridgetower.py",
+      "preview": "# Copyright 2023 The Intel Labs Team Authors, The Microsoft Research Team Authors and HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1617,
+      "nonpad": 189
+    },
+    {
+      "path": "torch/optim/adamax.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom typing import cast",
+      "src_len": 17487,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/utils/virtualenv.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 3455,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/isomorphism/isomorph.py",
+      "preview": "\"\"\"\nGraph isomorphism functions.",
+      "src_len": 10561,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/instructblip/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1048,
+      "nonpad": 123
+    },
+    {
+      "path": "sympy/tensor/array/expressions/utils.py",
+      "preview": "import bisect\nfrom collections import defaultdict",
+      "src_len": 3939,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/bert/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1026,
+      "nonpad": 123
+    },
+    {
+      "path": "transformers/models/paligemma/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1039,
+      "nonpad": 123
+    },
+    {
+      "path": "networkx/classes/tests/test_reportviews.py",
+      "preview": "import pickle\nfrom copy import deepcopy",
+      "src_len": 41332,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/continuum_mechanics/cable.py",
+      "preview": "\"\"\"\nThis module can be used to solve problems related",
+      "src_len": 31420,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/readwrite/tests/test_edgelist.py",
+      "preview": "\"\"\"\nUnit tests for edgelists.",
+      "src_len": 10190,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/typing/tests/data/pass/einsumfunc.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 1370,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/codegen/matrix_nodes.py",
+      "preview": "\"\"\"\nAdditional AST nodes for operations on matrices. The nodes in this module",
+      "src_len": 2284,
+      "nonpad": 255
+    },
+    {
+      "path": "transformers/models/altclip/processing_altclip.py",
+      "preview": "# Copyright 2022 WenXiang ZhongzhiCheng LedellWu LiuGuang BoWenZhang The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1000,
+      "nonpad": 89
+    },
+    {
+      "path": "tqdm/tk.py",
+      "preview": "\"\"\"\nTkinter GUI progressbar decorator for iterators.",
+      "src_len": 6701,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/concrete/expr_with_limits.py",
+      "preview": "from sympy.core.add import Add\nfrom sympy.core.containers import Tuple",
+      "src_len": 21834,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/domains/old_fractionfield.py",
+      "preview": "\"\"\"Implementation of :class:`FractionField` class. \"\"\"\n",
+      "src_len": 6226,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/tensor/array/tests/test_array_derivatives.py",
+      "preview": "from sympy.core.symbol import symbols\nfrom sympy.matrices.dense import Matrix",
+      "src_len": 1601,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/printing/julia.py",
+      "preview": "\"\"\"\nJulia code printer",
+      "src_len": 23541,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/hunyuan_v1_moe/__init__.py",
+      "preview": "from typing import TYPE_CHECKING\n",
+      "src_len": 403,
+      "nonpad": 118
+    },
+    {
+      "path": "sympy/plotting/pygletplot/plot_camera.py",
+      "preview": "import pyglet.gl as pgl\nfrom sympy.plotting.pygletplot.plot_rotation import get_spherical_rotatation",
+      "src_len": 3928,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/xlm_roberta_xl/modular_xlm_roberta_xl.py",
+      "preview": "# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.\n# Copyright (c) 2018, NVIDIA CORPORATION.  All rights re",
+      "src_len": 29529,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/utils/compatibility_tags.py",
+      "preview": "\"\"\"Generate and work with PEP 425 Compatibility Tags.\"\"\"\n",
+      "src_len": 6630,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/kernel/bmm.py",
+      "preview": "# mypy: allow-untyped-defs\nimport logging",
+      "src_len": 9912,
+      "nonpad": 512
+    },
+    {
+      "path": "httpx/_status_codes.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 5639,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/optim/adagrad.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom typing import cast",
+      "src_len": 21102,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/functions/special/tests/test_delta_functions.py",
+      "preview": "from sympy.core.numbers import (I, nan, oo, pi)\nfrom sympy.core.relational import (Eq, Ne)",
+      "src_len": 7138,
+      "nonpad": 512
+    },
+    {
+      "path": "rich/__main__.py",
+      "preview": "import colorsys\nimport io",
+      "src_len": 7567,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_vendor/jaraco/text/__init__.py",
+      "preview": "import functools\nimport itertools",
+      "src_len": 16761,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/internvl/processing_internvl.py",
+      "preview": "# Copyright 2025 HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 12604,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_functorch/autograd_function.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 34257,
+      "nonpad": 512
+    },
+    {
+      "path": "safetensors/mlx.py",
+      "preview": "import os\nfrom typing import Dict, Optional, Union",
+      "src_len": 3850,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/pipelining/_schedule_visualizer.py",
+      "preview": "# Copyright (c) Meta Platforms, Inc. and affiliates\n",
+      "src_len": 17212,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/eurobert/__init__.py",
+      "preview": "# Copyright 2025 Nicolas Boizard, Duarte M. Alves, Hippolyte Gisserot-Boukhlef and the EuroBert team. All rights reserved.\n#",
+      "src_len": 1060,
+      "nonpad": 118
+    },
+    {
+      "path": "huggingface_hub/inference/_mcp/_cli_hacks.py",
+      "preview": "import asyncio\nimport sys",
+      "src_len": 3283,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/fx/experimental/optimization.py",
+      "preview": "# mypy: allow-untyped-defs\nimport copy",
+      "src_len": 18459,
+      "nonpad": 512
+    },
+    {
+      "path": "httpcore/_synchronization.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 9434,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/printing/cxx.py",
+      "preview": "\"\"\"\nC++ code printer",
+      "src_len": 6123,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/asm.py",
+      "preview": "\"\"\"\n    pygments.lexers.asm",
+      "src_len": 42219,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/ns/fx/utils.py",
+      "preview": "# mypy: allow-untyped-decorators\n# mypy: allow-untyped-defs",
+      "src_len": 22761,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/sew/modular_sew.py",
+      "preview": "# Copyright 2021 ASAPP Inc. and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 18362,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/core/shape_base.py",
+      "preview": "def __getattr__(attr_name):\n    from numpy._core import shape_base",
+      "src_len": 339,
+      "nonpad": 108
+    },
+    {
+      "path": "transformers/models/swinv2/configuration_swinv2.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3442,
+      "nonpad": 512
+    },
+    {
+      "path": "mpmath/tests/test_compatibility.py",
+      "preview": "from mpmath import *\nfrom random import seed, randint, random",
+      "src_len": 2306,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/jit/_passes/_property_propagation.py",
+      "preview": "\"\"\"\nTools to help with tensor property propagation.",
+      "src_len": 1438,
+      "nonpad": 471
+    },
+    {
+      "path": "huggingface_hub/inference/_generated/types/image_classification.py",
+      "preview": "# Inference code generated from the JSON schema spec in @huggingface/tasks.\n#",
+      "src_len": 1585,
+      "nonpad": 237
+    },
+    {
+      "path": "pip/_vendor/packaging/_tokenizer.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 5421,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/email.py",
+      "preview": "\"\"\"\n    pygments.lexers.email",
+      "src_len": 4807,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/functions/elementary/integers.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 22394,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/c_cpp.py",
+      "preview": "\"\"\"\n    pygments.lexers.c_cpp",
+      "src_len": 18321,
+      "nonpad": 512
+    },
+    {
+      "path": "mpmath/matrices/eigen.py",
+      "preview": "#!/usr/bin/python\n# -*- coding: utf-8 -*-",
+      "src_len": 24394,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/yolos/image_processing_pil_yolos.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 30865,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/nn/qat/modules/embedding_ops.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 8395,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/traversal/tests/test_dfs.py",
+      "preview": "import networkx as nx\n",
+      "src_len": 10580,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/deit/modeling_deit.py",
+      "preview": "# Copyright 2021 Facebook AI Research (FAIR), Ross Wightman, The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 30593,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/generation/continuous_batching/utils.py",
+      "preview": "# Copyright 2026 The HuggingFace Inc. team\n#",
+      "src_len": 6037,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/core/benchmarks/bench_expand.py",
+      "preview": "from sympy.core import symbols, I\n",
+      "src_len": 427,
+      "nonpad": 385
+    },
+    {
+      "path": "transformers/models/llava_next/configuration_llava_next.py",
+      "preview": "# Copyright 2024 The HuggingFace Inc. team. All rights reserved.\n# Licensed under the Apache License, Version 2.0 (the \"License\");",
+      "src_len": 3962,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/core/symbol.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 29816,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/nn/intrinsic/qat/modules/linear_relu.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 2184,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/conditional_detr/image_processing_conditional_detr.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 47889,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/cli/upload_large_folder.py",
+      "preview": "# coding=utf-8\n# Copyright 2023-present, the HuggingFace Inc. team.",
+      "src_len": 4695,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/typing/__init__.py",
+      "preview": "\"\"\"\n============================",
+      "src_len": 6984,
+      "nonpad": 383
+    },
+    {
+      "path": "torchgen/gen_vmap_plumbing.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 9523,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/fx/passes/dialect/common/cse_pass.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom typing import Any",
+      "src_len": 5248,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/inference/_providers/zai_org.py",
+      "preview": "import time\nfrom abc import ABC",
+      "src_len": 4768,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/parasail.py",
+      "preview": "\"\"\"\n    pygments.lexers.parasail",
+      "src_len": 2722,
+      "nonpad": 498
+    },
+    {
+      "path": "networkx/algorithms/flow/preflowpush.py",
+      "preview": "\"\"\"\nHighest-label preflow-push algorithm for maximum flow problems.",
+      "src_len": 15721,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/parsing/autolev/test-examples/pydy-example-repo/non_min_pendulum.py",
+      "preview": "import sympy.physics.mechanics as _me\nimport sympy as _sm",
+      "src_len": 1503,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_core/_internal.py",
+      "preview": "\"\"\"\nA place for internal code",
+      "src_len": 29437,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/nn/intrinsic/quantized/modules/linear_relu.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 7144,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/autograd/anomaly_mode.py",
+      "preview": "# mypy: allow-untyped-defs\nr\"\"\"Autograd anomaly mode.\"\"\"",
+      "src_len": 4964,
+      "nonpad": 402
+    },
+    {
+      "path": "torch/_inductor/constant_folding.py",
+      "preview": "import collections\nfrom collections.abc import Callable",
+      "src_len": 15285,
+      "nonpad": 512
+    },
+    {
+      "path": "fsspec/implementations/cache_mapper.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 2421,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/tests/environment.py",
+      "preview": "import os\nimport subprocess",
+      "src_len": 3102,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/bitnet/modeling_bitnet.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 21560,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/tests/test_densetools.py",
+      "preview": "\"\"\"Tests for dense recursive polynomials' tools. \"\"\"\n",
+      "src_len": 26241,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/deberta_v2/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1044,
+      "nonpad": 123
+    },
+    {
+      "path": "sympy/simplify/hyperexpand_doc.py",
+      "preview": "\"\"\" This module cooks up a docstring when imported. Its only purpose is to\n    be displayed in the sphinx documentation. \"\"\"",
+      "src_len": 521,
+      "nonpad": 193
+    },
+    {
+      "path": "pip/_vendor/urllib3/util/queue.py",
+      "preview": "import collections\n",
+      "src_len": 498,
+      "nonpad": 172
+    },
+    {
+      "path": "sympy/strategies/tests/test_core.py",
+      "preview": "from __future__ import annotations\nfrom sympy.core.singleton import S",
+      "src_len": 2152,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/moonshine_streaming/modeling_moonshine_streaming.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 48908,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/fsdp/_fully_shard/_fsdp_common.py",
+      "preview": "# mypy: allow-untyped-defs\nimport math",
+      "src_len": 5786,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/big_bird/configuration_big_bird.py",
+      "preview": "# Copyright 2021 Google Research and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3173,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/bitnet/__init__.py",
+      "preview": "# Copyright 2025 The BitNet Team and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1018,
+      "nonpad": 118
+    },
+    {
+      "path": "safetensors/torch.py",
+      "preview": "import os\nimport sys",
+      "src_len": 18610,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/testing/_internal/hop_db.py",
+      "preview": "# mypy: ignore-errors\n",
+      "src_len": 17109,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/aimv2/modular_aimv2.py",
+      "preview": "# Copyright 2025 Apple Inc. and The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 20301,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_vendor/packaging/markers.py",
+      "preview": "# This file is dual licensed under the terms of the Apache License, Version\n# 2.0, and the BSD License. See the LICENSE file in the root of ",
+      "src_len": 12771,
+      "nonpad": 512
+    },
+    {
+      "path": "typer/models.py",
+      "preview": "import inspect\nimport io",
+      "src_len": 19843,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/compile_worker/timer.py",
+      "preview": "from collections.abc import Callable\nfrom threading import Lock, Thread",
+      "src_len": 1865,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/idefics/perceiver.py",
+      "preview": "# This code was adapted from https://github.com/lucidrains/flamingo-pytorch licensed under the MIT License.\n#",
+      "src_len": 9394,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/_shard/sharding_spec/chunk_sharding_spec.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom dataclasses import dataclass",
+      "src_len": 9274,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/metadata/importlib/_envs.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 5333,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/sets/handlers/power.py",
+      "preview": "from sympy.core import Basic, Expr\nfrom sympy.core.function import Lambda",
+      "src_len": 3186,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_internal/utils/entrypoints.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 3324,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/fx_passes/auto_chunker/applier.py",
+      "preview": "import copy\nimport logging",
+      "src_len": 16493,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/fx_passes/graph_view.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 9035,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/typing/tests/data/pass/literal.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 1509,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/ntheory/partitions_.py",
+      "preview": "from mpmath.libmp import (fzero, from_int, from_rational,\n    fone, fhalf, bitcount, to_int, mpf_mul, mpf_div, mpf_sub,",
+      "src_len": 8995,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/link_analysis/pagerank_alg.py",
+      "preview": "\"\"\"PageRank analysis of graph structure.\"\"\"\n",
+      "src_len": 17202,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/testing/_internal/custom_tensor.py",
+      "preview": "# mypy: ignore-errors\n",
+      "src_len": 5337,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/bipartite/tests/test_extendability.py",
+      "preview": "import pytest\n",
+      "src_len": 7043,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/series/tests/test_limitseq.py",
+      "preview": "from sympy.concrete.summations import Sum\nfrom sympy.core.add import Add",
+      "src_len": 5691,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/quantum/boson.py",
+      "preview": "\"\"\"Bosonic quantum operators.\"\"\"\n",
+      "src_len": 5834,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/cohere/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1032,
+      "nonpad": 123
+    },
+    {
+      "path": "sympy/assumptions/predicates/order.py",
+      "preview": "from sympy.assumptions import Predicate\nfrom sympy.multipledispatch import Dispatcher",
+      "src_len": 9511,
+      "nonpad": 484
+    },
+    {
+      "path": "sympy/polys/polyfuncs.py",
+      "preview": "\"\"\"High-level polynomials manipulation functions. \"\"\"\n",
+      "src_len": 8547,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/nn/functional.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 15886,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/f2py/tests/test_return_complex.py",
+      "preview": "import pytest\n",
+      "src_len": 2440,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/llava/image_processing_llava.py",
+      "preview": "# Copyright 2024 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 6343,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/elastic/multiprocessing/errors/error_handler.py",
+      "preview": "#!/usr/bin/env python3\n# mypy: allow-untyped-defs",
+      "src_len": 6675,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/constants.py",
+      "preview": "from datetime import timedelta\n",
+      "src_len": 1198,
+      "nonpad": 97
+    },
+    {
+      "path": "sympy/external/tests/test_autowrap.py",
+      "preview": "import sympy\nimport tempfile",
+      "src_len": 9759,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/isomorphism/tests/test_match_helpers.py",
+      "preview": "from operator import eq\n",
+      "src_len": 2483,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/utilities/runtests.py",
+      "preview": "\"\"\"\n.. deprecated:: 1.6",
+      "src_len": 451,
+      "nonpad": 41
+    },
+    {
+      "path": "sympy/strategies/tests/test_tree.py",
+      "preview": "from sympy.strategies.tree import treeapply, greedy, allresults, brute\nfrom functools import partial, reduce",
+      "src_len": 2400,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/ministral/configuration_ministral.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 3766,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/masked/_docs.py",
+      "preview": "# This file is generated, do not modify it!\n#",
+      "src_len": 49468,
+      "nonpad": 184
+    },
+    {
+      "path": "transformers/models/videomae/image_processing_videomae.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 4622,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/dinov3_vit/modular_dinov3_vit.py",
+      "preview": "# Copyright 2025 Meta AI and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 21492,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/plotting/__init__.py",
+      "preview": "from .plot import plot_backends\nfrom .plot_implicit import plot_implicit",
+      "src_len": 526,
+      "nonpad": 88
+    },
+    {
+      "path": "pip/_vendor/rich/filesize.py",
+      "preview": "\"\"\"Functions for reporting filesizes. Borrowed from https://github.com/PyFilesystem/pyfilesystem2\n",
+      "src_len": 2484,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_dynamo/backends/registry.py",
+      "preview": "\"\"\"\nThis module implements TorchDynamo's backend registry system for managing compiler backends.",
+      "src_len": 6538,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/detr/image_processing_detr.py",
+      "preview": "# Copyright 2024 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 46743,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_higher_order_ops/base_hop.py",
+      "preview": "# mypy: allow-untyped-defs\n",
+      "src_len": 10914,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/testing/_internal/distributed/rpc/rpc_agent_test_fixture.py",
+      "preview": "# mypy: allow-untyped-defs\n",
+      "src_len": 1874,
+      "nonpad": 336
+    },
+    {
+      "path": "transformers/models/deepseek_vl/image_processing_pil_deepseek_vl.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 6223,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/testing/_internal/common_quantized.py",
+      "preview": "# mypy: ignore-errors\n",
+      "src_len": 26229,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/plotting/pygletplot/util.py",
+      "preview": "try:\n    from ctypes import c_float, c_int, c_double",
+      "src_len": 4621,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_export/db/examples/dynamic_shape_slicing.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 388,
+      "nonpad": 167
+    },
+    {
+      "path": "sympy/geometry/tests/test_entity.py",
+      "preview": "from sympy.core.numbers import (Rational, pi)\nfrom sympy.core.singleton import S",
+      "src_len": 3896,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/distributedmodules.py",
+      "preview": "r\"\"\"\nSparse distributed elements of free modules over multivariate (generalized)",
+      "src_len": 21827,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/dest/lazy_ir.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 29693,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/aya_vision/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1042,
+      "nonpad": 123
+    },
+    {
+      "path": "pygments/formatters/html.py",
+      "preview": "\"\"\"\n    pygments.formatters.html",
+      "src_len": 36053,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_functorch/utils.py",
+      "preview": "import contextlib\nfrom collections.abc import Generator",
+      "src_len": 1052,
+      "nonpad": 315
+    },
+    {
+      "path": "torch/utils/data/_utils/pin_memory.py",
+      "preview": "# mypy: allow-untyped-defs\nr\"\"\"Contains definitions of the methods used by the _BaseDataLoaderIter to put fetched tensors into pinned memory",
+      "src_len": 4143,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/pvt_v2/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 993,
+      "nonpad": 118
+    },
+    {
+      "path": "networkx/algorithms/centrality/voterank_alg.py",
+      "preview": "\"\"\"Algorithm to select influential nodes in a graph using VoteRank.\"\"\"\n",
+      "src_len": 3231,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/series/tests/test_formal.py",
+      "preview": "from sympy.concrete.summations import Sum\nfrom sympy.core.add import Add",
+      "src_len": 22496,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/nn/quantized/modules/rnn.py",
+      "preview": "# flake8: noqa: F401\nr\"\"\"Quantized Modules.",
+      "src_len": 411,
+      "nonpad": 14
+    },
+    {
+      "path": "markdown_it/rules_core/replacements.py",
+      "preview": "\"\"\"Simple typographic replacements\n",
+      "src_len": 3424,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/comm_analysis.py",
+      "preview": "import functools\nimport logging",
+      "src_len": 17373,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_typing/_dtype_like.py",
+      "preview": "from collections.abc import Sequence  # noqa: F811\nfrom typing import Any, Protocol, TypeAlias, TypedDict, TypeVar",
+      "src_len": 3864,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/dbrx/configuration_dbrx.py",
+      "preview": "# Copyright 2024 Databricks Mosaic Research and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 6362,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/assumptions/tests/test_rel_queries.py",
+      "preview": "from sympy.assumptions.lra_satask import lra_satask\nfrom sympy.logic.algorithms.lra_theory import UnhandledInput",
+      "src_len": 6677,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/domains/tests/test_polynomialring.py",
+      "preview": "\"\"\"Tests for the PolynomialRing classes. \"\"\"\n",
+      "src_len": 2895,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/pipelines/keypoint_matching.py",
+      "preview": "# Copyright 2025 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 7056,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/glm46v/modeling_glm46v.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 42277,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/llama4/processing_llama4.py",
+      "preview": "# Copyright 2025 HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 14177,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/domains/simpledomain.py",
+      "preview": "\"\"\"Implementation of :class:`SimpleDomain` class. \"\"\"\n",
+      "src_len": 369,
+      "nonpad": 84
+    },
+    {
+      "path": "torch/export/pt2_archive/constants.py",
+      "preview": "# Defined in torch/csrc/export/pt2_archive_constants.h\nfrom torch._C._export import pt2_archive_constants",
+      "src_len": 1765,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/utils/_dtype_abbrs.py",
+      "preview": "import torch\n",
+      "src_len": 755,
+      "nonpad": 329
+    },
+    {
+      "path": "transformers/models/cwm/__init__.py",
+      "preview": "# Copyright 2025 the HuggingFace Team. All rights reserved.\n#",
+      "src_len": 988,
+      "nonpad": 118
+    },
+    {
+      "path": "transformers/models/phimoe/__init__.py",
+      "preview": "# Copyright 2024 Microsoft and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1013,
+      "nonpad": 118
+    },
+    {
+      "path": "torch/distributed/elastic/events/handlers.py",
+      "preview": "#!/usr/bin/env python3\n",
+      "src_len": 556,
+      "nonpad": 133
+    },
+    {
+      "path": "pygments/lexers/asn1.py",
+      "preview": "\"\"\"\n    pygments.lexers.asn1",
+      "src_len": 4267,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/lfm2_vl/__init__.py",
+      "preview": "# Copyright 2025 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1077,
+      "nonpad": 128
+    },
+    {
+      "path": "httpcore/_sync/socks_proxy.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 13614,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/domainmatrix.py",
+      "preview": "\"\"\"\nStub module to expose DomainMatrix which has now moved to",
+      "src_len": 310,
+      "nonpad": 28
+    },
+    {
+      "path": "torch/utils/data/datapipes/_typing.py",
+      "preview": "# mypy: allow-untyped-defs\n# Taking reference from official Python typing",
+      "src_len": 16591,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/rdf.py",
+      "preview": "\"\"\"\n    pygments.lexers.rdf",
+      "src_len": 16063,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/approximation/vertex_cover.py",
+      "preview": "\"\"\"Functions for computing an approximate minimum weight vertex cover.\n",
+      "src_len": 2801,
+      "nonpad": 326
+    },
+    {
+      "path": "sympy/polys/matrices/linsolve.py",
+      "preview": "#\n# sympy.polys.matrices.linsolve module",
+      "src_len": 7534,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_functorch/apis.py",
+      "preview": "# NOTE: We allow Dynamo to see this file (via torch/_dynamo/trace_rules.py) so that it can\n#       trace through functorch transforms.",
+      "src_len": 19970,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/readwrite/tests/test_gml.py",
+      "preview": "import codecs\nimport io",
+      "src_len": 21399,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/drawing/nx_latex.py",
+      "preview": "r\"\"\"\n*****",
+      "src_len": 24846,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/glpn/modeling_glpn.py",
+      "preview": "# Copyright 2022 KAIST and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 26376,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/drawing/tests/test_pydot.py",
+      "preview": "\"\"\"Unit tests for pydot drawing functions.\"\"\"\n",
+      "src_len": 4973,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/centrality/tests/test_load_centrality.py",
+      "preview": "import pytest\n",
+      "src_len": 11343,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/vibevoice_asr/processing_vibevoice_asr.py",
+      "preview": "# Copyright 2026 Microsoft and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 15851,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/sets/tests/test_conditionset.py",
+      "preview": "from sympy.core.expr import unchanged\nfrom sympy.sets import (ConditionSet, Intersection, FiniteSet,",
+      "src_len": 11370,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/combinatorics/fp_groups.py",
+      "preview": "\"\"\"Finitely Presented Groups and its algorithms. \"\"\"\n",
+      "src_len": 47779,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/packaged/autograd/load_derivatives.py",
+      "preview": "# Parses derivatives.yaml into autograd functions\n#",
+      "src_len": 41570,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/distilbert/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1087,
+      "nonpad": 125
+    },
+    {
+      "path": "torch/distributed/tensor/experimental/__init__.py",
+      "preview": "# Copyright (c) Meta Platforms, Inc. and affiliates\nfrom collections.abc import Iterator",
+      "src_len": 1424,
+      "nonpad": 190
+    },
+    {
+      "path": "sympy/assumptions/tests/test_sathandlers.py",
+      "preview": "from sympy.assumptions.ask import Q\nfrom sympy.core.basic import Basic",
+      "src_len": 1842,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/combinatorics/group_numbers.py",
+      "preview": "from itertools import chain, combinations\n",
+      "src_len": 9163,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/integrals/tests/test_prde.py",
+      "preview": "\"\"\"Most of these tests come from the examples in Bronstein's book.\"\"\"\nfrom sympy.integrals.risch import DifferentialExtension, derivation",
+      "src_len": 16360,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/utils/insecure_hashlib.py",
+      "preview": "# Taken from https://github.com/mlflow/mlflow/pull/10119\n#",
+      "src_len": 1008,
+      "nonpad": 114
+    },
+    {
+      "path": "torch/distributed/_shard/sharding_spec/api.py",
+      "preview": "# mypy: allow-untyped-defs\nimport functools",
+      "src_len": 9848,
+      "nonpad": 512
+    },
+    {
+      "path": "pip/_vendor/resolvelib/structs.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 6420,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/f2py/tests/test_modules.py",
+      "preview": "import textwrap\n",
+      "src_len": 2301,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/cli/_errors.py",
+      "preview": "# Copyright 2026 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 4292,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/seamless_m4t_v2/configuration_seamless_m4t_v2.py",
+      "preview": "# Copyright 2023 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 14248,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/dotnet.py",
+      "preview": "\"\"\"\n    pygments.lexers.dotnet",
+      "src_len": 39444,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/whiley.py",
+      "preview": "\"\"\"\n    pygments.lexers.whiley",
+      "src_len": 4020,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/pruning/_experimental/pruner/match_utils.py",
+      "preview": "\"\"\"\nContains utility functions to check if a pattern is in the graph and return the matching nodes",
+      "src_len": 1949,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/__init__.py",
+      "preview": "# Copyright 2020 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 40575,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/shell.py",
+      "preview": "\"\"\"\n    pygments.lexers.shell",
+      "src_len": 36384,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/vector/deloperator.py",
+      "preview": "from sympy.core import Basic\nfrom sympy.vector.operators import gradient, divergence, curl",
+      "src_len": 3191,
+      "nonpad": 329
+    },
+    {
+      "path": "transformers/models/dia/processing_dia.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team.\n#",
+      "src_len": 20779,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/nn/modules/lazy.py",
+      "preview": "# mypy: allow-untyped-defs\nimport itertools",
+      "src_len": 11674,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/fuyu/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1110,
+      "nonpad": 133
+    },
+    {
+      "path": "torch/_inductor/codegen/block_analysis.py",
+      "preview": "import collections\nimport functools",
+      "src_len": 8196,
+      "nonpad": 512
+    },
+    {
+      "path": "pygments/lexers/oberon.py",
+      "preview": "\"\"\"\n    pygments.lexers.oberon",
+      "src_len": 4216,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/export/_remove_auto_functionalized_pass.py",
+      "preview": "# Copyright (c) Meta Platforms, Inc. and affiliates.\n# All rights reserved.",
+      "src_len": 2111,
+      "nonpad": 512
+    },
+    {
+      "path": "jinja2/async_utils.py",
+      "preview": "import inspect\nimport typing as t",
+      "src_len": 2834,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/utils/benchmark/examples/compare.py",
+      "preview": "# mypy: allow-untyped-defs\n\"\"\"Example of Timer and Compare APIs:",
+      "src_len": 2931,
+      "nonpad": 512
+    },
+    {
+      "path": "markdown_it/_punycode.py",
+      "preview": "# Copyright 2014 Mathias Bynens <https://mathiasbynens.be/>\n# Copyright 2021 Taneli Hukkinen",
+      "src_len": 2373,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/checkpoint/_experimental/builder.py",
+      "preview": "\"\"\"\nFactory functions for creating checkpointer instances with sensible defaults.",
+      "src_len": 6101,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_export/db/examples/class_method.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 499,
+      "nonpad": 272
+    },
+    {
+      "path": "setuptools/_distutils/tests/test_build_ext.py",
+      "preview": "import contextlib\nimport glob",
+      "src_len": 22539,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/lilt/modeling_lilt.py",
+      "preview": "# Copyright 2022 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 42291,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/sew/configuration_sew.py",
+      "preview": "# Copyright 2021 ASAPP Inc. and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 9633,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/debug/_frontend.py",
+      "preview": "import asyncio\nimport json",
+      "src_len": 13069,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/discrete/tests/test_recurrences.py",
+      "preview": "from sympy.core.numbers import Rational\nfrom sympy.functions.combinatorial.numbers import fibonacci",
+      "src_len": 3019,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/tests/test_matlib.py",
+      "preview": "import numpy as np\nimport numpy.matlib",
+      "src_len": 1854,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_distutils/tests/support.py",
+      "preview": "\"\"\"Support code for distutils test cases.\"\"\"\n",
+      "src_len": 4099,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/sam2/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1065,
+      "nonpad": 128
+    },
+    {
+      "path": "sympy/holonomic/tests/test_recurrence.py",
+      "preview": "from sympy.holonomic.recurrence import RecurrenceOperators, RecurrenceOperator\nfrom sympy.core.symbol import symbols",
+      "src_len": 1342,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/parakeet/modeling_parakeet.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 34981,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/vision_text_dual_encoder/processing_vision_text_dual_encoder.py",
+      "preview": "# Copyright 2021 The HuggingFace Inc. team.\n#",
+      "src_len": 1082,
+      "nonpad": 115
+    },
+    {
+      "path": "torch/_export/passes/constant_folding.py",
+      "preview": "# mypy: allow-untyped-defs\nimport collections",
+      "src_len": 11303,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/api/native.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 5205,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/distributed/algorithms/_comm_hooks/default_hooks.py",
+      "preview": "# mypy: allow-untyped-defs\nimport functools",
+      "src_len": 7616,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/matrices/expressions/tests/test_sets.py",
+      "preview": "from sympy.core.singleton import S\nfrom sympy.core.symbol import symbols",
+      "src_len": 1408,
+      "nonpad": 512
+    },
+    {
+      "path": "httpx/_transports/wsgi.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 4825,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/vitmatte/image_processing_vitmatte.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 5852,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/functions/special/tests/test_mathieu.py",
+      "preview": "from sympy.core.function import diff\nfrom sympy.functions.elementary.complexes import conjugate",
+      "src_len": 1282,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/hubert/configuration_hubert.py",
+      "preview": "# Copyright 2021 The Fairseq Authors and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 10276,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/parsing/maxima.py",
+      "preview": "import re\nfrom sympy.concrete.products import product",
+      "src_len": 1835,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/f2py/tests/test_crackfortran.py",
+      "preview": "import contextlib\nimport importlib",
+      "src_len": 16413,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/multiprocessing/pool.py",
+      "preview": "import multiprocessing.pool\nimport multiprocessing.util as util",
+      "src_len": 1743,
+      "nonpad": 509
+    },
+    {
+      "path": "networkx/algorithms/walks.py",
+      "preview": "\"\"\"Function for computing walks in a graph.\"\"\"\n",
+      "src_len": 2312,
+      "nonpad": 280
+    },
+    {
+      "path": "pip/_vendor/rich/scope.py",
+      "preview": "from collections.abc import Mapping\nfrom typing import TYPE_CHECKING, Any, Optional, Tuple",
+      "src_len": 2843,
+      "nonpad": 512
+    },
+    {
+      "path": "rich/_unicode_data/unicode12-1-0.py",
+      "preview": "# Auto generated by tools/make_width_tables.py\n# Data from wcwidth project (https://github.com/jquast/wcwidth)",
+      "src_len": 14694,
+      "nonpad": 512
+    },
+    {
+      "path": "markdown_it/common/html_blocks.py",
+      "preview": "\"\"\"List of valid html blocks names, according to commonmark spec\nhttp://jgm.github.io/CommonMark/spec.html#html-blocks",
+      "src_len": 986,
+      "nonpad": 206
+    },
+    {
+      "path": "pygments/lexers/wowtoc.py",
+      "preview": "\"\"\"\n    pygments.lexers.wowtoc",
+      "src_len": 4079,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/cohere_asr/modular_cohere_asr.py",
+      "preview": "# Copyright 2026 the HuggingFace Team. All rights reserved.\n#",
+      "src_len": 23281,
+      "nonpad": 512
+    },
+    {
+      "path": "setuptools/_distutils/text_file.py",
+      "preview": "\"\"\"text_file\n",
+      "src_len": 12101,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/polys/matrices/_dfm.py",
+      "preview": "#\n# sympy.polys.matrices.dfm",
+      "src_len": 32971,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/compile_fx_async.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 14512,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/quantum/tests/test_tensorproduct.py",
+      "preview": "from sympy.core.numbers import I\nfrom sympy.core.symbol import symbols",
+      "src_len": 5314,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/integrations/finegrained_fp8.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 30272,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/inference/_generated/types/object_detection.py",
+      "preview": "# Inference code generated from the JSON schema spec in @huggingface/tasks.\n#",
+      "src_len": 2000,
+      "nonpad": 282
+    },
+    {
+      "path": "torch/testing/_internal/optests/autograd_registration.py",
+      "preview": "# mypy: ignore-errors\n",
+      "src_len": 5850,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/mtia/mtia_graph.py",
+      "preview": "# pylint: disable=useless-parent-delegation\nfrom __future__ import annotations",
+      "src_len": 2656,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_export/db/examples/cond_branch_nonlocal_variables.py",
+      "preview": "# mypy: allow-untyped-defs\nimport torch",
+      "src_len": 1841,
+      "nonpad": 281
+    },
+    {
+      "path": "transformers/models/rwkv/configuration_rwkv.py",
+      "preview": "# Copyright 2023 The OpenAI Team Authors and HuggingFace Inc. team.\n# Copyright (c) 2018, NVIDIA CORPORATION.  All rights reserved.",
+      "src_len": 2809,
+      "nonpad": 468
+    },
+    {
+      "path": "transformers/models/owlv2/__init__.py",
+      "preview": "# Copyright 2024 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1115,
+      "nonpad": 133
+    },
+    {
+      "path": "transformers/models/qwen2/modeling_qwen2.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 21634,
+      "nonpad": 512
+    },
+    {
+      "path": "huggingface_hub/inference/_generated/types/summarization.py",
+      "preview": "# Inference code generated from the JSON schema spec in @huggingface/tasks.\n#",
+      "src_len": 1481,
+      "nonpad": 272
+    },
+    {
+      "path": "setuptools/tests/integration/helpers.py",
+      "preview": "\"\"\"Reusable functions and classes for different types of integration tests.\n",
+      "src_len": 2688,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/ao/quantization/fx/tracer.py",
+      "preview": "from collections.abc import Callable\n",
+      "src_len": 1697,
+      "nonpad": 474
+    },
+    {
+      "path": "networkx/algorithms/clique.py",
+      "preview": "\"\"\"Functions for finding and manipulating cliques.\n",
+      "src_len": 27521,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/mimi/configuration_mimi.py",
+      "preview": "# Copyright 2024 Meta Platforms, Inc. and affiliates, and the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 7783,
+      "nonpad": 512
+    },
+    {
+      "path": "networkx/algorithms/bipartite/covering.py",
+      "preview": "\"\"\"Functions related to graph covers.\"\"\"\n",
+      "src_len": 2163,
+      "nonpad": 175
+    },
+    {
+      "path": "sympy/logic/algorithms/dpll.py",
+      "preview": "\"\"\"Implementation of DPLL algorithm\n",
+      "src_len": 9188,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/printing/tests/test_tableform.py",
+      "preview": "from sympy.core.singleton import S\nfrom sympy.printing.tableform import TableForm",
+      "src_len": 5692,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/uvdoc/image_processing_uvdoc.py",
+      "preview": "#                \ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\ud83d\udea8\n#           This file was automatically generated from src/transformers/mo",
+      "src_len": 6320,
+      "nonpad": 512
+    },
+    {
+      "path": "numpy/_core/tests/test_umath_accuracy.py",
+      "preview": "import os\nimport sys",
+      "src_len": 5821,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/cohere2_vision/configuration_cohere2_vision.py",
+      "preview": "# Copyright 2025 the Cohere Inc. team. All rights reserved.\n#",
+      "src_len": 2611,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/template_heuristics/params.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 1257,
+      "nonpad": 382
+    },
+    {
+      "path": "sympy/combinatorics/tests/test_group_constructs.py",
+      "preview": "from sympy.combinatorics.group_constructs import DirectProduct\nfrom sympy.combinatorics.named_groups import CyclicGroup, DihedralGroup",
+      "src_len": 450,
+      "nonpad": 241
+    },
+    {
+      "path": "torch/version.py",
+      "preview": "from typing import Optional\n",
+      "src_len": 309,
+      "nonpad": 167
+    },
+    {
+      "path": "pygments/lexers/supercollider.py",
+      "preview": "\"\"\"\n    pygments.lexers.supercollider",
+      "src_len": 3700,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/dest/ufunc.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 18204,
+      "nonpad": 512
+    },
+    {
+      "path": "markdown_it/rules_block/reference.py",
+      "preview": "import logging\n",
+      "src_len": 6983,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/rembert/configuration_rembert.py",
+      "preview": "# Copyright The HuggingFace Team and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 2374,
+      "nonpad": 481
+    },
+    {
+      "path": "torch/testing/_internal/distributed/rpc/jit/dist_autograd_test.py",
+      "preview": "# mypy: allow-untyped-defs\n",
+      "src_len": 4172,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/qwen2/__init__.py",
+      "preview": "# Copyright 2024 The Qwen Team and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 1095,
+      "nonpad": 128
+    },
+    {
+      "path": "pip/_vendor/pygments/modeline.py",
+      "preview": "\"\"\"\n    pygments.modeline",
+      "src_len": 1005,
+      "nonpad": 341
+    },
+    {
+      "path": "networkx/classes/tests/test_filters.py",
+      "preview": "import pytest\n",
+      "src_len": 5851,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/mgp_str/configuration_mgp_str.py",
+      "preview": "# Copyright 2023 The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 3028,
+      "nonpad": 462
+    },
+    {
+      "path": "numpy/_core/tests/test_getlimits.py",
+      "preview": "\"\"\" Test functions for limits module.\n",
+      "src_len": 5453,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/uvdoc/__init__.py",
+      "preview": "# Copyright 2026 The HuggingFace Team. All rights reserved.\n#",
+      "src_len": 1035,
+      "nonpad": 123
+    },
+    {
+      "path": "transformers/models/csm/modular_csm.py",
+      "preview": "# Copyright 2025 Sesame and The HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 35112,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/physics/quantum/qapply.py",
+      "preview": "\"\"\"Logic for applying operators to states.\n",
+      "src_len": 9494,
+      "nonpad": 512
+    },
+    {
+      "path": "sympy/integrals/heurisch.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 26706,
+      "nonpad": 512
+    },
+    {
+      "path": "torchgen/native_function_generation.py",
+      "preview": "from __future__ import annotations\n",
+      "src_len": 30568,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/timesfm/configuration_timesfm.py",
+      "preview": "# Copyright 2025 Google LLC and HuggingFace Inc. team.\n#",
+      "src_len": 2970,
+      "nonpad": 442
+    },
+    {
+      "path": "networkx/algorithms/tests/test_core.py",
+      "preview": "import pytest\n",
+      "src_len": 9619,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_inductor/codegen/rocm/rocm_benchmark_request.py",
+      "preview": "# mypy: allow-untyped-defs\nfrom __future__ import annotations",
+      "src_len": 5064,
+      "nonpad": 512
+    },
+    {
+      "path": "torch/_dynamo/polyfills/__init__.py",
+      "preview": "\"\"\"\nPython polyfills for common builtins.",
+      "src_len": 18962,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/llava/modeling_llava.py",
+      "preview": "# Copyright 2023 the HuggingFace Inc. team. All rights reserved.\n#",
+      "src_len": 18196,
+      "nonpad": 512
+    },
+    {
+      "path": "transformers/models/mlcd/modular_mlcd.py",
+      "preview": "# Copyright 2025 The HuggingFace Inc. team.\n#",
+      "src_len": 17353,
+      "nonpad": 512
+    }
+  ]
+}

@@ -13,6 +13,8 @@ categories = ["science", "wasm"]
 repository = "https://github.com/eren23/synapse"
 
 [features]
+default = ["zig-ffi"]
+zig-ffi = []
 metal = ["synapse-inference/metal"]
 debug_activations = ["synapse-inference/debug_activations"]
 
@@ -238,6 +240,10 @@ name = "code_wm_q4_compare"
 path = "examples/code_wm_q4_compare.rs"
 
 [[example]]
+name = "code_wm_calibration_compare"
+path = "examples/code_wm_calibration_compare.rs"
+
+[[example]]
 name = "code_wm_semantic_test"
 path = "examples/code_wm_semantic_test.rs"
 
@@ -252,6 +258,18 @@ path = "examples/tokenizer_cross_check.rs"
 [[example]]
 name = "code_wm_pipeline"
 path = "examples/code_wm_pipeline.rs"
+
+[[example]]
+name = "export_browser_corpus"
+path = "examples/export_browser_corpus.rs"
+
+[[example]]
+name = "code_wm_corpus_retrieve"
+path = "examples/code_wm_corpus_retrieve.rs"
+
+[[example]]
+name = "code_wm_fused_bench"
+path = "examples/code_wm_fused_bench.rs"
 
 [[example]]
 name = "geometric_attention_demo"

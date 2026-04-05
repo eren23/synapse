@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use crate::models::vision::code_wm::{CodeWorldModel, CodeWorldModelConfig, GeluKind};
 use crate::ops::attention::bidirectional_attention;
 use crate::ops::pure_rust_ops::layernorm_with_bias;
+use crate::quantization::primitives::calibration::PercentileCalibration;
 use crate::quantization::QuantizedLinear;
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
 
@@ -282,6 +283,59 @@ pub fn quantize_code_wm(model: &CodeWorldModel) -> QuantizedCodeWorldModel {
             mlp_up: QuantizedLinear::from_f32(&src.mlp_up.weight, mlp_h, d),
             mlp_up_bias: AlignedBuffer::from_slice(&src.mlp_up.bias),
             mlp_down: QuantizedLinear::from_f32(&src.mlp_down.weight, d, mlp_h),
+            mlp_down_bias: AlignedBuffer::from_slice(&src.mlp_down.bias),
+        }
+    };
+
+    QuantizedCodeWorldModel {
+        config: cfg,
+        token_embedding: AlignedBuffer::from_slice(&model.token_embedding),
+        cls_token: AlignedBuffer::from_slice(&model.cls_token),
+        pos_enc: AlignedBuffer::from_slice(&model.pos_enc),
+        encoder_block: quantize_block(&model.encoder_block),
+        encoder_final_norm_w: AlignedBuffer::from_slice(&model.encoder_final_norm.weight),
+        encoder_final_norm_b: AlignedBuffer::from_slice(&model.encoder_final_norm.bias),
+        action_fc1_w: AlignedBuffer::from_slice(&model.action_fc1.weight),
+        action_fc1_b: AlignedBuffer::from_slice(&model.action_fc1.bias),
+        action_fc2_w: AlignedBuffer::from_slice(&model.action_fc2.weight),
+        action_fc2_b: AlignedBuffer::from_slice(&model.action_fc2.bias),
+        predictor_blocks: model.predictor_blocks.iter().map(&quantize_block).collect(),
+        predictor_final_norm_w: AlignedBuffer::from_slice(&model.predictor_final_norm.weight),
+        predictor_final_norm_b: AlignedBuffer::from_slice(&model.predictor_final_norm.bias),
+    }
+}
+
+/// Convert an f32 CodeWorldModel into INT8 using percentile calibration.
+/// Clips outlier weights at `percentile` (e.g. 99.5) before computing scales,
+/// which helps models with heavy-tailed weight distributions (e.g. G1b/VICReg).
+pub fn quantize_code_wm_int8_percentile(
+    model: &CodeWorldModel,
+    percentile: f32,
+) -> QuantizedCodeWorldModel {
+    let cfg = model.config.clone();
+    let d = cfg.model_dim;
+    let mlp_h = cfg.mlp_hidden;
+    let calib = PercentileCalibration::new(percentile);
+
+    let quantize_percentile =
+        |weights: &[f32], out: usize, inp: usize| -> QuantizedLinear {
+            let scales = calib.compute_scales(weights, out, inp);
+            QuantizedLinear::from_f32_with_scales(weights, &scales, out, inp)
+        };
+
+    let quantize_block = |src: &crate::models::vision::code_wm::TransformerBlock| -> QuantizedTransformerBlock {
+        QuantizedTransformerBlock {
+            norm1_w: AlignedBuffer::from_slice(&src.norm1.weight),
+            norm1_b: AlignedBuffer::from_slice(&src.norm1.bias),
+            attn_in_proj: quantize_percentile(&src.attn_in_proj.weight, 3 * d, d),
+            attn_in_proj_bias: AlignedBuffer::from_slice(&src.attn_in_proj.bias),
+            attn_out_proj: quantize_percentile(&src.attn_out_proj.weight, d, d),
+            attn_out_proj_bias: AlignedBuffer::from_slice(&src.attn_out_proj.bias),
+            norm2_w: AlignedBuffer::from_slice(&src.norm2.weight),
+            norm2_b: AlignedBuffer::from_slice(&src.norm2.bias),
+            mlp_up: quantize_percentile(&src.mlp_up.weight, mlp_h, d),
+            mlp_up_bias: AlignedBuffer::from_slice(&src.mlp_up.bias),
+            mlp_down: quantize_percentile(&src.mlp_down.weight, d, mlp_h),
             mlp_down_bias: AlignedBuffer::from_slice(&src.mlp_down.bias),
         }
     };

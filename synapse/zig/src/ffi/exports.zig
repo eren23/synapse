@@ -1810,6 +1810,68 @@ pub export fn syn_lewm_rollout_fused(
     return SYN_OK;
 }
 
+/// Fused Code WM encoder: run `num_loops` weight-shared pre-norm transformer
+/// iterations in one call. Single shared block (not per-layer arrays).
+pub export fn syn_code_wm_encoder_fused(
+    seq: ?[*]f32,
+    seq_len: usize,
+    hidden: usize,
+    num_heads: usize,
+    mlp_hidden: usize,
+    num_loops: usize,
+    norm1_w: ?[*]const f32,
+    norm1_b: ?[*]const f32,
+    attn_in_w: ?[*]const f32,
+    attn_in_b: ?[*]const f32,
+    attn_out_w: ?[*]const f32,
+    attn_out_b: ?[*]const f32,
+    norm2_w: ?[*]const f32,
+    norm2_b: ?[*]const f32,
+    mlp_up_w: ?[*]const f32,
+    mlp_up_b: ?[*]const f32,
+    mlp_down_w: ?[*]const f32,
+    mlp_down_b: ?[*]const f32,
+    normed_buf: ?[*]f32,
+    qkv_buf: ?[*]f32,
+    attn_buf: ?[*]f32,
+    proj_buf: ?[*]f32,
+    scores_buf: ?[*]f32,
+    packed_a: ?[*]f32,
+    packed_b: ?[*]f32,
+    mode: u32,
+) c_int {
+    const s = seq orelse return SYN_ERR_NULL_PTR;
+    const n1w = norm1_w orelse return SYN_ERR_NULL_PTR;
+    const n1b = norm1_b orelse return SYN_ERR_NULL_PTR;
+    const aiw = attn_in_w orelse return SYN_ERR_NULL_PTR;
+    const aib = attn_in_b orelse return SYN_ERR_NULL_PTR;
+    const aow = attn_out_w orelse return SYN_ERR_NULL_PTR;
+    const aob = attn_out_b orelse return SYN_ERR_NULL_PTR;
+    const n2w = norm2_w orelse return SYN_ERR_NULL_PTR;
+    const n2b = norm2_b orelse return SYN_ERR_NULL_PTR;
+    const muw = mlp_up_w orelse return SYN_ERR_NULL_PTR;
+    const mub = mlp_up_b orelse return SYN_ERR_NULL_PTR;
+    const mdw = mlp_down_w orelse return SYN_ERR_NULL_PTR;
+    const mdb = mlp_down_b orelse return SYN_ERR_NULL_PTR;
+    const nb = normed_buf orelse return SYN_ERR_NULL_PTR;
+    const qb = qkv_buf orelse return SYN_ERR_NULL_PTR;
+    const ab = attn_buf orelse return SYN_ERR_NULL_PTR;
+    const pb = proj_buf orelse return SYN_ERR_NULL_PTR;
+    const sb = scores_buf orelse return SYN_ERR_NULL_PTR;
+    const pa = packed_a orelse return SYN_ERR_NULL_PTR;
+    const pbb = packed_b orelse return SYN_ERR_NULL_PTR;
+    if (seq_len == 0 or hidden == 0 or num_loops == 0) return SYN_OK;
+
+    const cwm = @import("synapse").ops.fused_code_wm;
+    cwm.codeWmEncoderFused(
+        s, seq_len, hidden, num_heads, mlp_hidden, num_loops,
+        n1w, n1b, aiw, aib, aow, aob, n2w, n2b, muw, mub, mdw, mdb,
+        nb, qb, ab, pb, sb, pa, pbb,
+        mode,
+    );
+    return SYN_OK;
+}
+
 // ============================================================
 // KV-Cache management
 // ============================================================
