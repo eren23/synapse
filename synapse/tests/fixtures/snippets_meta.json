@@ -1,0 +1,95 @@
+{
+  "snippets": [
+    {
+      "name": "quicksort",
+      "category": "sort",
+      "nonpad": 240,
+      "src_chars": 269
+    },
+    {
+      "name": "mergesort",
+      "category": "sort",
+      "nonpad": 256,
+      "src_chars": 449
+    },
+    {
+      "name": "bubblesort",
+      "category": "sort",
+      "nonpad": 221,
+      "src_chars": 207
+    },
+    {
+      "name": "reverse_string",
+      "category": "str",
+      "nonpad": 90,
+      "src_chars": 145
+    },
+    {
+      "name": "palindrome",
+      "category": "str",
+      "nonpad": 119,
+      "src_chars": 166
+    },
+    {
+      "name": "word_count",
+      "category": "str",
+      "nonpad": 109,
+      "src_chars": 151
+    },
+    {
+      "name": "fibonacci",
+      "category": "math",
+      "nonpad": 133,
+      "src_chars": 130
+    },
+    {
+      "name": "gcd",
+      "category": "math",
+      "nonpad": 115,
+      "src_chars": 112
+    },
+    {
+      "name": "prime_sieve",
+      "category": "math",
+      "nonpad": 241,
+      "src_chars": 269
+    },
+    {
+      "name": "read_csv",
+      "category": "io",
+      "nonpad": 112,
+      "src_chars": 185
+    },
+    {
+      "name": "write_json",
+      "category": "io",
+      "nonpad": 120,
+      "src_chars": 191
+    },
+    {
+      "name": "file_size",
+      "category": "io",
+      "nonpad": 202,
+      "src_chars": 333
+    },
+    {
+      "name": "http_get",
+      "category": "http",
+      "nonpad": 107,
+      "src_chars": 206
+    },
+    {
+      "name": "simple_server",
+      "category": "http",
+      "nonpad": 154,
+      "src_chars": 388
+    },
+    {
+      "name": "webhook_post",
+      "category": "http",
+      "nonpad": 144,
+      "src_chars": 283
+    }
+  ],
+  "max_len": 256
+}

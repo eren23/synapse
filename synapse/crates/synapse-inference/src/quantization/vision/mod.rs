@@ -1,9 +1,15 @@
 pub mod full_q_lewm;
+pub mod int8_code_wm;
 pub mod int8_lewm;
+pub mod q4_code_wm;
+pub mod q4_code_wm_full;
 pub mod q4_lewm;
 pub mod ternary_lewm;
 
 pub use full_q_lewm::{FullyQuantizedLeWM, quantize_lewm_full, Q4FullLeWM, quantize_lewm_q4_full};
+pub use int8_code_wm::{load_and_quantize as load_and_quantize_code_wm, quantize_code_wm, QuantizedCodeWorldModel, QuantizedTransformerBlock};
+pub use q4_code_wm::{quantize_code_wm_q4, Q4CodeWorldModel, Q4TransformerBlock};
+pub use q4_code_wm_full::{quantize_code_wm_q4_full, Int8Table, Q4FullCodeWorldModel, Q4FullTransformerBlock};
 pub use int8_lewm::{quantize_lewm, QuantizedAdaLNLayer, QuantizedLeWM};
 pub use q4_lewm::{cached_q4_lewm, quantize_lewm_q4, CachedQ4AdaLNLayer, CachedQ4LeWM, CachedQ4Linear, QuantizedQ4AdaLNLayer, QuantizedQ4LeWM};
 pub use ternary_lewm::{TernaryLeWM, TernaryAdaLNLayer, quantize_lewm_ternary};

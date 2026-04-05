@@ -514,6 +514,38 @@ extern "C" {
     ) -> syn_status_t;
 
     // ------------------------------------------------------------------
+    // Fused Code WM encoder (weight-shared pre-norm transformer)
+    // ------------------------------------------------------------------
+    pub fn syn_code_wm_encoder_fused(
+        seq: *mut f32,
+        seq_len: usize,
+        hidden: usize,
+        num_heads: usize,
+        mlp_hidden: usize,
+        num_loops: usize,
+        norm1_w: *const f32,
+        norm1_b: *const f32,
+        attn_in_w: *const f32,
+        attn_in_b: *const f32,
+        attn_out_w: *const f32,
+        attn_out_b: *const f32,
+        norm2_w: *const f32,
+        norm2_b: *const f32,
+        mlp_up_w: *const f32,
+        mlp_up_b: *const f32,
+        mlp_down_w: *const f32,
+        mlp_down_b: *const f32,
+        normed_buf: *mut f32,
+        qkv_buf: *mut f32,
+        attn_buf: *mut f32,
+        proj_buf: *mut f32,
+        scores_buf: *mut f32,
+        packed_a: *mut f32,
+        packed_b: *mut f32,
+        mode: u32,
+    ) -> syn_status_t;
+
+    // ------------------------------------------------------------------
     // KV-Cache
     // ------------------------------------------------------------------
     pub fn syn_kvcache_create(

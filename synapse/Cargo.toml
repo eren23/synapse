@@ -13,7 +13,10 @@ categories = ["science", "wasm"]
 repository = "https://github.com/eren23/synapse"
 
 [features]
+default = ["zig-ffi"]
+zig-ffi = []
 metal = ["synapse-inference/metal"]
+debug_activations = ["synapse-inference/debug_activations"]
 
 [dependencies]
 synapse-autograd = { path = "crates/synapse-autograd" }
@@ -25,6 +28,7 @@ synapse-train = { path = "crates/synapse-train" }
 synapse-core = { path = "crates/synapse-core" }
 synapse-inference = { path = "crates/synapse-inference", features = ["diffusion"] }
 synapse-sys = { path = "crates/synapse-sys" }
+synapse-code-tokenizer = { path = "crates/synapse-code-tokenizer" }
 rand = "0.8"
 rand_distr = "0.4"
 
@@ -136,6 +140,10 @@ name = "multi_model_validation"
 path = "tests/integration/multi_model_validation.rs"
 
 [[test]]
+name = "code_wm_golden"
+path = "tests/integration/code_wm_golden.rs"
+
+[[test]]
 name = "kvcache_speedup"
 path = "tests/benchmarks/kvcache_speedup.rs"
 
@@ -210,6 +218,58 @@ path = "examples/world_model_rollout.rs"
 [[example]]
 name = "lewm_demo"
 path = "examples/lewm_demo.rs"
+
+[[example]]
+name = "code_wm_demo"
+path = "examples/code_wm_demo.rs"
+
+[[example]]
+name = "bench_code_wm"
+path = "examples/bench_code_wm.rs"
+
+[[example]]
+name = "code_wm_retrieve"
+path = "examples/code_wm_retrieve.rs"
+
+[[example]]
+name = "code_wm_int8_compare"
+path = "examples/code_wm_int8_compare.rs"
+
+[[example]]
+name = "code_wm_q4_compare"
+path = "examples/code_wm_q4_compare.rs"
+
+[[example]]
+name = "code_wm_calibration_compare"
+path = "examples/code_wm_calibration_compare.rs"
+
+[[example]]
+name = "code_wm_semantic_test"
+path = "examples/code_wm_semantic_test.rs"
+
+[[example]]
+name = "code_wm_edit_pairs"
+path = "examples/code_wm_edit_pairs.rs"
+
+[[example]]
+name = "tokenizer_cross_check"
+path = "examples/tokenizer_cross_check.rs"
+
+[[example]]
+name = "code_wm_pipeline"
+path = "examples/code_wm_pipeline.rs"
+
+[[example]]
+name = "export_browser_corpus"
+path = "examples/export_browser_corpus.rs"
+
+[[example]]
+name = "code_wm_corpus_retrieve"
+path = "examples/code_wm_corpus_retrieve.rs"
+
+[[example]]
+name = "code_wm_fused_bench"
+path = "examples/code_wm_fused_bench.rs"
 
 [[example]]
 name = "geometric_attention_demo"

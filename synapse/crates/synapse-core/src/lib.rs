@@ -962,6 +962,56 @@ pub fn lewm_rollout_fused(
     }
 }
 
+/// Fused Code WM encoder: weight-shared pre-norm transformer loops.
+///
+/// Modifies `seq` in-place. Single shared block (not per-layer).
+/// Mode flags: use `0` for default Zig path, or `BLAS_ACCELERATE=0x08` on macOS.
+#[allow(clippy::too_many_arguments)]
+pub fn code_wm_encoder_fused(
+    seq: &mut [f32],
+    seq_len: usize,
+    hidden: usize,
+    num_heads: usize,
+    mlp_hidden: usize,
+    num_loops: usize,
+    norm1_w: &[f32],
+    norm1_b: &[f32],
+    attn_in_w: &[f32],
+    attn_in_b: &[f32],
+    attn_out_w: &[f32],
+    attn_out_b: &[f32],
+    norm2_w: &[f32],
+    norm2_b: &[f32],
+    mlp_up_w: &[f32],
+    mlp_up_b: &[f32],
+    mlp_down_w: &[f32],
+    mlp_down_b: &[f32],
+    normed_buf: &mut [f32],
+    qkv_buf: &mut [f32],
+    attn_buf: &mut [f32],
+    proj_buf: &mut [f32],
+    scores_buf: &mut [f32],
+    packed_a: &mut [f32],
+    packed_b: &mut [f32],
+    mode: u32,
+) -> Result<(), SynapseError> {
+    unsafe {
+        check_status(ffi::syn_code_wm_encoder_fused(
+            seq.as_mut_ptr(), seq_len, hidden, num_heads, mlp_hidden, num_loops,
+            norm1_w.as_ptr(), norm1_b.as_ptr(),
+            attn_in_w.as_ptr(), attn_in_b.as_ptr(),
+            attn_out_w.as_ptr(), attn_out_b.as_ptr(),
+            norm2_w.as_ptr(), norm2_b.as_ptr(),
+            mlp_up_w.as_ptr(), mlp_up_b.as_ptr(),
+            mlp_down_w.as_ptr(), mlp_down_b.as_ptr(),
+            normed_buf.as_mut_ptr(), qkv_buf.as_mut_ptr(), attn_buf.as_mut_ptr(),
+            proj_buf.as_mut_ptr(), scores_buf.as_mut_ptr(),
+            packed_a.as_mut_ptr(), packed_b.as_mut_ptr(),
+            mode,
+        ))
+    }
+}
+
 /// Projection GEMV with fused bias: output[m,n] = input[m,k] * weight[n,k]^T + bias[n].
 ///
 /// `input` is `[m * k]`, `weight` is `[n * k]` (row-major, each row = one output neuron),

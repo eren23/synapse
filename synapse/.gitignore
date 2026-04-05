@@ -14,6 +14,10 @@ synapse-esp32/target/
 
 # Model weights (too large for git — download separately)
 /models/
+# Large reference fixtures (regenerate via scripts/reference/*.py)
+tests/fixtures/*.safetensors
+# Browser demo weights (copied at build time from models/code_wm/)
+web/code_wm_demo/*.safetensors
 # lewm-compress-demo bins tracked via Git LFS (see .gitattributes)
 web/ssm-demo/*.bin
 web/**/*.pt
