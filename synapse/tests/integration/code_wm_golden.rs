@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig};
+use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig, PoolMode};
 use synapse_inference::weight_loading::load_safetensors;
 
 // Per-stage tolerance for f32 compute. Intermediate activations accumulate
@@ -71,9 +71,15 @@ fn load_model(weights: &str, config: &str) -> CodeWorldModel {
     let stats = m
         .load_weights(tensors)
         .unwrap_or_else(|e| panic!("load_weights failed: {e:?}"));
+    // Cls variants (g8/g1b/g10/expa) have 47 tensors. Attn variants
+    // (ema15k / phase4-contrast-*) add 5 state_encoder.attn_pool.* tensors → 52.
+    let expected = match cfg.pool_mode {
+        PoolMode::Cls => 47,
+        PoolMode::Attn => 52,
+    };
     assert_eq!(
-        stats.loaded, 47,
-        "expected 47 tensors loaded, got {}. skipped: {:?}",
+        stats.loaded, expected,
+        "expected {expected} tensors loaded, got {}. skipped: {:?}",
         stats.loaded, stats.skipped
     );
     m
@@ -233,4 +239,76 @@ fn code_wm_g10_end_to_end_golden() {
     let m = load_model(weights, config);
     let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
     validate_end_to_end("g10", &m, &goldens);
+}
+
+// ─── Phase 2–4 attn-pool variants ─────────────────────────────────────
+//
+// These four checkpoints come from the tap's Phase 2–4 training runs
+// (Crucible community tap, commit c6492c8). All share the same
+// architecture as g8/g1b/g10 (128d, 4 heads, 6 encoder loops, 2×6
+// predictor loops) but were trained with WM_POOL_MODE=attn (the tap
+// default), so they add a learned attention-pooling readout head.
+//
+// Expected: 52 tensors loaded (47 standard + 5 attn_pool), parity
+// against the Python reference at cos ≥ 0.99999 / max_abs < 5e-5.
+
+/// ema-frozen-15k: best predictor from the Phase 3 run (val_dcos 0.9948).
+#[test]
+fn code_wm_ema15k_end_to_end_golden() {
+    let weights = "models/code_wm/ema15k.safetensors";
+    let config = "configs/code_wm_ema15k.json";
+    let goldens_path = "tests/fixtures/code_wm_reference_ema15k.safetensors";
+    if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+        eprintln!("SKIP: missing ema15k artifacts.");
+        return;
+    }
+    let m = load_model(weights, config);
+    let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+    validate_end_to_end("ema15k", &m, &goldens);
+}
+
+/// phase4-contrast-high: best retriever from the Phase 4 run (λ=1.0
+/// supervised contrastive on deltas, beats BoW on by_joint MRR).
+#[test]
+fn code_wm_contrast_high_end_to_end_golden() {
+    let weights = "models/code_wm/contrast_high.safetensors";
+    let config = "configs/code_wm_contrast_high.json";
+    let goldens_path = "tests/fixtures/code_wm_reference_contrast_high.safetensors";
+    if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+        eprintln!("SKIP: missing contrast_high artifacts.");
+        return;
+    }
+    let m = load_model(weights, config);
+    let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+    validate_end_to_end("contrast_high", &m, &goldens);
+}
+
+/// phase4-contrast-mid: λ=0.5 ablation row.
+#[test]
+fn code_wm_contrast_mid_end_to_end_golden() {
+    let weights = "models/code_wm/contrast_mid.safetensors";
+    let config = "configs/code_wm_contrast_mid.json";
+    let goldens_path = "tests/fixtures/code_wm_reference_contrast_mid.safetensors";
+    if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+        eprintln!("SKIP: missing contrast_mid artifacts.");
+        return;
+    }
+    let m = load_model(weights, config);
+    let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+    validate_end_to_end("contrast_mid", &m, &goldens);
+}
+
+/// phase4-contrast-low: λ=0.1 ablation row.
+#[test]
+fn code_wm_contrast_low_end_to_end_golden() {
+    let weights = "models/code_wm/contrast_low.safetensors";
+    let config = "configs/code_wm_contrast_low.json";
+    let goldens_path = "tests/fixtures/code_wm_reference_contrast_low.safetensors";
+    if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+        eprintln!("SKIP: missing contrast_low artifacts.");
+        return;
+    }
+    let m = load_model(weights, config);
+    let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+    validate_end_to_end("contrast_low", &m, &goldens);
 }

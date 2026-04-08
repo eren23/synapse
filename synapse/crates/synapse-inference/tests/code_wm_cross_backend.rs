@@ -33,27 +33,22 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
     dot / (na.sqrt() * nb.sqrt() + 1e-30)
 }
 
-#[test]
-fn code_wm_golden_any_backend() {
-    let root = repo_root();
-    let weights = root.join("models/code_wm/g8.safetensors");
-    let config = root.join("configs/code_wm_g8.json");
-    let goldens = root.join("tests/fixtures/code_wm_reference_g8.safetensors");
+fn run_variant(tag: &str, weights: &Path, config: &Path, goldens: &Path) {
     if !weights.exists() || !goldens.exists() {
-        eprintln!("SKIP: missing artifacts at {}", root.display());
+        eprintln!("SKIP [{tag}]: missing artifacts");
         return;
     }
 
-    let cfg = CodeWorldModelConfig::from_json(Path::new(&config)).unwrap();
-    let tensors = load_safetensors(&weights).unwrap();
+    let cfg = CodeWorldModelConfig::from_json(config).unwrap();
+    let tensors = load_safetensors(weights).unwrap();
     let mut model = CodeWorldModel::from_config(&cfg);
     model.load_weights(tensors).unwrap();
 
-    let g = load_safetensors(&goldens).unwrap();
+    let g = load_safetensors(goldens).unwrap();
 
     // Backend label: compile-time cfg detection.
     let backend = if cfg!(feature = "zig-ffi") { "zig-ffi" } else { "pure-rust" };
-    println!("\n[backend = {backend}]");
+    println!("\n[backend = {backend}, variant = {tag}, pool = {:?}]", cfg.pool_mode);
 
     for seed in 0..3 {
         let pfx = format!("seed{seed}_");
@@ -65,14 +60,14 @@ fn code_wm_golden_any_backend() {
         let ma = max_abs(&z, z_ref);
         let co = cosine(&z, z_ref);
         println!("  seed{seed} encoder: max_abs={ma:.3e} cos={co:.10}");
-        assert!(ma < 5e-5 && co > 0.99999, "encoder drift");
+        assert!(ma < 5e-5 && co > 0.99999, "{tag} encoder drift: ma={ma:.3e} co={co:.10}");
 
         let za = model.encode_action(action);
         let za_ref = &g[&format!("{pfx}action_final")].data;
         let ma = max_abs(&za, za_ref);
         let co = cosine(&za, za_ref);
         println!("  seed{seed} action:  max_abs={ma:.3e} cos={co:.10}");
-        assert!(ma < 5e-5 && co > 0.99999, "action drift");
+        assert!(ma < 5e-5 && co > 0.99999, "{tag} action drift: ma={ma:.3e} co={co:.10}");
 
         let zs = &g[&format!("{pfx}pred_z_state")].data;
         let za2 = &g[&format!("{pfx}pred_z_action")].data;
@@ -81,6 +76,25 @@ fn code_wm_golden_any_backend() {
         let ma = max_abs(&zn, zn_ref);
         let co = cosine(&zn, zn_ref);
         println!("  seed{seed} pred:    max_abs={ma:.3e} cos={co:.10}");
-        assert!(ma < 5e-5 && co > 0.99999, "predictor drift");
+        assert!(ma < 5e-5 && co > 0.99999, "{tag} predictor drift: ma={ma:.3e} co={co:.10}");
     }
+}
+
+#[test]
+fn code_wm_golden_any_backend() {
+    let root = repo_root();
+    // Cls variant — the original g8 baseline.
+    run_variant(
+        "g8",
+        &root.join("models/code_wm/g8.safetensors"),
+        &root.join("configs/code_wm_g8.json"),
+        &root.join("tests/fixtures/code_wm_reference_g8.safetensors"),
+    );
+    // Attn variant — exercises AttentionPooling on both backends.
+    run_variant(
+        "contrast_high",
+        &root.join("models/code_wm/contrast_high.safetensors"),
+        &root.join("configs/code_wm_contrast_high.json"),
+        &root.join("tests/fixtures/code_wm_reference_contrast_high.safetensors"),
+    );
 }

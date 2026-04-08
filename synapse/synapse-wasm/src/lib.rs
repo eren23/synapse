@@ -3906,7 +3906,7 @@ impl RealLeWMFullQ4 {
 // Code WM — zero-drift text-token world model for code edits
 // ════════════════════════════════════════════════════════════════════
 
-use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig};
+use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig, PoolMode};
 
 /// Code WM running in WASM. Zero drift vs PyTorch reference (<1e-6 max_abs).
 ///
@@ -3935,9 +3935,15 @@ impl WasmCodeWM {
         let mut model = CodeWorldModel::from_config(&cfg);
         let stats = model.load_weights(weights)
             .map_err(|e| JsError::new(&format!("load_weights failed: {e:?}")))?;
-        if stats.loaded != 47 {
+        // Cls variants (g8/g1b/g10/expa) have 47 tensors; attn variants
+        // (ema15k / phase4-contrast-*) add 5 state_encoder.attn_pool.* tensors.
+        let expected = match cfg.pool_mode {
+            PoolMode::Cls => 47,
+            PoolMode::Attn => 52,
+        };
+        if stats.loaded != expected {
             return Err(JsError::new(&format!(
-                "Expected 47 weight tensors, got {}. Missing keys likely.", stats.loaded
+                "Expected {expected} weight tensors, got {}. Missing keys likely.", stats.loaded
             )));
         }
         Ok(WasmCodeWM { model })

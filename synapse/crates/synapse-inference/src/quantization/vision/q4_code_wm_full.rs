@@ -9,7 +9,7 @@
 //! Quality delta: token embedding dequantize-on-gather is a 128-op multiply
 //! per token — negligible overhead.
 
-use crate::models::vision::code_wm::{CodeWorldModel, CodeWorldModelConfig, GeluKind};
+use crate::models::vision::code_wm::{AttentionPooling, CodeWorldModel, CodeWorldModelConfig, GeluKind, PoolMode};
 use crate::ops::attention::bidirectional_attention;
 use crate::ops::pure_rust_ops::layernorm_with_bias;
 use crate::quantization::Q4Linear;
@@ -175,6 +175,15 @@ impl Q4FullTransformerBlock {
     }
 }
 
+/// Attn pool weights in Q4-full models stay f32 (tiny — ~200 KB total).
+fn attn_pool_f32_bytes(pool: &AttentionPooling) -> usize {
+    4 * (pool.query.len()
+        + pool.in_proj_weight.len()
+        + pool.in_proj_bias.len()
+        + pool.out_proj_weight.len()
+        + pool.out_proj_bias.len())
+}
+
 // ── Q4-full Code WM with INT8 embedding + PE ───────────────────────
 pub struct Q4FullCodeWorldModel {
     pub config: CodeWorldModelConfig,
@@ -184,6 +193,8 @@ pub struct Q4FullCodeWorldModel {
     // f32 (unchanged — small / precision-sensitive)
     pub cls_token: AlignedBuffer,
     pub encoder_block: Q4FullTransformerBlock,
+    /// Learned attention readout (pool_mode=Attn). Stays f32 — tiny (~200 KB).
+    pub attn_pool: Option<AttentionPooling>,
     pub encoder_final_norm_w: AlignedBuffer,
     pub encoder_final_norm_b: AlignedBuffer,
     pub action_fc1_w: AlignedBuffer,
@@ -197,10 +208,12 @@ pub struct Q4FullCodeWorldModel {
 
 impl Q4FullCodeWorldModel {
     pub fn memory_bytes(&self) -> usize {
+        let pool_bytes = self.attn_pool.as_ref().map(attn_pool_f32_bytes).unwrap_or(0);
         self.token_embedding.memory_bytes()
             + self.pos_enc.memory_bytes()
             + 4 * self.cls_token.len()
             + self.encoder_block.bytes()
+            + pool_bytes
             + 4 * (self.encoder_final_norm_w.len() + self.encoder_final_norm_b.len()
                 + self.action_fc1_w.len() + self.action_fc1_b.len()
                 + self.action_fc2_w.len() + self.action_fc2_b.len()
@@ -231,9 +244,16 @@ impl Q4FullCodeWorldModel {
         for _ in 0..self.config.encoder_loops {
             h = self.encoder_block.forward(&h, seq_with_cls, &self.config);
         }
-        let cls_out: Vec<f32> = h[..d].to_vec();
+        let pooled: Vec<f32> = match self.config.pool_mode {
+            PoolMode::Cls => h[..d].to_vec(),
+            PoolMode::Attn => self
+                .attn_pool
+                .as_ref()
+                .expect("pool_mode=Attn but attn_pool is None")
+                .forward(&h, seq_with_cls),
+        };
         layernorm_with_bias(
-            &cls_out, &self.encoder_final_norm_w, &self.encoder_final_norm_b,
+            &pooled, &self.encoder_final_norm_w, &self.encoder_final_norm_b,
             self.config.layernorm_eps, d,
         )
     }
@@ -291,6 +311,7 @@ pub fn quantize_code_wm_q4_full(model: &CodeWorldModel) -> Q4FullCodeWorldModel 
         pos_enc: Int8Table::from_f32(&model.pos_enc, pe_rows, d),
         cls_token: AlignedBuffer::from_slice(&model.cls_token),
         encoder_block: quantize_block(&model.encoder_block),
+        attn_pool: model.attn_pool.clone(),
         encoder_final_norm_w: AlignedBuffer::from_slice(&model.encoder_final_norm.weight),
         encoder_final_norm_b: AlignedBuffer::from_slice(&model.encoder_final_norm.bias),
         action_fc1_w: AlignedBuffer::from_slice(&model.action_fc1.weight),

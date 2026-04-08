@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::models::vision::code_wm::{CodeWorldModel, CodeWorldModelConfig, GeluKind};
+use crate::models::vision::code_wm::{AttentionPooling, CodeWorldModel, CodeWorldModelConfig, GeluKind, PoolMode};
 use crate::ops::attention::bidirectional_attention;
 use crate::ops::pure_rust_ops::layernorm_with_bias;
 use crate::quantization::primitives::calibration::PercentileCalibration;
@@ -164,6 +164,16 @@ impl QuantizedTransformerBlock {
     }
 }
 
+/// Attn pool in quantized models stays f32 — it's ~200 KB total (5 tensors)
+/// and its cross-attention runs once per encode, not once per token.
+fn attn_pool_f32_bytes(pool: &AttentionPooling) -> usize {
+    4 * (pool.query.len()
+        + pool.in_proj_weight.len()
+        + pool.in_proj_bias.len()
+        + pool.out_proj_weight.len()
+        + pool.out_proj_bias.len())
+}
+
 /// INT8-quantized Code WM.
 pub struct QuantizedCodeWorldModel {
     pub config: CodeWorldModelConfig,
@@ -172,6 +182,8 @@ pub struct QuantizedCodeWorldModel {
     pub cls_token: AlignedBuffer,       // [D]
     pub pos_enc: AlignedBuffer,         // [max_seq+1, D]
     pub encoder_block: QuantizedTransformerBlock,
+    /// Learned attention readout (pool_mode=Attn). Stays f32 — tiny (~200 KB).
+    pub attn_pool: Option<AttentionPooling>,
     pub encoder_final_norm_w: AlignedBuffer,
     pub encoder_final_norm_b: AlignedBuffer,
     // Action encoder stays f32 — only 17.5K params (<0.1 MB)
@@ -187,10 +199,12 @@ pub struct QuantizedCodeWorldModel {
 impl QuantizedCodeWorldModel {
     /// Total in-memory size in bytes (weights + scales).
     pub fn memory_bytes(&self) -> usize {
+        let pool_bytes = self.attn_pool.as_ref().map(attn_pool_f32_bytes).unwrap_or(0);
         4 * self.token_embedding.len()
             + 4 * self.cls_token.len()
             + 4 * self.pos_enc.len()
             + self.encoder_block.bytes()
+            + pool_bytes
             + 4 * self.encoder_final_norm_w.len()
             + 4 * self.encoder_final_norm_b.len()
             + 4 * self.action_fc1_w.len()
@@ -224,9 +238,17 @@ impl QuantizedCodeWorldModel {
         for _ in 0..self.config.encoder_loops {
             h = self.encoder_block.forward(&h, seq_with_cls, &self.config);
         }
-        let cls_out: Vec<f32> = h[..d].to_vec();
+        // Readout: Cls extracts token 0, Attn cross-attends via f32 AttentionPooling.
+        let pooled: Vec<f32> = match self.config.pool_mode {
+            PoolMode::Cls => h[..d].to_vec(),
+            PoolMode::Attn => self
+                .attn_pool
+                .as_ref()
+                .expect("pool_mode=Attn but attn_pool is None")
+                .forward(&h, seq_with_cls),
+        };
         layernorm_with_bias(
-            &cls_out,
+            &pooled,
             &self.encoder_final_norm_w,
             &self.encoder_final_norm_b,
             self.config.layernorm_eps,
@@ -293,6 +315,7 @@ pub fn quantize_code_wm(model: &CodeWorldModel) -> QuantizedCodeWorldModel {
         cls_token: AlignedBuffer::from_slice(&model.cls_token),
         pos_enc: AlignedBuffer::from_slice(&model.pos_enc),
         encoder_block: quantize_block(&model.encoder_block),
+        attn_pool: model.attn_pool.clone(),
         encoder_final_norm_w: AlignedBuffer::from_slice(&model.encoder_final_norm.weight),
         encoder_final_norm_b: AlignedBuffer::from_slice(&model.encoder_final_norm.bias),
         action_fc1_w: AlignedBuffer::from_slice(&model.action_fc1.weight),
@@ -346,6 +369,7 @@ pub fn quantize_code_wm_int8_percentile(
         cls_token: AlignedBuffer::from_slice(&model.cls_token),
         pos_enc: AlignedBuffer::from_slice(&model.pos_enc),
         encoder_block: quantize_block(&model.encoder_block),
+        attn_pool: model.attn_pool.clone(),
         encoder_final_norm_w: AlignedBuffer::from_slice(&model.encoder_final_norm.weight),
         encoder_final_norm_b: AlignedBuffer::from_slice(&model.encoder_final_norm.bias),
         action_fc1_w: AlignedBuffer::from_slice(&model.action_fc1.weight),
