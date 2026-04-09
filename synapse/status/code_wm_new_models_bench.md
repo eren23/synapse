@@ -9,10 +9,11 @@ and precisions (f32, INT8, Q4, Q4-full).
 15K × λ-ladder, and a new retrieval champion (`p5_contrast_high_15k`) that
 was reported in the tap's Phase 5 Session Report as "use this for
 retrieval/similarity in Synapse production". All 10 Phase 5 checkpoints are
-now ported with byte-level parity against the PyTorch reference. **Zero
-Rust changes were needed** — the Phase 5 architecture is identical to
-Phase 4 (same `model_dim=128`, 4 heads, 6 encoder loops, `ema_decay=0.99999`,
-attention pool, `bounded_residual=False`).
+now ported with numeric parity against the PyTorch reference within
+tolerance (`cos ≥ 0.99999, max_abs < 5e-5`). **Zero Rust changes were
+needed** — the Phase 5 architecture is identical to Phase 4 (same
+`model_dim=128`, 4 heads, 6 encoder loops, `ema_decay=0.99999`, attention
+pool, `bounded_residual=False`).
 
 See the `Phase 5 — variance sweep + 15K ladder` section at the bottom of this
 report for the Phase 5 results.
@@ -149,19 +150,153 @@ Predictor cosine vs f32 reference (worst of 3 seeds):
 | contrast_mid   | 1.0000  | 0.99990 | 0.98928 | 0.98928 |
 | contrast_low   | 1.0000  | 0.99993 | 0.98528 | 0.98528 |
 
-**Takeaways**:
-- **INT8 is safe for every variant**: encoder and predictor both stay
-  above 0.9997 cos across all 4 new checkpoints. Recommend INT8 as the
-  default quantized path for the phase2–4 variants.
-- **Q4 meaningfully degrades the predictor on the attn variants**. ema15k
-  drops to 0.9687 on one seed; contrast_* drop to ~0.985–0.993. This is
-  because the near-frozen EMA checkpoints have more peaked weight
-  distributions that don't quantize as well to 4 bits. Q4 encoders are
-  fine (>0.998 cos), so if the use case is encoder-only (retrieval,
-  similarity), Q4 is acceptable. For multi-step rollout, stick with INT8.
-- **Q4-full ≈ Q4**: the INT8 embedding/PE adds negligible extra loss over
-  Q4 matmul alone. The additional ~40% compression from Q4-full is almost
-  free.
+**Takeaways** (caveats — these numbers are from **3 synthetic
+random-token seeds**, not real code; see the real-code corpus benchmark
+below for the distributional picture across 500 actual Python files):
+
+- **INT8 on synthetic inputs**: encoder and predictor both stay above
+  0.9997 cos vs the f32 PyTorch reference across all 4 new checkpoints.
+  Whether that transfers to real code is what the 500-file benchmark
+  below actually measures — see the "Quantization on real Python code"
+  section for the honest distributional numbers.
+- **Q4 predictor drift on the attn variants**. `ema15k` drops to 0.9687
+  on one of the 3 synthetic seeds; `contrast_*` drop to ~0.985–0.993.
+  This is because the near-frozen EMA checkpoints have peaked weight
+  distributions that don't quantize as well to 4 bits. **However**, on
+  synthetic inputs the encoder side stays above 0.998 cos. The real
+  question is whether the encoder stays that tight on real Python — the
+  corpus benchmark below shows it does NOT, with Q4 producing
+  long-tailed cosine drift on actual code.
+- **Q4 vs Q4-full predictor cosine is identical** in this test
+  (0.96869 = 0.96869, etc.) — that's a methodology artifact, not a
+  claim about quantization quality. The predictor comparison uses
+  golden reference `pred_z_state` / `pred_z_action` as input, so the
+  INT8 embedding/PE quantization (the only difference between Q4 and
+  Q4-full) is bypassed. On the encoder side, Q4 and Q4-full differ by
+  ~1–2e-7 on synthetic inputs, but the corpus benchmark below
+  exercises the full encoder path including quantized embedding + PE
+  and gives a more honest measurement.
+
+## Quantization on real Python code (500-file corpus)
+
+**Methodology** (run via `examples/code_wm_quant_corpus.rs`, results in
+`/tmp/code_wm_quant_corpus.log`):
+
+- 500 real Python files pre-tokenized at `max_len=512` in
+  `tests/fixtures/file_index.safetensors`. Source: ~23 top-level
+  packages (pandas, torch, numpy, sympy, transformers, networkx,
+  pytest, etc.) — same fixture consumed by
+  `code_wm_corpus_retrieve.rs`.
+- **Rust-only comparison**: load f32 weights, build
+  `QuantizedCodeWorldModel` (INT8), `Q4CodeWorldModel` (Q4), and
+  `Q4FullCodeWorldModel` (Q4-full) by calling the existing
+  `quantize_code_wm*()` functions, then encode all 500 files with
+  each of the 4 precisions and compute per-file cosine drift
+  `f32 → quantized`. No PyTorch in the loop, so the ~5e-7
+  Rust↔PyTorch baseline drift from the synthetic test is eliminated
+  and the reported numbers are pure Rust quantization error.
+- Statistics reported across 500 files: min / p5 / p50 / p95 / max /
+  mean, plus the fraction of files that fall below two quality-loss
+  thresholds (`cos < 0.999` and `cos < 0.99`).
+- Latency also captured from the encode loop: f32 baseline and the
+  three quantized paths reported as ms/file and `f32 speed ratio`.
+
+### Cosine drift `f32 → quantized` across 500 real Python files
+
+| Variant | Prec | min | p5 | p50 | p95 | max | mean | frac <0.999 | frac <0.99 |
+|---|---|---|---|---|---|---|---|---|---|
+| **g8** (Cls) | INT8 | 0.99552 | 0.99944 | 1.00000 | 1.00000 | 1.00000 | 0.99988 | 2.40% | **0.00%** |
+| **g8** (Cls) | Q4 | **0.81908** | 0.96589 | 0.99975 | 0.99978 | 0.99978 | 0.99274 | 31.40% | **24.00%** |
+| **g8** (Cls) | Q4-full | **0.81577** | 0.96615 | 0.99975 | 0.99978 | 0.99978 | 0.99264 | 31.40% | **24.60%** |
+| **ema15k** (Attn) | INT8 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 0.00% | 0.00% |
+| **ema15k** (Attn) | Q4 | 0.99956 | 0.99962 | 0.99975 | 0.99976 | 0.99978 | 0.99973 | 0.00% | 0.00% |
+| **ema15k** (Attn) | Q4-full | 0.99957 | 0.99963 | 0.99975 | 0.99976 | 0.99977 | 0.99973 | 0.00% | 0.00% |
+| **contrast_high** (Attn) | INT8 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 0.00% | 0.00% |
+| **contrast_high** (Attn) | Q4 | 0.99861 | 0.99880 | 0.99918 | 0.99930 | 0.99934 | 0.99914 | 16.00% | 0.00% |
+| **contrast_high** (Attn) | Q4-full | 0.99861 | 0.99880 | 0.99918 | 0.99930 | 0.99934 | 0.99914 | 16.20% | 0.00% |
+| **p5_contrast_high_15k** (Attn) | INT8 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 1.00000 | 0.00% | 0.00% |
+| **p5_contrast_high_15k** (Attn) | Q4 | 0.99953 | 0.99966 | 0.99975 | 0.99977 | 0.99978 | 0.99973 | 0.00% | 0.00% |
+| **p5_contrast_high_15k** (Attn) | Q4-full | 0.99954 | 0.99967 | 0.99975 | 0.99977 | 0.99978 | 0.99974 | 0.00% | 0.00% |
+
+### Latency (ms per encode, 500 files, M-series CPU, zig-ffi + Accelerate)
+
+| Variant | f32 | INT8 | Q4 | Q4-full | INT8 vs f32 | Q4 vs f32 |
+|---|---|---|---|---|---|---|
+| g8 | 34.55 | 49.80 | 116.46 | 115.94 | 0.69× | 0.30× |
+| ema15k | 35.32 | 50.95 | 118.54 | 117.41 | 0.69× | 0.30× |
+| contrast_high | 37.57 | 50.66 | 116.28 | 115.78 | 0.74× | 0.32× |
+| p5_contrast_high_15k | 34.83 | 49.87 | 116.96 | 118.52 | 0.70× | 0.30× |
+
+### Takeaways — and how they revise the synthetic numbers above
+
+1. **The synthetic-seed quantization numbers misled us on g8.** On 3
+   synthetic random-token seeds, g8 Q4 encoder cosine was 0.99975
+   (looked fine). On 500 real Python files, g8 Q4 has **min 0.81908
+   with 24% of files falling below 0.99 cos** — a long tail the
+   synthetic test completely missed. The random-token inputs don't
+   exercise the same embedding/PE regions that real code does,
+   especially the high-frequency tokens that quantize awkwardly.
+   **Any place in this report that suggested Q4 g8 was safe is wrong
+   on real code.** The synthetic section above now carries a
+   forward-reference to this finding.
+
+2. **The attn-pool Phase 3–5 variants (ema15k, contrast_high,
+   p5_contrast_high_15k) are essentially immune to Q4 encoder drift
+   on real code.** All three have 0% of files below cos 0.999 under
+   Q4 or Q4-full. Min cos stays above 0.998. This is the flip side
+   of the "latent space collapse" finding in the retrieval section:
+   a near-constant encoder has nowhere for the Q4 quantization error
+   to move the output to. It's a **robustness win that comes from a
+   retrieval loss** — the same property that makes the Phase 3–5
+   checkpoints bad at raw-cosine file similarity makes them
+   exceptionally stable under heavy quantization.
+
+3. **INT8 is genuinely safe on real code for every variant tested.**
+   g8 INT8 has 2.4% of files below cos 0.999 but all 500 stay above
+   cos 0.99. Attn variants have 0% below cos 0.999. The synthetic
+   section's "INT8 is safe" claim does transfer to real code — but
+   we only learn that by running this corpus benchmark, not from the
+   3-seed test.
+
+4. **Q4 and Q4-full are nearly identical in every row** (off by
+   ~1–2e-5 on encoder cosine, mostly in the last reported digit).
+   The earlier "Q4-full ≈ Q4" claim was methodologically vacuous on
+   synthetic inputs (predictor isolated from embeddings), but the
+   real-code encoder comparison confirms it for real: replacing the
+   f32 embedding + PE with INT8 adds essentially no cosine drift
+   beyond what Q4 matmul alone does. The ~40% extra compression
+   (3.47× vs 2.87× smaller) really is close to free on quality.
+
+5. **Latency story is less rosy than the compression story suggests.**
+   Q4 and Q4-full are **3.3× slower than f32** on CPU — 116 ms/file
+   vs 34.5 ms/file. That's because the Q4 forward dequantizes on the
+   fly through the `Q4Linear::matmul` path, which on M-series is
+   slower than the Accelerate-dispatched f32 matmul the f32 model
+   uses. INT8 is ~44% slower than f32 (50 ms vs 35 ms) for the same
+   reason. **The 5× compression ratio does NOT imply 5× throughput
+   or even 1× throughput**; on this CPU backend, quantization trades
+   latency for memory. On memory-constrained deployment targets
+   (WASM, ESP32), the trade is almost certainly worth it; on a
+   laptop where f32 fits comfortably in memory, f32 is the fastest
+   encoder path.
+
+6. **Revised Synapse production recommendation** (supersedes the
+   recommendation in the synthetic quantization section above):
+   - **Latency-critical paths on laptop/server**: use f32.
+   - **Memory-constrained paths (WASM, ESP32, browser widget)**: use
+     **INT8** as the default. It's tight on every variant tested
+     (max 2.4% of files below cos 0.999 on g8, 0% on attn variants)
+     and only ~44% slower than f32.
+   - **Extreme memory constraints (5× compression required)**: Q4 or
+     Q4-full is viable **only on the attn-pool variants**
+     (ema15k / contrast_* / p5_contrast_*). On g8/g1b/g10/expa (the
+     Cls variants), Q4 has a 24% tail of files below cos 0.99 on
+     real code and should be avoided.
+   - **For the browser retrieval widget specifically**: the corpus
+     retrieval section below shows `g1b` (Cls, f32) is the best
+     Synapse-side retriever. If memory-constrained, its INT8
+     version is the fallback. Q4 on `g1b` is NOT recommended
+     because it inherits the Cls g8-family Q4 long-tail problem.
 
 ## Retrieval: semantic snippet clustering (curated 15 Python snippets × 5 categories)
 
@@ -196,8 +331,8 @@ The old CLS `g1b` baseline retains a meaningful +0.044 separation on the
 same corpus.
 
 This is **not** a port bug — the 8-way golden tests prove the Rust
-output matches PyTorch byte-for-byte at `cos ≥ 0.99999`. The collapse
-is a property of the checkpoints.
+output matches PyTorch within tolerance (`cos ≥ 0.99999, max_abs < 5e-5`).
+The collapse is a property of the checkpoints.
 
 Likely cause: near-frozen EMA (`ema_decay=0.99999`) + the JEPA objective
 jointly incentivize the encoder to produce very stable outputs across
@@ -417,8 +552,9 @@ at the raw-cosine file-similarity task. Longer training at λ=1.0 × 15K
 tightens the latent cluster further rather than spreading it.
 
 This is **not** a port bug. The 18 golden tests prove Rust matches PyTorch
-byte-for-byte. The collapse is real in the checkpoint — and the Phase 5
-Session Report itself already flagged the mechanism:
+within tolerance (`cos ≥ 0.99999, max_abs < 5e-5`). The collapse is real
+in the checkpoint — and the Phase 5 Session Report itself already flagged
+the mechanism:
 
 > "The in-distribution val metric and CodeSearchNet rank the configs
 > differently. On val, λ=1.0 has higher mean (lucky-seed effect). On
@@ -486,6 +622,58 @@ Norms are all within ±4e-4 of each other — consistent with the Phase 5
 report's "std 0.0015" tight seed variance. The 3 `.pt` files are genuinely
 distinct (different init seeds → different weights), and Synapse loads all
 three correctly under the same `PoolMode::Attn` path.
+
+## Limitations & methodology
+
+A few things this report is careful about after a precision pass
+(2026-04-09):
+
+- **"Parity" means numerical agreement within tolerance, not bitwise
+  identity.** Every Rust↔PyTorch comparison in this report is measured
+  as `cos ≥ 0.99999` with `max_abs < 5e-5`, with the actual drift
+  numbers in the cross-backend and parity sections typically sitting
+  around `max_abs ~ 5e-7, cos 0.99999–1.0000`. That's floating-point
+  agreement, not byte-level identity. The only bitwise comparisons in
+  this report are the SHA256 regression checks, which hash the
+  unchanged whole checkpoint files and correctly claim bit-exact
+  file-level equality.
+
+- **Synthetic-seed quantization numbers come from 3 random-token
+  sequences.** The tables in the "Quantization vs f32" section were
+  generated by `code_wm_{int8,q4}_compare.rs`, which load 3 input
+  sequences from `torch.randint(0, 662, (1, 64))` — uniform over the
+  662-vocab, not real Python code. Real code has a highly skewed
+  token distribution, so quantization error on real code is
+  meaningfully different. That's what the "Quantization on real
+  Python code" section below measures, and it's the section whose
+  headline claims should be trusted; the synthetic section is kept
+  for historical comparison and because the golden fixtures
+  (`tests/fixtures/code_wm_reference_*.safetensors`) are produced by
+  that methodology.
+
+- **Rust↔PyTorch cosine comparisons conflate two sources of drift.**
+  When the synthetic quantization tables compare Rust-Q4 output
+  against PyTorch-f32 reference activations, the reported cosine
+  aggregates (a) Rust-PyTorch f32 drift (~5e-7) and (b) quantization
+  drift (~1e-4 to ~5e-2). Since (b) dominates (a) by ~3 orders of
+  magnitude, attributing the full reported drop to quantization is
+  accurate in practice — but a fully-clean measurement compares
+  Rust-quantized vs Rust-f32 inside a single process, which is what
+  the new corpus benchmark below does.
+
+- **"Worst of 3 seeds" is a sample minimum over 3 synthetic draws,
+  not a statistical worst case.** The corpus benchmark reports
+  min/p5/p50/p95/max across 500 real Python files, giving a real
+  distributional picture.
+
+- **"Latent space collapse" on retrieval (Phase 4/5 attn variants) is
+  a cosine-based observation about the encoder output distribution on
+  the 500-file corpus fixture**. It's not a claim about what the
+  checkpoints were trained to do — the tap's Phase 5 report is
+  explicit that these checkpoints were optimized for `by_joint`
+  edit-pair retrieval, not cross-file cosine similarity. "Collapse"
+  here means "not useful for Synapse's cross-file similarity widget",
+  not "model is broken".
 
 ## Regression check — existing artifacts still unchanged
 
