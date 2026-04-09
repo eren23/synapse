@@ -312,3 +312,60 @@ fn code_wm_contrast_low_end_to_end_golden() {
     let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
     validate_end_to_end("contrast_low", &m, &goldens);
 }
+
+// ─── Phase 5 — variance-corrected sweep + 15K λ ladder ────────────────
+//
+// Phase 5 ran a full seed-variance + horizon sweep on top of the Phase 4
+// results. Same architecture (attn pool, model_dim=128, ema_decay=0.99999,
+// no bounded_residual), so no Rust changes — these all use the same
+// AttentionPooling head + 47-tensor + 5 attn_pool loader path as the
+// Phase 4 contrast_* variants.
+//
+// Production-relevant headlines (per the Phase 5 Session Report):
+//   p5_contrast_high_15k    — NEW retrieval champion (λ=1.0 × 15K, +0.0094 over BoW on cross-repo)
+//   p5_contrast_extreme_15k — best in-distribution val at 15K (λ=2.0)
+//   p5_ema15k_s{2,3}        — predictor seed variance for the existing ema15k
+//
+// Helper macro to keep the 10 new tests compact.
+macro_rules! p5_golden_test {
+    ($fn_name:ident, $variant:literal, $tag:literal) => {
+        #[test]
+        fn $fn_name() {
+            let weights = concat!("models/code_wm/", $variant, ".safetensors");
+            let config = concat!("configs/code_wm_", $variant, ".json");
+            let goldens_path = concat!("tests/fixtures/code_wm_reference_", $variant, ".safetensors");
+            if !Path::new(weights).exists() || !Path::new(goldens_path).exists() {
+                eprintln!(concat!("SKIP: missing ", $variant, " artifacts."));
+                return;
+            }
+            let m = load_model(weights, config);
+            let goldens = load_safetensors(Path::new(goldens_path)).unwrap();
+            validate_end_to_end($tag, &m, &goldens);
+        }
+    };
+}
+
+// Production retrieval champion — λ=1.0 × 15K, the only CodeWM checkpoint
+// that clearly beats BoW on the 20-repo cross-repo eval (+0.0094, single seed).
+p5_golden_test!(code_wm_p5_contrast_high_15k_golden, "p5_contrast_high_15k", "p5_contrast_high_15k");
+
+// 15K λ=2.0 — best in-distribution val at 15K (peak 0.9917, single seed).
+p5_golden_test!(code_wm_p5_contrast_extreme_15k_golden, "p5_contrast_extreme_15k", "p5_contrast_extreme_15k");
+
+// Predictor seed variance: ema-frozen-15K seeds 43 + 44.
+// Phase 5 confirmed predictor std=0.0015 across 3 seeds (very tight).
+p5_golden_test!(code_wm_p5_ema15k_s2_golden, "p5_ema15k_s2", "p5_ema15k_s2");
+p5_golden_test!(code_wm_p5_ema15k_s3_golden, "p5_ema15k_s3", "p5_ema15k_s3");
+
+// 3K λ=2.0 — primary 3-seed variance row.
+// Phase 5: λ=2.0 has 6× tighter variance than λ=1.0 at 3K (0.0010 vs 0.0063).
+p5_golden_test!(code_wm_p5_contrast_extreme_3k_golden, "p5_contrast_extreme_3k", "p5_contrast_extreme_3k");
+p5_golden_test!(code_wm_p5_contrast_extreme_3k_s2_golden, "p5_contrast_extreme_3k_s2", "p5_contrast_extreme_3k_s2");
+p5_golden_test!(code_wm_p5_contrast_extreme_3k_s3_golden, "p5_contrast_extreme_3k_s3", "p5_contrast_extreme_3k_s3");
+
+// 3K λ=1.0 seed sweep — seeds 43/44 (the original phase4-contrast-high is seed 42).
+p5_golden_test!(code_wm_p5_contrast_high_3k_s2_golden, "p5_contrast_high_3k_s2", "p5_contrast_high_3k_s2");
+p5_golden_test!(code_wm_p5_contrast_high_3k_s3_golden, "p5_contrast_high_3k_s3", "p5_contrast_high_3k_s3");
+
+// 3K λ=5.0 — top of the lambda ladder.
+p5_golden_test!(code_wm_p5_contrast_mega_3k_golden, "p5_contrast_mega_3k", "p5_contrast_mega_3k");
