@@ -369,3 +369,14 @@ p5_golden_test!(code_wm_p5_contrast_high_3k_s3_golden, "p5_contrast_high_3k_s3",
 
 // 3K λ=5.0 — top of the lambda ladder.
 p5_golden_test!(code_wm_p5_contrast_mega_3k_golden, "p5_contrast_mega_3k", "p5_contrast_mega_3k");
+
+// ─── Round 5.9 — frozen-target ablation (EMA=1.0) ───────────────────────
+//
+// Round 5.9 fully freezes the target encoder (WM_EMA_DECAY=1.0 + random
+// init, never updates for 15K steps). Same arch as Phase 5 (attn pool,
+// model_dim=128, no bounded_residual), so same 52-tensor loader path.
+// These two variants addressed Claude's #1 reviewer concern and produced
+// the new top CodeWM on 20-repo cross-repo MRR@10 at 0.8131
+// (frozen_target_s42, edging pred_s43 at 0.8080).
+p5_golden_test!(code_wm_frozen_target_s42_golden, "frozen_target_s42", "frozen_target_s42");
+p5_golden_test!(code_wm_frozen_target_s43_golden, "frozen_target_s43", "frozen_target_s43");
