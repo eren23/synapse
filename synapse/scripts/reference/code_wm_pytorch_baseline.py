@@ -69,7 +69,16 @@ def set_inference_mode(model: "torch.nn.Module") -> None:
 
 
 def shadow_encoder(m, tokens: torch.Tensor, prefix: str, out: dict) -> torch.Tensor:
-    """Mirror CodeStateEncoder.forward, recording every intermediate."""
+    """Mirror CodeStateEncoder.forward, recording every intermediate.
+
+    Pool mode (`enc.pool_mode`) is read from the constructed encoder:
+    - `cls`: extract token 0 (the standard g8/g1b/g10/expa readout).
+    - `attn`: run the learned AttentionPooling (query × MHA), which is what
+      the new ema-frozen-15k and phase4-contrast-* checkpoints were trained
+      with. In both cases we emit `{prefix}cls_extracted` as the pooled-
+      before-norm vector so the Rust golden test compares against a single
+      canonical key.
+    """
     enc = m.state_encoder
     # Synapse safetensors parser only handles F32/F16/BF16. Save tokens as f32;
     # the Rust test casts back to i64 (values are < 662 so f32 is exact).
@@ -100,9 +109,25 @@ def shadow_encoder(m, tokens: torch.Tensor, prefix: str, out: dict) -> torch.Ten
         h = h + h2
         out[f"{prefix}loop_{i}_res2"] = h.detach().clone()
 
-    cls_out = h[:, 0]  # [B, D]
-    out[f"{prefix}cls_extracted"] = cls_out.detach().clone()
-    z = enc.norm(cls_out)
+    # Readout branch — must match `CodeStateEncoder.pool_mode`, which is
+    # set at construction time from the `WM_POOL_MODE` env var.
+    if enc.pool_mode == "cls":
+        pooled = h[:, 0]  # [B, D]
+    elif enc.pool_mode == "attn":
+        # AttentionPooling: expand query to [B, 1, D], cross-attend against h,
+        # squeeze the single query dim to get [B, D]. Mirrors the tap impl
+        # exactly so Rust parity is byte-comparable.
+        B = h.shape[0]
+        q = enc.attn_pool.query.expand(B, -1, -1)  # [B, 1, D]
+        out[f"{prefix}attn_pool_q_expanded"] = q.detach().clone()
+        attn_out, _ = enc.attn_pool.attn(q, h, h, need_weights=False)  # [B, 1, D]
+        out[f"{prefix}attn_pool_raw_out"] = attn_out.detach().clone()
+        pooled = attn_out.squeeze(1)  # [B, D]
+    else:
+        # Legacy mean pool (should never hit for g8/expa/new variants).
+        pooled = h.mean(dim=1)
+    out[f"{prefix}cls_extracted"] = pooled.detach().clone()
+    z = enc.norm(pooled)
     out[f"{prefix}encoder_final"] = z.detach().clone()
     return z
 
@@ -161,13 +186,27 @@ def main():
     p.add_argument("--num-seeds", type=int, default=3)
     args = p.parse_args()
 
-    code_wm_mod = load_code_wm_module(args.code_wm_src)
-
     print(f"Loading checkpoint: {args.ckpt}")
     ckpt = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     cfg = ckpt["config"]
     sd = ckpt["model_state_dict"]
     print(f"  Config: {cfg}")
+
+    # Auto-detect pool mode from the state_dict and set WM_POOL_MODE BEFORE
+    # constructing the encoder — `CodeStateEncoder.__init__` reads the env
+    # var at construction time (architectures/code_wm/code_wm.py:167).
+    has_attn_pool = any(k.startswith("state_encoder.attn_pool.") for k in sd)
+    detected_pool_mode = "attn" if has_attn_pool else "cls"
+    override = os.environ.get("WM_POOL_MODE")
+    if override and override != detected_pool_mode:
+        print(f"  WARNING: WM_POOL_MODE={override} overrides detected={detected_pool_mode}")
+    else:
+        os.environ["WM_POOL_MODE"] = detected_pool_mode
+        print(f"  Pool mode (auto-detected from state_dict): {detected_pool_mode}")
+
+    # Import code_wm AFTER the env var is set — the encoder reads WM_POOL_MODE
+    # at __init__ time, which runs when we call `code_wm_mod.CodeWorldModel(...)`.
+    code_wm_mod = load_code_wm_module(args.code_wm_src)
 
     m = build_model(code_wm_mod, cfg)
     miss = m.load_state_dict(sd, strict=False)

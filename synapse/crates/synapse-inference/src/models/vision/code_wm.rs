@@ -41,6 +41,31 @@ impl GeluKind {
     }
 }
 
+/// Encoder readout pool mode. Matches `WM_POOL_MODE` in the tap's
+/// `CodeStateEncoder.__init__` (architectures/code_wm/code_wm.py:167).
+///
+/// - `Cls`: extract the CLS token (position 0) after the encoder loops.
+///   This is the pool mode of g8/g1b/g10/expa (trained with WM_POOL_MODE=cls).
+/// - `Attn`: learned single-head cross-attention readout with a learnable
+///   query vector. This is the pool mode of the new ema-frozen-15k and
+///   phase4-contrast-* checkpoints (trained with WM_POOL_MODE=attn,
+///   the tap default). The 5 additional tensors live under the prefix
+///   `state_encoder.attn_pool.*` in the checkpoint state_dict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoolMode {
+    Cls,
+    Attn,
+}
+
+impl PoolMode {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "attn" => PoolMode::Attn,
+            _ => PoolMode::Cls,
+        }
+    }
+}
+
 /// Configuration for a CodeWorldModel. Loaded from configs/code_wm_{g8,g1b}.json.
 #[derive(Debug, Clone)]
 pub struct CodeWorldModelConfig {
@@ -56,6 +81,7 @@ pub struct CodeWorldModelConfig {
     pub action_dim: usize,        // 7
     pub layernorm_eps: f32,       // 1e-5
     pub gelu_kind: GeluKind,      // Erf (PyTorch default)
+    pub pool_mode: PoolMode,      // Cls (g8/g1b/g10/expa) or Attn (ema15k/contrast_*)
 }
 
 impl CodeWorldModelConfig {
@@ -74,6 +100,7 @@ impl CodeWorldModelConfig {
             action_dim: 7,
             layernorm_eps: 1e-5,
             gelu_kind: GeluKind::Erf,
+            pool_mode: PoolMode::Cls,
         }
     }
 
@@ -102,6 +129,7 @@ impl CodeWorldModelConfig {
             action_dim: v["action_dim"].as_u64().unwrap_or(7) as usize,
             layernorm_eps: v["layernorm_eps"].as_f64().unwrap_or(1e-5) as f32,
             gelu_kind: v["gelu_kind"].as_str().map(GeluKind::from_str).unwrap_or(GeluKind::Erf),
+            pool_mode: v["pool_mode"].as_str().map(PoolMode::from_str).unwrap_or(PoolMode::Cls),
         })
     }
 }
@@ -306,6 +334,128 @@ impl TransformerBlock {
     }
 }
 
+// ── Attention pooling readout (pool_mode = "attn") ──────────────────
+//
+// Mirrors the tap's `AttentionPooling` in architectures/code_wm/code_wm.py:106
+// which is a `nn.MultiheadAttention(dim, num_heads=1, batch_first=True)` with
+// a learnable `query: [1, 1, dim]` vector. Cross-attends the single query
+// against the full encoder output sequence:
+//
+//     q = query                           # [1, dim]
+//     k = v = seq                         # [S+1, dim]
+//     out, _ = mha(q, k, v)               # [1, dim]
+//     return out.squeeze(1)               # [dim]
+//
+// PyTorch's `nn.MultiheadAttention` fuses Q/K/V projections into a single
+// `in_proj_weight: [3*dim, dim]` and `in_proj_bias: [3*dim]`, laid out as
+// `[Wq; Wk; Wv]` row-concatenated. When sources differ (q != k), the fused
+// weight is still sliced per-source at forward time — that's what we do here.
+// Single head (num_heads=1) means `head_dim = dim`, scale = 1/sqrt(dim).
+#[derive(Debug, Clone)]
+pub struct AttentionPooling {
+    /// Learnable query vector, shape [1, 1, dim] in the checkpoint, stored flat as [dim].
+    pub query: AlignedBuffer,
+    /// Fused QKV in-projection: [3*dim, dim] row-major = [Wq; Wk; Wv].
+    pub in_proj_weight: AlignedBuffer,
+    /// Fused QKV in-projection bias: [3*dim].
+    pub in_proj_bias: AlignedBuffer,
+    /// Output projection weight: [dim, dim].
+    pub out_proj_weight: AlignedBuffer,
+    /// Output projection bias: [dim].
+    pub out_proj_bias: AlignedBuffer,
+    pub dim: usize,
+}
+
+impl AttentionPooling {
+    fn zeroed(dim: usize) -> Self {
+        Self {
+            query: AlignedBuffer::new_zeroed(dim),
+            in_proj_weight: AlignedBuffer::new_zeroed(3 * dim * dim),
+            in_proj_bias: AlignedBuffer::new_zeroed(3 * dim),
+            out_proj_weight: AlignedBuffer::new_zeroed(dim * dim),
+            out_proj_bias: AlignedBuffer::new_zeroed(dim),
+            dim,
+        }
+    }
+
+    /// Cross-attend the learnable query against `seq` ([seq_len, dim]) and
+    /// return the pooled readout of length `dim`.
+    pub fn forward(&self, seq: &[f32], seq_len: usize) -> Vec<f32> {
+        let d = self.dim;
+        debug_assert_eq!(seq.len(), seq_len * d);
+
+        // ── Split the fused in_proj_weight into [Wq; Wk; Wv] row slices. ──
+        // Each slice is [d, d] row-major. Borrow directly, no copies.
+        let wq = &self.in_proj_weight[0..d * d];
+        let wk = &self.in_proj_weight[d * d..2 * d * d];
+        let wv = &self.in_proj_weight[2 * d * d..3 * d * d];
+        let bq = &self.in_proj_bias[0..d];
+        let bk = &self.in_proj_bias[d..2 * d];
+        let bv = &self.in_proj_bias[2 * d..3 * d];
+
+        // ── Project q from self.query: [1, d] -> [1, d]. ──
+        let mut q = matmul_t(&self.query, wq, 1, d, d);
+        for j in 0..d {
+            q[j] += bq[j];
+        }
+
+        // ── Project k and v from seq: [S, d] -> [S, d]. ──
+        let mut k = matmul_t(seq, wk, seq_len, d, d);
+        for r in 0..seq_len {
+            for j in 0..d {
+                k[r * d + j] += bk[j];
+            }
+        }
+        let mut v = matmul_t(seq, wv, seq_len, d, d);
+        for r in 0..seq_len {
+            for j in 0..d {
+                v[r * d + j] += bv[j];
+            }
+        }
+
+        // ── Scaled dot-product attention, single head. ──
+        // scores[s] = (q · k[s]) / sqrt(d)
+        let scale = 1.0 / (d as f32).sqrt();
+        let mut scores = vec![0.0_f32; seq_len];
+        for s in 0..seq_len {
+            let mut dot = 0.0_f32;
+            for j in 0..d {
+                dot += q[j] * k[s * d + j];
+            }
+            scores[s] = dot * scale;
+        }
+
+        // Softmax over the S axis (numerically stable).
+        let max = scores.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let mut sum = 0.0_f32;
+        for s in 0..seq_len {
+            scores[s] = (scores[s] - max).exp();
+            sum += scores[s];
+        }
+        let inv_sum = 1.0 / sum;
+        for s in 0..seq_len {
+            scores[s] *= inv_sum;
+        }
+
+        // ── Weighted sum: out_raw[j] = sum_s weights[s] * v[s, j] ──
+        let mut out_raw = vec![0.0_f32; d];
+        for s in 0..seq_len {
+            let w = scores[s];
+            let row = &v[s * d..(s + 1) * d];
+            for j in 0..d {
+                out_raw[j] += w * row[j];
+            }
+        }
+
+        // ── Output projection: out = out_raw @ W_out.T + b_out. ──
+        let mut out = matmul_t(&out_raw, &self.out_proj_weight, 1, d, d);
+        for j in 0..d {
+            out[j] += self.out_proj_bias[j];
+        }
+        out
+    }
+}
+
 // ── CodeWorldModel ──────────────────────────────────────────────────
 
 /// Stepwise activation trace for zero-drift debugging. Contains every
@@ -354,6 +504,8 @@ pub struct CodeWorldModel {
     pub cls_token: AlignedBuffer,       // [model_dim]
     pub pos_enc: AlignedBuffer,         // [max_seq_len+1, model_dim] baked from PyTorch buffer
     pub encoder_block: TransformerBlock,
+    /// Learned attention readout; `Some` iff `config.pool_mode == Attn`.
+    pub attn_pool: Option<AttentionPooling>,
     pub encoder_final_norm: LayerNormWeights,
     // Action encoder (Linear → GELU → Linear)
     pub action_fc1: LinearWeights, // [model_dim, action_dim]
@@ -374,11 +526,16 @@ impl CodeWorldModel {
     pub fn from_config(cfg: &CodeWorldModelConfig) -> Self {
         let d = cfg.model_dim;
         let pe_rows = cfg.max_seq_len + 1;
+        let attn_pool = match cfg.pool_mode {
+            PoolMode::Cls => None,
+            PoolMode::Attn => Some(AttentionPooling::zeroed(d)),
+        };
         Self {
             token_embedding: AlignedBuffer::new_zeroed(cfg.vocab_size * d),
             cls_token: AlignedBuffer::new_zeroed(d),
             pos_enc: AlignedBuffer::new_zeroed(pe_rows * d),
             encoder_block: TransformerBlock::zeroed(cfg),
+            attn_pool,
             encoder_final_norm: LayerNormWeights::zeroed(d, cfg.layernorm_eps),
             action_fc1: LinearWeights::zeroed(d, cfg.action_dim),
             action_fc2: LinearWeights::zeroed(d, d),
@@ -460,6 +617,16 @@ impl CodeWorldModel {
         if let Some(rest) = key.strip_prefix("state_encoder.block.") {
             return set_block_weight(&mut self.encoder_block, rest, tensor);
         }
+
+        if let Some(rest) = key.strip_prefix("state_encoder.attn_pool.") {
+            // Route attn_pool tensors. If the model was built with pool_mode=Cls
+            // these are ignored (returned false → added to skipped list), which
+            // lets a single safetensors file be loaded into either pool mode.
+            if let Some(pool) = self.attn_pool.as_mut() {
+                return set_attn_pool_weight(pool, rest, tensor);
+            }
+            return false;
+        }
         if let Some(rest) = key.strip_prefix("predictor.blocks.") {
             // "{idx}.{...}"
             let (idx_str, rest) = match rest.split_once('.') {
@@ -509,9 +676,17 @@ impl CodeWorldModel {
             h = self.encoder_block.forward(&h, seq_with_cls, &self.config);
         }
 
-        // 4. Extract CLS token (position 0) and apply final LayerNorm.
-        let cls_out: Vec<f32> = h[..d].to_vec();
-        self.encoder_final_norm.forward(&cls_out)
+        // 4. Readout → final LayerNorm. Branch on pool_mode: Cls extracts the
+        //    CLS token at position 0; Attn cross-attends a learnable query.
+        let pooled: Vec<f32> = match self.config.pool_mode {
+            PoolMode::Cls => h[..d].to_vec(),
+            PoolMode::Attn => self
+                .attn_pool
+                .as_ref()
+                .expect("pool_mode=Attn but attn_pool is None — check weight loading")
+                .forward(&h, seq_with_cls),
+        };
+        self.encoder_final_norm.forward(&pooled)
     }
 
     /// Encode tokens via the fused Zig kernel (experimental scaffolding).
@@ -582,9 +757,17 @@ impl CodeWorldModel {
             mode,
         ).expect("code_wm_encoder_fused failed");
 
-        // 4. Extract CLS token and apply final LayerNorm.
-        let cls_out: Vec<f32> = seq[..d].to_vec();
-        self.encoder_final_norm.forward(&cls_out)
+        // 4. Readout → final LayerNorm. Branch on pool_mode: Cls extracts the
+        //    CLS token at position 0; Attn cross-attends a learnable query.
+        let pooled: Vec<f32> = match self.config.pool_mode {
+            PoolMode::Cls => seq[..d].to_vec(),
+            PoolMode::Attn => self
+                .attn_pool
+                .as_ref()
+                .expect("pool_mode=Attn but attn_pool is None — check weight loading")
+                .forward(&seq, seq_with_cls),
+        };
+        self.encoder_final_norm.forward(&pooled)
     }
 
     /// Encode action vector (length action_dim = 7) to 128-d latent.
@@ -632,7 +815,20 @@ impl CodeWorldModel {
             loops.push(trace);
         }
 
-        let cls_extracted: Vec<f32> = h[..d].to_vec();
+        // Stepwise debug trace stores the pooled-before-norm vector under the
+        // same `cls_extracted` field regardless of pool_mode, so the Python
+        // reference dump's `seedN_cls_extracted` key remains the canonical
+        // comparison point for Cls mode, and `seedN_encoder_final` for both.
+        // For Attn mode the Python baseline emits `seedN_attn_pool_squeezed`
+        // as the equivalent pooled-before-norm probe.
+        let cls_extracted: Vec<f32> = match self.config.pool_mode {
+            PoolMode::Cls => h[..d].to_vec(),
+            PoolMode::Attn => self
+                .attn_pool
+                .as_ref()
+                .expect("pool_mode=Attn but attn_pool is None — check weight loading")
+                .forward(&h, seq_with_cls),
+        };
         let encoder_final = self.encoder_final_norm.forward(&cls_extracted);
 
         EncoderTrace {
@@ -738,6 +934,20 @@ fn set_block_weight(block: &mut TransformerBlock, rest: &str, tensor: &RawTensor
     true
 }
 
+fn set_attn_pool_weight(pool: &mut AttentionPooling, rest: &str, tensor: &RawTensor) -> bool {
+    // Matches keys under `state_encoder.attn_pool.` in the checkpoint state_dict.
+    // The checkpoint stores `query` as shape [1, 1, dim]; we flatten to [dim].
+    match rest {
+        "query" => pool.query = tensor.data.clone(),
+        "attn.in_proj_weight" => pool.in_proj_weight = tensor.data.clone(),
+        "attn.in_proj_bias" => pool.in_proj_bias = tensor.data.clone(),
+        "attn.out_proj.weight" => pool.out_proj_weight = tensor.data.clone(),
+        "attn.out_proj.bias" => pool.out_proj_bias = tensor.data.clone(),
+        _ => return false,
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -794,5 +1004,56 @@ mod tests {
         assert_eq!(m.predictor_blocks.len(), 2);
         assert_eq!(m.action_fc1.weight.len(), 128 * 7);
         assert_eq!(m.action_fc2.weight.len(), 128 * 128);
+        assert_eq!(m.config.pool_mode, PoolMode::Cls);
+        assert!(m.attn_pool.is_none());
+    }
+
+    #[test]
+    fn pool_mode_defaults_to_cls_when_missing() {
+        // A minimal JSON without `pool_mode` must parse as Cls (backwards
+        // compatibility with existing g8/g1b/g10/expa configs).
+        let json = r#"{
+            "vocab_size": 662, "max_seq_len": 512, "model_dim": 128, "num_heads": 4,
+            "head_dim": 32, "mlp_hidden": 512, "encoder_loops": 6, "predictor_depth": 2,
+            "predictor_loops": 6, "action_dim": 7, "layernorm_eps": 1e-05, "gelu_kind": "erf"
+        }"#;
+        let cfg = CodeWorldModelConfig::from_json_str(json).unwrap();
+        assert_eq!(cfg.pool_mode, PoolMode::Cls);
+    }
+
+    #[test]
+    fn pool_mode_attn_is_parsed() {
+        let json = r#"{
+            "vocab_size": 662, "max_seq_len": 512, "model_dim": 128, "num_heads": 4,
+            "head_dim": 32, "mlp_hidden": 512, "encoder_loops": 6, "predictor_depth": 2,
+            "predictor_loops": 6, "action_dim": 7, "layernorm_eps": 1e-05, "gelu_kind": "erf",
+            "pool_mode": "attn"
+        }"#;
+        let cfg = CodeWorldModelConfig::from_json_str(json).unwrap();
+        assert_eq!(cfg.pool_mode, PoolMode::Attn);
+        let m = CodeWorldModel::from_config(&cfg);
+        // AttentionPooling should be allocated with the correct shapes.
+        let pool = m.attn_pool.as_ref().expect("attn_pool should be Some");
+        assert_eq!(pool.query.len(), 128);
+        assert_eq!(pool.in_proj_weight.len(), 3 * 128 * 128);
+        assert_eq!(pool.in_proj_bias.len(), 3 * 128);
+        assert_eq!(pool.out_proj_weight.len(), 128 * 128);
+        assert_eq!(pool.out_proj_bias.len(), 128);
+    }
+
+    #[test]
+    fn attention_pooling_softmax_is_uniform_for_zero_weights() {
+        // With all weights zeroed, the query projects to zero, all scores
+        // are zero, softmax is uniform, and the weighted sum of zeroed v is
+        // zero. The output projection is also zero, so the final vector is
+        // exactly the out_proj bias (which is also zeroed). This sanity-checks
+        // the wiring without needing full PyTorch fixtures.
+        let pool = AttentionPooling::zeroed(8);
+        let seq = vec![1.0_f32; 4 * 8];
+        let out = pool.forward(&seq, 4);
+        assert_eq!(out.len(), 8);
+        for &v in &out {
+            assert!(v.abs() < 1e-6, "expected zero, got {v}");
+        }
     }
 }

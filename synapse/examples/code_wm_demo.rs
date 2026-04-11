@@ -12,7 +12,7 @@
 use std::env;
 use std::path::Path;
 
-use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig};
+use synapse_inference::models::vision::{CodeWorldModel, CodeWorldModelConfig, PoolMode};
 use synapse_inference::weight_loading::{load_safetensors, RawTensor};
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -56,7 +56,13 @@ fn main() {
     let mut model = CodeWorldModel::from_config(&cfg);
     let stats = model.load_weights(tensors).unwrap();
     println!("  loaded={} skipped={}", stats.loaded, stats.skipped.len());
-    assert_eq!(stats.loaded, 47, "expected 47 tensors loaded, got {}", stats.loaded);
+    // Cls variants (g8/g1b/g10/expa) have 47 tensors; attn variants add 5
+    // state_encoder.attn_pool.* tensors for a total of 52.
+    let expected = match cfg.pool_mode {
+        PoolMode::Cls => 47,
+        PoolMode::Attn => 52,
+    };
+    assert_eq!(stats.loaded, expected, "expected {expected} tensors loaded, got {}", stats.loaded);
 
     // Run encode + encode_action + predict.
     if let Some(goldens_path) = goldens_path {

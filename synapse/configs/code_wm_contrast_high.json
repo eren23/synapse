@@ -1,0 +1,15 @@
+{
+  "vocab_size": 662,
+  "max_seq_len": 512,
+  "model_dim": 128,
+  "num_heads": 4,
+  "head_dim": 32,
+  "mlp_hidden": 512,
+  "encoder_loops": 6,
+  "predictor_depth": 2,
+  "predictor_loops": 6,
+  "action_dim": 7,
+  "layernorm_eps": 1e-05,
+  "gelu_kind": "erf",
+  "pool_mode": "attn"
+}

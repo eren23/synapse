@@ -118,7 +118,25 @@ def convert(input_path: str, out_weights: str, out_config: str) -> dict:
     missing = [k for k in required if k not in tensors]
     if missing:
         raise ValueError(f"Missing required tensors: {missing}")
+    # Auto-detect pool mode from the kept state_dict. Checkpoints trained with
+    # WM_POOL_MODE=attn have `state_encoder.attn_pool.*` keys. The 5 tensors
+    # are the learnable query + a fused nn.MultiheadAttention(num_heads=1).
+    has_attn_pool = any(k.startswith("state_encoder.attn_pool.") for k in tensors)
+    pool_mode = "attn" if has_attn_pool else "cls"
+    if has_attn_pool:
+        required.extend([
+            "state_encoder.attn_pool.query",
+            "state_encoder.attn_pool.attn.in_proj_weight",
+            "state_encoder.attn_pool.attn.in_proj_bias",
+            "state_encoder.attn_pool.attn.out_proj.weight",
+            "state_encoder.attn_pool.attn.out_proj.bias",
+        ])
+        missing = [k for k in required if k not in tensors]
+        if missing:
+            raise ValueError(f"attn_pool required but missing: {missing}")
+
     print(f"  All {len(required)} required tensors present.")
+    print(f"  Pool mode: {pool_mode}")
 
     # Derive Synapse config JSON. Checkpoint uses 'num_loops' for predictor loops.
     model_dim = ckpt_config.get("model_dim", 128)
@@ -136,7 +154,7 @@ def convert(input_path: str, out_weights: str, out_config: str) -> dict:
         "action_dim": ckpt_config.get("action_dim", 7),
         "layernorm_eps": 1.0e-5,
         "gelu_kind": "erf",  # nn.GELU() default is approximate='none' (exact erf)
-        "pool_mode": "cls",  # WM_POOL_MODE=cls
+        "pool_mode": pool_mode,
     }
 
     # Write outputs.
