@@ -5,13 +5,16 @@
 //! vanilla pre-norm transformer blocks with standard PyTorch MultiheadAttention.
 //!
 //! Pipeline (per forward):
-//!   tokens[i64]  → Embedding[662,128] → CLS prepend → + PE[513,128]
-//!                → LoopedTransformerBlock ×6 (weight-shared)
-//!                → extract CLS[0] → LayerNorm → [128]
-//!   action[f32;7] → Linear(7→128) → GELU → Linear(128→128) → [128]
-//!   (z_state, z_action) → stack [2,128]
-//!                       → Block_0 ×6 → Block_1 ×6
-//!                       → extract token[0] → LayerNorm → [128]
+//!   tokens[i64]  → Embedding[V,D] → CLS prepend → + PE[S+1,D]
+//!                → LoopedTransformerBlock × encoder_loops (weight-shared)
+//!                → readout (CLS or attn pool) → LayerNorm → [D]
+//!   action[f32;A] → Linear(A→D) → GELU → Linear(D→D) → [D]
+//!   (z_state, z_action) → stack [2,D]
+//!                       → Block_0 × predictor_loops → Block_1 × predictor_loops
+//!                       → extract token[0] → LayerNorm → [D]
+//!
+//! v1 defaults: V=662, D=128, A=7, encoder_loops=6, pool=CLS
+//! v2 defaults: V=700, D=128, A=15, encoder_loops=3, pool=attn
 //!
 //! Zero-drift: load per-stage reference activations from
 //! tests/fixtures/code_wm_reference_{g8,g1b}.safetensors and assert
@@ -69,7 +72,7 @@ impl PoolMode {
 /// Configuration for a CodeWorldModel. Loaded from configs/code_wm_{g8,g1b}.json.
 #[derive(Debug, Clone)]
 pub struct CodeWorldModelConfig {
-    pub vocab_size: usize,        // 662
+    pub vocab_size: usize,        // 662 (v1) or 700 (v2)
     pub max_seq_len: usize,       // 512
     pub model_dim: usize,         // 128
     pub num_heads: usize,         // 4
@@ -78,7 +81,7 @@ pub struct CodeWorldModelConfig {
     pub encoder_loops: usize,     // 6
     pub predictor_depth: usize,   // 2
     pub predictor_loops: usize,   // 6
-    pub action_dim: usize,        // 7
+    pub action_dim: usize,        // 7 (v1) or 15 (v2)
     pub layernorm_eps: f32,       // 1e-5
     pub gelu_kind: GeluKind,      // Erf (PyTorch default)
     pub pool_mode: PoolMode,      // Cls (g8/g1b/g10/expa) or Attn (ema15k/contrast_*)
@@ -101,6 +104,26 @@ impl CodeWorldModelConfig {
             layernorm_eps: 1e-5,
             gelu_kind: GeluKind::Erf,
             pool_mode: PoolMode::Cls,
+        }
+    }
+
+    /// CodeWM v2 default (700 vocab, 15-d rich actions, 3 encoder loops, attn pool).
+    /// Used by wm_pred_fix, vicreg_promotion, p95, p95v2 checkpoints.
+    pub fn v2() -> Self {
+        Self {
+            vocab_size: 700,
+            max_seq_len: 512,
+            model_dim: 128,
+            num_heads: 4,
+            head_dim: 32,
+            mlp_hidden: 512,
+            encoder_loops: 3,
+            predictor_depth: 2,
+            predictor_loops: 6,
+            action_dim: 15,
+            layernorm_eps: 1e-5,
+            gelu_kind: GeluKind::Erf,
+            pool_mode: PoolMode::Attn,
         }
     }
 
@@ -770,7 +793,7 @@ impl CodeWorldModel {
         self.encoder_final_norm.forward(&pooled)
     }
 
-    /// Encode action vector (length action_dim = 7) to 128-d latent.
+    /// Encode action vector (length action_dim) to model_dim-d latent.
     pub fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         debug_assert_eq!(action.len(), self.config.action_dim);
         let mut h = self.action_fc1.forward(action, 1);
@@ -1006,6 +1029,35 @@ mod tests {
         assert_eq!(m.action_fc2.weight.len(), 128 * 128);
         assert_eq!(m.config.pool_mode, PoolMode::Cls);
         assert!(m.attn_pool.is_none());
+    }
+
+    #[test]
+    fn v2_config_defaults() {
+        let c = CodeWorldModelConfig::v2();
+        assert_eq!(c.vocab_size, 700);
+        assert_eq!(c.action_dim, 15);
+        assert_eq!(c.encoder_loops, 3);
+        assert_eq!(c.pool_mode, PoolMode::Attn);
+        assert_eq!(c.model_dim, 128);
+        assert_eq!(c.num_heads, 4);
+        assert_eq!(c.predictor_loops, 6);
+    }
+
+    #[test]
+    fn v2_model_has_expected_shapes() {
+        let cfg = CodeWorldModelConfig::v2();
+        let m = CodeWorldModel::from_config(&cfg);
+        assert_eq!(m.token_embedding.len(), 700 * 128);
+        assert_eq!(m.cls_token.len(), 128);
+        assert_eq!(m.pos_enc.len(), 513 * 128);
+        assert_eq!(m.encoder_block.attn_in_proj.weight.len(), 3 * 128 * 128);
+        assert_eq!(m.action_fc1.weight.len(), 128 * 15);
+        assert_eq!(m.action_fc2.weight.len(), 128 * 128);
+        assert_eq!(m.predictor_blocks.len(), 2);
+        assert!(m.attn_pool.is_some());
+        let pool = m.attn_pool.as_ref().unwrap();
+        assert_eq!(pool.query.len(), 128);
+        assert_eq!(pool.in_proj_weight.len(), 3 * 128 * 128);
     }
 
     #[test]

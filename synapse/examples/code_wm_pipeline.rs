@@ -88,7 +88,7 @@ fn main() {
         let toks_u16 = tokenize(&source, max_len);
         tok_ms_total += t.elapsed().as_secs_f64() * 1000.0;
 
-        // Convert u16 → i64 for the model (vocab values < 662 fit trivially)
+        // Convert u16 → i64 for the model (vocab values are small integers, fit trivially)
         let toks_i64: Vec<i64> = toks_u16.iter().map(|&t| t as i64).collect();
 
         let t = Instant::now();

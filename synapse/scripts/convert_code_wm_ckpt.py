@@ -139,10 +139,26 @@ def convert(input_path: str, out_weights: str, out_config: str) -> dict:
     print(f"  Pool mode: {pool_mode}")
 
     # Derive Synapse config JSON. Checkpoint uses 'num_loops' for predictor loops.
+    # Auto-derive dimensions from tensor shapes as fallback when checkpoint
+    # config is incomplete (robust for v1 vocab=662 AND v2 vocab=700).
+    emb_tensor = tensors.get("state_encoder.embedding.weight")
+    act_tensor = tensors.get("action_encoder.net.0.weight")
+    derived_vocab = emb_tensor.shape[0] if emb_tensor is not None else None
+    derived_action = act_tensor.shape[1] if act_tensor is not None else None
+
     model_dim = ckpt_config.get("model_dim", 128)
     num_heads = ckpt_config.get("num_heads", 4)
+
+    vocab_size = ckpt_config.get("vocab_size") or derived_vocab or 662
+    action_dim = ckpt_config.get("action_dim") or derived_action or 7
+
+    if derived_vocab and vocab_size != derived_vocab:
+        print(f"  WARNING: config vocab_size={vocab_size} != embedding shape[0]={derived_vocab}")
+    if derived_action and action_dim != derived_action:
+        print(f"  WARNING: config action_dim={action_dim} != action_fc1 shape[1]={derived_action}")
+
     synapse_config = {
-        "vocab_size": ckpt_config.get("vocab_size", 662),
+        "vocab_size": vocab_size,
         "max_seq_len": ckpt_config.get("max_seq_len", 512),
         "model_dim": model_dim,
         "num_heads": num_heads,
@@ -151,7 +167,7 @@ def convert(input_path: str, out_weights: str, out_config: str) -> dict:
         "encoder_loops": ckpt_config.get("encoder_loops", 6),
         "predictor_depth": 2,  # 2 distinct blocks, hard-coded in LoopedPredictor
         "predictor_loops": ckpt_config.get("num_loops", 6),
-        "action_dim": ckpt_config.get("action_dim", 7),
+        "action_dim": action_dim,
         "layernorm_eps": 1.0e-5,
         "gelu_kind": "erf",  # nn.GELU() default is approximate='none' (exact erf)
         "pool_mode": pool_mode,

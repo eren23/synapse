@@ -380,3 +380,21 @@ p5_golden_test!(code_wm_p5_contrast_mega_3k_golden, "p5_contrast_mega_3k", "p5_c
 // (frozen_target_s42, edging pred_s43 at 0.8080).
 p5_golden_test!(code_wm_frozen_target_s42_golden, "frozen_target_s42", "frozen_target_s42");
 p5_golden_test!(code_wm_frozen_target_s43_golden, "frozen_target_s43", "frozen_target_s43");
+
+// ─── CodeWM v2 — new architecture (700 vocab, 15 actions, 3 enc loops, attn pool)
+//
+// CodeWM v2 changes: vocab_size 662→700, action_dim 7→15, encoder_loops 6→3,
+// pool_mode always attn. Same model_dim=128, num_heads=4, predictor 2×6.
+// The Rust engine is fully parametric — same code paths, different config values.
+//
+// Key checkpoints:
+//   wm_pred_fix_s43    — best retrieval (KNN@5 23.0%, seed 43)
+//   vicreg_promotion   — best prediction lift (+1.06, 28K steps)
+//   p95_fast_ema       — Recipe D, fast EMA (KNN@5 9.92%, seed 42)
+//   p95v2_s44          — Recipe D seed 44 (KNN@5 6.00%)
+//   wm_pred_fix_e07    — straightness peak (KNN@5 20.4%, straight 0.99)
+p5_golden_test!(code_wm_wm_pred_fix_s43_golden, "wm_pred_fix_s43", "wm_pred_fix_s43");
+p5_golden_test!(code_wm_vicreg_promotion_golden, "vicreg_promotion", "vicreg_promotion");
+p5_golden_test!(code_wm_p95_fast_ema_golden, "p95_fast_ema", "p95_fast_ema");
+p5_golden_test!(code_wm_p95v2_s44_golden, "p95v2_s44", "p95v2_s44");
+p5_golden_test!(code_wm_wm_pred_fix_e07_golden, "wm_pred_fix_e07", "wm_pred_fix_e07");

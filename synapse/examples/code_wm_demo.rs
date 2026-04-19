@@ -118,7 +118,9 @@ fn main() {
     } else {
         // Synthetic demo: run with a random token sequence.
         let tokens: Vec<i64> = (0..32).map(|i| (i * 7) as i64 % cfg.vocab_size as i64).collect();
-        let action: Vec<f32> = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.5];
+        let action: Vec<f32> = (0..cfg.action_dim)
+            .map(|i| if i % 3 == 0 { 1.0 } else if i % 3 == 1 { 0.0 } else { 0.5 })
+            .collect();
 
         let z_state = model.encode(&tokens);
         let z_action = model.encode_action(&action);

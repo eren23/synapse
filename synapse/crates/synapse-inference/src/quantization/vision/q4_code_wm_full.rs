@@ -59,7 +59,7 @@ fn linear_f32(x: &[f32], weight: &[f32], bias: &[f32], m: usize, in_dim: usize, 
 // Given a [rows, cols] f32 matrix, compute one f32 scale per row and
 // store int8 values. Dequantize on gather: `value_f32 = int8 * scale`.
 // Memory: rows * cols i8 + rows f32  (vs rows * cols * 4 for f32).
-// For 662 × 128: 84.7 KB + 2.6 KB = 87 KB vs 339 KB f32 (3.9x smaller).
+// For V × D (e.g. 662×128 or 700×128): ~87 KB vs 339 KB f32 (3.9x smaller).
 
 pub struct Int8Table {
     pub data: Vec<i8>,      // [rows, cols]
