@@ -227,6 +227,7 @@ impl Q4Linear {
     }
 
     /// Get or compute the cached Zig-compatible packed buffer.
+    #[cfg(feature = "zig-ffi")]
     fn get_packed_zig(&self) -> std::cell::Ref<'_, Vec<u8>> {
         {
             let cache = self.packed_zig_cache.borrow();

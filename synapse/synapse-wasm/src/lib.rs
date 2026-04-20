@@ -1718,6 +1718,7 @@ const NU_NUM_PATCHES: usize = (NU_IMAGE_SIZE / NU_PATCH_SIZE) * (NU_IMAGE_SIZE /
 const NU_PATCH_DIM: usize = NU_PATCH_SIZE * NU_PATCH_SIZE * NU_CHANNELS; // 48
 const NU_NUM_CLASSES: usize = 6;
 
+#[allow(dead_code)] // Understanding FFN fields loaded for future understand task
 struct NuBlock {
     ln_attn_w: Vec<f32>,
     ln_attn_b: Vec<f32>,
@@ -1725,7 +1726,7 @@ struct NuBlock {
     qkv_b: Vec<f32>,
     proj_w: Vec<f32>,
     proj_b: Vec<f32>,
-    // Understanding FFN
+    // Understanding FFN (loaded for future understand task)
     ln_und_w: Vec<f32>,
     ln_und_b: Vec<f32>,
     ffn_und_up_w: Vec<f32>,
@@ -1756,9 +1757,13 @@ pub struct NeoUnify {
     gen_ln_b: Vec<f32>,
     gen_head_w: Vec<f32>,
     gen_head_b: Vec<f32>,
+    #[allow(dead_code)] // loaded for future understand task
     und_ln_w: Vec<f32>,
+    #[allow(dead_code)] // loaded for future understand task
     und_ln_b: Vec<f32>,
+    #[allow(dead_code)] // loaded for future understand task
     und_head_w: Vec<f32>,
+    #[allow(dead_code)] // loaded for future understand task
     und_head_b: Vec<f32>,
 }
 
@@ -2185,7 +2190,7 @@ impl NeoUnify {
 
 use synapse_inference::models::{MambaConfig, MambaModel};
 use synapse_inference::quantization::QuantizedMambaModel;
-use synapse_inference::weight_loading::{parse_safetensors, RawTensor};
+use synapse_inference::weight_loading::parse_safetensors;
 use synapse_inference::models::Model;
 use synapse_inference::tokenizer::Tokenizer;
 

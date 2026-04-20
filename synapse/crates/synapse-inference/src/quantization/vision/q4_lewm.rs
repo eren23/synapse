@@ -160,7 +160,7 @@ impl QuantizedQ4AdaLNLayer {
     }
 
     /// Dequantize this Q4 layer to f32, returning an `AdaLNTransformerLayer`.
-    pub fn dequantize(&self, hidden: usize, inner_dim: usize, inter: usize) -> AdaLNTransformerLayer {
+    pub fn dequantize(&self, _hidden: usize, _inner_dim: usize, _inter: usize) -> AdaLNTransformerLayer {
         use crate::weight_loading::AlignedBuffer;
 
         AdaLNTransformerLayer {
