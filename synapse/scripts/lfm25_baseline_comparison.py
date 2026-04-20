@@ -6,7 +6,7 @@ Usage:
 
 Requires: transformers, torch, accelerate
 """
-import subprocess, json, sys, time
+import subprocess, sys, time
 import numpy as np
 
 def get_hf_logits(token_ids: list[int]) -> np.ndarray:

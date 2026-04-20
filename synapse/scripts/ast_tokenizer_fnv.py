@@ -13,7 +13,6 @@ Note: this is for the BFS variant only (no OPEN/CLOSE brackets).
 """
 
 import ast
-from typing import Optional
 
 import numpy as np
 

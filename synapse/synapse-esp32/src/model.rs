@@ -93,7 +93,7 @@ impl Esp32LeWM {
             AlignedBuffer::from_slice(
                 &(0..len)
                     .map(|i| {
-                        let x = (((i as u32).wrapping_mul(2_654_435_761).wrapping_add(s)) as f32);
+                        let x = ((i as u32).wrapping_mul(2_654_435_761).wrapping_add(s)) as f32;
                         x / u32::MAX as f32 * 0.36 - 0.18
                     })
                     .collect::<Vec<f32>>(),
@@ -102,7 +102,7 @@ impl Esp32LeWM {
         let seed_bias = |len: usize, s: u32| AlignedBuffer::from_slice(
             &(0..len)
                 .map(|i| {
-                    let x = (((i as u32).wrapping_mul(3_333_333).wrapping_add(s)) as f32);
+                    let x = ((i as u32).wrapping_mul(3_333_333).wrapping_add(s)) as f32;
                     x / u32::MAX as f32 * 0.1
                 })
                 .collect::<Vec<f32>>(),

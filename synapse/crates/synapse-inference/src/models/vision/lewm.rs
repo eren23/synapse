@@ -699,6 +699,7 @@ impl LeWorldModel {
         let num_heads = self.config.predictor_heads;
         let inner_dim = self.config.predictor_inner_dim;
         let inter = self.config.predictor_inter;
+        #[allow(unused_variables)] // used in the cfg(not(feature = "zig-ffi")) fallback path
         let head_dim = inner_dim / num_heads;
         let has_proj = !self.input_proj_weight.is_empty();
 
@@ -1145,7 +1146,7 @@ impl LeWorldModel {
                 1e-6,
             );
             let head_dim = inner_dim / num_heads;
-            let modulated_len = fused_seq_len * hidden;
+            let _modulated_len = fused_seq_len * hidden;
 
             // QKV matmul
             let qkv = matmul_t(&modulated, &layer.to_qkv, fused_seq_len, hidden, 3 * inner_dim);
