@@ -183,7 +183,7 @@ pub fn handle_status(model: &Esp32Model) -> StatusResponse {
     }
 }
 
-/// Handle a status request for an Esp32LeWM specifically (backwards compatible).
+/// Handle a status request for an Esp32LeWM (type-specific convenience).
 pub fn handle_lewm_status(model: &crate::model::Esp32LeWM) -> StatusResponse {
     StatusResponse {
         model: "LeWorldModel (PushT)".into(),

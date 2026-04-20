@@ -3,7 +3,7 @@ pub mod ssm;
 pub mod traits;
 pub mod vision;
 
-// Re-export LM types at models:: level for backward compatibility
+// Flatten LM types into the `models::` namespace (public API surface).
 pub use lm::{CausalLM, DecoderLayer, LoadResult, ModelBuilder, ModelOutput};
 
 // Re-export traits at models:: level

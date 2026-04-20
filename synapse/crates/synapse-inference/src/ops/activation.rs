@@ -7,7 +7,7 @@
 /// In-place SiLU: `x / (1 + exp(-x))` applied to every element of `slice`.
 /// Prefer this over scalar `silu()` for vectorized SIMD path via FFI.
 #[cfg(feature = "zig-ffi")]
-#[allow(dead_code)] // exposed for explicit in-place usage; scalar path uses silu_scalar
+#[allow(dead_code)] // exposed for explicit in-place usage
 pub(crate) fn silu_inplace(slice: &mut [f32]) {
     // syn_silu works in-place: dst and src can alias.
     unsafe {
@@ -23,16 +23,12 @@ pub(crate) fn silu_inplace(slice: &mut [f32]) {
     }
 }
 
-/// Scalar SiLU — use for single-value calls or when you can't take ownership.
-#[allow(dead_code)] // used via the silu() compat shim below
-pub(crate) fn silu_scalar(x: f32) -> f32 {
-    x / (1.0 + (-x).exp())
-}
-
-/// Backward-compat shim: prefer `silu_scalar` for single values or
-/// `silu_inplace(&mut slice)` for vectorised paths.
+/// Scalar SiLU: `x / (1 + exp(-x))`.
+///
+/// For vectorised paths, prefer `silu_inplace(&mut slice)`.
+#[inline]
 pub(crate) fn silu(x: f32) -> f32 {
-    silu_scalar(x)
+    x / (1.0 + (-x).exp())
 }
 
 // ── Sigmoid ──────────────────────────────────────────────────────────────────
@@ -158,7 +154,7 @@ mod tests {
     #[test]
     fn silu_inplace_matches_scalar() {
         let mut buf = vec![1.0f32, -0.5, 3.0, 0.0];
-        let expected: Vec<f32> = buf.iter().map(|&x| silu_scalar(x)).collect();
+        let expected: Vec<f32> = buf.iter().map(|&x| silu(x)).collect();
         silu_inplace(&mut buf);
         for (got, exp) in buf.iter().zip(expected.iter()) {
             assert!((got - exp).abs() < 1e-6, "silu_inplace mismatch: got {got}, expected {exp}");

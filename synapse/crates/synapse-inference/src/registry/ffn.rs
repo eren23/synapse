@@ -340,7 +340,7 @@ impl FFNVariant for StandardFFN {
         self.intermediate_size_val
     }
     fn name(&self) -> &str {
-        "GELU" // kept for backward compat with existing FFNConfig::GELU
+        "GELU"
     }
 }
 
