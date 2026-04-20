@@ -8,6 +8,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +17,7 @@ WASM_CORE_PATH = ROOT / "synapse-wasm" / "pkg" / "synapse_wasm_bg.wasm"
 WASM_JS_PATH = ROOT / "synapse-wasm" / "pkg" / "synapse_wasm.js"
 
 
-def load_manifest() -> dict:
+def load_manifest() -> dict[str, Any]:
     return json.loads(MANIFEST_PATH.read_text())
 
 
@@ -42,7 +43,7 @@ def read_size(path: Path) -> int | None:
     return path.stat().st_size if path.exists() else None
 
 
-def md_benchmark_table(manifest: dict) -> str:
+def md_benchmark_table(manifest: dict[str, Any]) -> str:
     rows = [
         "| Family | Configuration | Prompt | Prefill (tok/s) | Decode (tok/s) | Notes |",
         "|--------|---------------|--------|-----------------|----------------|-------|",
@@ -60,7 +61,7 @@ def md_benchmark_table(manifest: dict) -> str:
     return "\n".join(rows)
 
 
-def md_runtime_profile_table(manifest: dict) -> str:
+def md_runtime_profile_table(manifest: dict[str, Any]) -> str:
     rows = [
         "| Runtime Profile | Support | Targets | Backends | Quantization |",
         "|-----------------|---------|---------|----------|--------------|",
@@ -74,14 +75,14 @@ def md_runtime_profile_table(manifest: dict) -> str:
     return "\n".join(rows)
 
 
-def md_feature_list(manifest: dict) -> str:
+def md_feature_list(manifest: dict[str, Any]) -> str:
     return "\n".join(
         f"- **{item['label']}** ({format_support(item['support'])}) — {item['details']}"
         for item in manifest["features"]
     )
 
 
-def md_model_matrix(manifest: dict) -> str:
+def md_model_matrix(manifest: dict[str, Any]) -> str:
     rows = [
         "| Model Family | Status | Evidence | Notes |",
         "|--------------|--------|----------|-------|",
@@ -94,7 +95,7 @@ def md_model_matrix(manifest: dict) -> str:
     return "\n".join(rows)
 
 
-def md_root_positioning(manifest: dict) -> str:
+def md_root_positioning(manifest: dict[str, Any]) -> str:
     return "\n".join(
         [
             manifest["positioning"]["headline"],
@@ -106,12 +107,12 @@ def md_root_positioning(manifest: dict) -> str:
     )
 
 
-def md_status_note(manifest: dict) -> str:
+def md_status_note(manifest: dict[str, Any]) -> str:
     scope = manifest["benchmarks"].get("scope") or manifest["benchmarks"].get("model")
     return f"Measured on {manifest['benchmarks']['device']} ({scope}). Last verified: {manifest['last_verified']}."
 
 
-def html_subtitle(manifest: dict) -> str:
+def html_subtitle(manifest: dict[str, Any]) -> str:
     wasm_bytes = read_size(WASM_CORE_PATH)
     return "\n".join(
         [
@@ -128,7 +129,7 @@ def html_subtitle(manifest: dict) -> str:
     )
 
 
-def md_artifact_budget(manifest: dict) -> str:
+def md_artifact_budget(manifest: dict[str, Any]) -> str:
     size_lookup = {
         "wasm_core": read_size(WASM_CORE_PATH),
         "wasm_wrapper_js": read_size(WASM_JS_PATH),
@@ -156,7 +157,7 @@ def replace_block(text: str, name: str, body: str) -> str:
     return pattern.sub(replacement, text, count=1)
 
 
-def rendered_files(manifest: dict) -> dict[Path, str]:
+def rendered_files(manifest: dict[str, Any]) -> dict[Path, str]:
     files: dict[Path, str] = {}
 
     root_readme = (ROOT.parent / "README.md").read_text()

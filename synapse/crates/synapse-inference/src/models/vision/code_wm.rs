@@ -27,6 +27,8 @@ use crate::ops::matmul::matmul_t;
 use crate::ops::pure_rust_ops::layernorm_with_bias;
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
 
+pub use super::LoadStats;
+
 /// GELU activation variant: PyTorch's `nn.GELU()` defaults to exact erf (`approximate='none'`).
 /// The tanh approximation is `nn.GELU(approximate='tanh')`. These differ by ~4e-4 max.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -536,13 +538,6 @@ pub struct CodeWorldModel {
     // Predictor: 2 distinct blocks, each looped predictor_loops times
     pub predictor_blocks: Vec<TransformerBlock>,
     pub predictor_final_norm: LayerNormWeights,
-}
-
-/// Statistics from weight loading.
-#[derive(Debug, Clone)]
-pub struct LoadStats {
-    pub loaded: usize,
-    pub skipped: Vec<String>,
 }
 
 impl CodeWorldModel {

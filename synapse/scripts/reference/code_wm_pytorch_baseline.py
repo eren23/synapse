@@ -23,6 +23,7 @@ model expects for its relative imports).
 import argparse
 import importlib.util
 import os
+from typing import Any
 
 import torch
 from safetensors.torch import save_file
@@ -43,7 +44,7 @@ def load_code_wm_module(code_wm_src: str):
     return mod
 
 
-def build_model(code_wm_mod, ckpt_config: dict):
+def build_model(code_wm_mod, ckpt_config: dict[str, Any]):
     """Instantiate CodeWorldModel with params from the checkpoint's config."""
     m = code_wm_mod.CodeWorldModel(
         vocab_size=ckpt_config["vocab_size"],
@@ -68,7 +69,7 @@ def set_inference_mode(model: "torch.nn.Module") -> None:
             mod.p = 0.0
 
 
-def shadow_encoder(m, tokens: torch.Tensor, prefix: str, out: dict) -> torch.Tensor:
+def shadow_encoder(m, tokens: torch.Tensor, prefix: str, out: dict[str, torch.Tensor]) -> torch.Tensor:
     """Mirror CodeStateEncoder.forward, recording every intermediate.
 
     Pool mode (`enc.pool_mode`) is read from the constructed encoder:
@@ -132,7 +133,7 @@ def shadow_encoder(m, tokens: torch.Tensor, prefix: str, out: dict) -> torch.Ten
     return z
 
 
-def shadow_action_encoder(m, action: torch.Tensor, prefix: str, out: dict) -> torch.Tensor:
+def shadow_action_encoder(m, action: torch.Tensor, prefix: str, out: dict[str, torch.Tensor]) -> torch.Tensor:
     """Mirror CodeActionEncoder.forward, recording each sub-step."""
     act = m.action_encoder
     out[f"{prefix}action_input"] = action.detach().clone()
@@ -145,7 +146,7 @@ def shadow_action_encoder(m, action: torch.Tensor, prefix: str, out: dict) -> to
     return h
 
 
-def shadow_predictor(m, z_state: torch.Tensor, z_action: torch.Tensor, prefix: str, out: dict) -> torch.Tensor:
+def shadow_predictor(m, z_state: torch.Tensor, z_action: torch.Tensor, prefix: str, out: dict[str, torch.Tensor]) -> torch.Tensor:
     """Mirror LoopedPredictor.forward, recording each block+loop intermediate."""
     pred = m.predictor
     out[f"{prefix}pred_z_state"] = z_state.detach().clone()
@@ -216,7 +217,7 @@ def main():
     if args.seq_len > cfg["max_seq_len"]:
         raise ValueError(f"seq_len {args.seq_len} > max_seq_len {cfg['max_seq_len']}")
 
-    out: dict = {}
+    out: dict[str, torch.Tensor] = {}
 
     for seed in range(args.num_seeds):
         prefix = f"seed{seed}_"
