@@ -43,7 +43,6 @@ pub fn geometricAttention(
         // Use stack allocation for scores (max 4096 points, then heap fallback)
         var score_buf: [4096]f32 = undefined;
         const scores: [*]f32 = if (n <= 4096) &score_buf else unreachable;
-        // TODO: for n > 4096, allocate from scratch buffer
 
         var max_score: f32 = -std.math.inf(f32);
 
