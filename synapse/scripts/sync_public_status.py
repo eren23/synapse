@@ -9,6 +9,8 @@ import re
 import sys
 from pathlib import Path
 
+from _shared import format_label
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "status" / "public_status.json"
@@ -20,16 +22,10 @@ def load_manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text())
 
 
-def format_support(support: str) -> str:
-    return support.replace("_", " ").title()
-
-
-def format_model_status(status: str) -> str:
-    return status.replace("_", " ").title()
-
-
-def format_evidence(evidence: str) -> str:
-    return evidence.replace("_", " ").title()
+# Aliases kept for readability at call sites.
+format_support = format_label
+format_model_status = format_label
+format_evidence = format_label
 
 
 def kb_label(num_bytes: int | None) -> str:

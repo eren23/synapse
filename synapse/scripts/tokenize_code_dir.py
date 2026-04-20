@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -24,12 +23,7 @@ import numpy as np
 import torch
 from safetensors.torch import save_file
 
-
-def load_tokenizer(tokenizer_path: str):
-    spec = importlib.util.spec_from_file_location("ast_tokenizer", tokenizer_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.ast_tokenize
+from _shared import load_tokenizer_func
 
 
 def main():
@@ -41,7 +35,7 @@ def main():
     p.add_argument("--max-files", type=int, default=256, help="Limit on files (first N)")
     args = p.parse_args()
 
-    tokenize = load_tokenizer(args.src)
+    tokenize = load_tokenizer_func(args.src, "ast_tokenizer", "ast_tokenize")
 
     root = Path(args.dir).resolve()
     py_files = sorted(p for p in root.rglob("*.py") if p.is_file())[: args.max_files]

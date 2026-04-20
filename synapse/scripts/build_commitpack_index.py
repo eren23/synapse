@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import importlib.util
 import json
 import os
 from pathlib import Path
@@ -25,12 +24,7 @@ import numpy as np
 import torch
 from safetensors.torch import save_file
 
-
-def load_tokenizer(fnv_path: str):
-    spec = importlib.util.spec_from_file_location("ast_tokenizer_fnv", fnv_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.tokenize_fnv
+from _shared import load_tokenizer_func
 
 
 def main():
@@ -45,7 +39,7 @@ def main():
     p.add_argument("--out-meta", default="tests/fixtures/commitpack_meta.json")
     args = p.parse_args()
 
-    tokenize = load_tokenizer(args.tokenizer)
+    tokenize = load_tokenizer_func(args.tokenizer, "ast_tokenizer_fnv", "tokenize_fnv")
 
     print(f"Streaming {args.dataset}:{args.subset}:{args.split} (target: {args.n} snippets)...")
     from datasets import load_dataset
