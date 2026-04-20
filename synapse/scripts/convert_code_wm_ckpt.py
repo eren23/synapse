@@ -173,6 +173,19 @@ def convert(input_path: str, out_weights: str, out_config: str) -> dict:
         "pool_mode": pool_mode,
     }
 
+    # ── Export target encoder (for transition prediction demos) ──
+    # The predictor outputs in TARGET encoder space. To evaluate prediction
+    # quality, we need the target encoder to encode the "after" reference.
+    # We remap target_encoder.* → state_encoder.* so a second CodeWorldModel
+    # instance can load it with the standard weight-loading code.
+    target_tensors = {}
+    for key, tensor in sd.items():
+        if key.startswith("target_encoder."):
+            remapped = key.replace("target_encoder.", "state_encoder.", 1)
+            if tensor.dtype != torch.float32:
+                tensor = tensor.float()
+            target_tensors[remapped] = tensor.contiguous()
+
     # Write outputs.
     os.makedirs(os.path.dirname(out_weights) or ".", exist_ok=True)
     os.makedirs(os.path.dirname(out_config) or ".", exist_ok=True)
@@ -182,6 +195,16 @@ def convert(input_path: str, out_weights: str, out_config: str) -> dict:
 
     print(f"  Wrote {out_weights} ({os.path.getsize(out_weights) / 1024:.1f} KB)")
     print(f"  Wrote {out_config}")
+
+    # Write target encoder weights if present (for prediction demos).
+    if target_tensors:
+        target_path = out_weights.replace(".safetensors", "_target.safetensors")
+        save_file(target_tensors, target_path)
+        target_params = sum(t.numel() for t in target_tensors.values())
+        print(f"  Wrote {target_path} ({os.path.getsize(target_path) / 1024:.1f} KB) — {len(target_tensors)} target encoder tensors")
+    else:
+        print("  No target_encoder.* in checkpoint — skipping target export")
+
     return synapse_config
 
 

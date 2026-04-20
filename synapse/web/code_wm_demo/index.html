@@ -2,203 +2,682 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Code WM — semantic code search in the browser</title>
+  <title>Code WM v2 — edit-pair similarity in the browser</title>
   <style>
     * { box-sizing: border-box; }
+    :root {
+      --bg: #0c0d10; --bg-raise: #14161b; --bg-card: #16181d;
+      --ink: #ece9df; --ink-soft: #b5b1a4; --ink-faint: #72706a;
+      --rule: #24272e; --rule-soft: #1b1d23;
+      --accent: #5cd4b0; --accent-dim: #1a3f35;
+      --flame: #ff7a59;
+      --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+    }
+    html, body { margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-      margin: 0; padding: 24px;
-      background: #0f1419; color: #d4d4d4;
-      max-width: 960px; margin: 0 auto;
+      background: var(--bg); color: var(--ink);
+      min-height: 100vh; overflow-x: hidden;
     }
-    h1 { color: #e6e1cf; margin: 0 0 4px 0; font-size: 28px; }
-    .subtitle { color: #768390; margin-bottom: 24px; font-size: 14px; }
+    .shell { max-width: 1040px; margin: 0 auto; padding: 24px; }
+
+    /* header */
+    h1 { color: var(--ink); margin: 0 0 4px 0; font-size: 26px; font-family: var(--mono); font-weight: 500; }
+    h1 .v2 { color: var(--accent); }
+    .subtitle { color: var(--ink-soft); margin-bottom: 6px; font-size: 14px; }
+    .upgrade-note {
+      font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
+      border-left: 2px solid var(--accent-dim); padding: 8px 12px;
+      margin-bottom: 20px; background: rgba(92,212,176,0.03);
+    }
+    .upgrade-note strong { color: var(--accent); font-weight: 500; }
+    .upgrade-note a { color: var(--accent); }
+
+    /* status bar */
     .stats {
-      background: #1a1f29; padding: 12px 16px; border-radius: 6px;
-      font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px;
-      color: #95b1c7; border-left: 3px solid #5ccfe6; margin-bottom: 16px;
+      background: var(--bg-raise); padding: 10px 14px; border-radius: 4px;
+      font-family: var(--mono); font-size: 12px;
+      color: var(--ink-soft); border-left: 2px solid var(--accent); margin-bottom: 16px;
     }
-    .stats.error { border-left-color: #ff3333; color: #ff6b6b; }
+    .stats.error { border-left-color: var(--flame); color: var(--flame); }
+
+    /* presets */
+    .presets { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 16px; }
+    @media (max-width: 700px) { .presets { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 480px) { .presets { grid-template-columns: 1fr 1fr; } }
+    .preset {
+      background: var(--bg-card); border: 1px solid var(--rule-soft); padding: 8px 10px;
+      cursor: pointer; text-align: left; font-family: var(--mono); transition: all 120ms;
+    }
+    .preset:hover { border-color: var(--accent-dim); background: var(--bg-raise); }
+    .preset.active { border-color: var(--accent); border-left: 2px solid var(--accent); }
+    .preset-label { display: block; font-size: 12px; font-weight: 500; color: var(--ink); margin-bottom: 2px; }
+    .preset-desc { display: block; font-size: 10px; color: var(--ink-faint); }
+    .preset-expect { display: block; font-size: 10px; color: var(--accent); margin-top: 2px; font-weight: 500; }
+
+    /* code pair */
+    .code-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin-bottom: 12px; border: 1px solid var(--rule-soft); }
+    @media (max-width: 640px) { .code-pair { grid-template-columns: 1fr; } }
+    .code-col { display: flex; flex-direction: column; }
+    .code-col:first-child { border-right: 1px solid var(--rule-soft); }
+    @media (max-width: 640px) { .code-col:first-child { border-right: none; border-bottom: 1px solid var(--rule-soft); } }
+    .code-label {
+      font-family: var(--mono); font-size: 10px; color: var(--ink-faint);
+      letter-spacing: .1em; text-transform: uppercase;
+      padding: 4px 10px; border-bottom: 1px solid var(--rule-soft); background: var(--bg-raise);
+    }
     textarea {
-      width: 100%; min-height: 180px; padding: 12px;
-      background: #1a1f29; color: #d4d4d4; border: 1px solid #2d3443;
-      border-radius: 6px; font-family: ui-monospace, "SF Mono", Menlo, monospace;
-      font-size: 13px; resize: vertical;
+      width: 100%; min-height: 160px; padding: 10px;
+      background: var(--bg); color: var(--ink-soft); border: none;
+      font-family: var(--mono); font-size: 12px; line-height: 1.55;
+      resize: vertical; outline: none;
     }
-    textarea:focus { outline: none; border-color: #5ccfe6; }
+    textarea:focus { background: var(--bg-raise); color: var(--ink); }
+
+    /* run button */
+    .actions { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
     button {
-      background: #5ccfe6; color: #0f1419; border: none;
-      padding: 10px 20px; border-radius: 6px; font-weight: 600;
-      cursor: pointer; font-size: 14px; margin-top: 12px;
+      background: var(--accent); color: var(--bg); border: none;
+      padding: 8px 18px; font-weight: 600; cursor: pointer;
+      font-size: 13px; font-family: var(--mono); letter-spacing: .02em;
+      transition: background 120ms;
     }
-    button:hover { background: #73d0f4; }
-    button:disabled { background: #2d3443; color: #768390; cursor: not-allowed; }
-    .results { margin-top: 24px; }
-    .result {
-      background: #1a1f29; padding: 12px 16px; border-radius: 6px;
-      margin-bottom: 8px; border-left: 3px solid transparent;
+    button:hover { background: #73e8c5; }
+    button:disabled { background: var(--rule); color: var(--ink-faint); cursor: not-allowed; }
+    .actions .hint { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+
+    /* gauge */
+    .gauge-section { margin-bottom: 16px; }
+    .gauge-header {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-family: var(--mono); margin-bottom: 6px;
     }
-    .result:hover { border-left-color: #5ccfe6; }
-    .result-path { font-weight: 600; color: #e6e1cf; font-size: 14px; }
-    .result-score { color: #5ccfe6; float: right; font-family: monospace; }
-    .result-preview {
-      color: #768390; font-size: 12px; font-family: ui-monospace, monospace;
-      margin-top: 6px; white-space: pre-wrap; word-break: break-all;
+    .gauge-label { font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .08em; }
+    .cos-value { font-size: 32px; font-weight: 500; color: var(--accent); letter-spacing: -.02em; }
+    .cos-verdict { font-size: 12px; color: var(--ink-soft); margin-left: 8px; }
+    .gauge-bar { position: relative; height: 6px; background: var(--bg-raise); border-radius: 3px; overflow: hidden; }
+    .gauge-fill { height: 100%; background: var(--accent); border-radius: 3px; transition: width 300ms ease; }
+    .gauge-marks { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9px; color: var(--ink-faint); padding-top: 3px; }
+
+    /* timing */
+    .timing {
+      font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+      margin-top: 6px; letter-spacing: .01em;
     }
-    .example-links { font-size: 12px; color: #768390; margin-top: 8px; }
-    .example-links a { color: #5ccfe6; cursor: pointer; text-decoration: underline; margin-right: 12px; }
+
+    /* embedding heatmap */
+    .emb-section { margin-bottom: 16px; }
+    .emb-label { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .08em; margin-bottom: 6px; }
+    .emb-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+    .emb-tag { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); width: 40px; text-align: right; flex-shrink: 0; }
+    .emb-cells { display: flex; gap: 1px; flex: 1; }
+    .emb-cell { flex: 1; height: 12px; min-width: 0; border-radius: 1px; }
+
+    /* what's new card */
+    .whats-new {
+      background: var(--bg-card); border: 1px solid var(--rule-soft);
+      border-left: 2px solid var(--accent); padding: 14px 16px; margin-top: 24px;
+    }
+    .whats-new h3 { font-family: var(--mono); font-size: 13px; color: var(--ink); margin: 0 0 8px; font-weight: 500; }
+    .whats-new ul { margin: 0; padding: 0 0 0 16px; list-style: disc; }
+    .whats-new li { font-size: 13px; color: var(--ink-soft); margin-bottom: 4px; }
+    .whats-new li strong { color: var(--ink); font-weight: 500; }
+    .whats-new code { font-family: var(--mono); font-size: 12px; color: var(--accent); background: rgba(92,212,176,.08); padding: 1px 4px; }
+
+    /* footer */
+    .foot { margin-top: 32px; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+    .foot a { color: var(--ink-soft); }
+
+    ::selection { background: var(--accent); color: var(--bg); }
   </style>
 </head>
 <body>
-  <h1>Code WM — semantic code search</h1>
+<div class="shell">
+  <h1>Code WM <span class="v2">v2</span> — edit-pair similarity</h1>
   <p class="subtitle">
-    Browser-native AST tokenizer + Code WM encoder (G1b, 1.1M params).
-    Paste Python code → find structurally-similar files in the corpus.
+    VICReg-enhanced Code World Model (1.3M params, attention pooling, 3-loop encoder).
+    Compare two Python snippets — the model runs entirely in your browser via WebAssembly.
   </p>
+  <div class="upgrade-note">
+    <strong>What's new in v2:</strong>
+    Deep supervision + VICReg readout repair. <strong>25x</strong> better effective rank,
+    <strong>14x</strong> better KNN@5 over v1 baseline. Matches 125.9M UnixCoder at 10x lower latency.
+    <a href="https://eren23.github.io/codewm2-paper-public/" target="_blank" rel="noopener">Read the paper</a>
+  </div>
 
   <div id="status" class="stats">Loading WASM module…</div>
 
-  <textarea id="query" placeholder="Paste Python code here…">def quicksort(arr):
+  <!-- presets -->
+  <div class="presets" id="presets">
+    <div class="preset active" data-idx="0">
+      <span class="preset-label">Rename refactor</span>
+      <span class="preset-desc">Same logic, all identifiers renamed</span>
+      <span class="preset-expect">expect: high cos</span>
+    </div>
+    <div class="preset" data-idx="1">
+      <span class="preset-label">Logic rewrite</span>
+      <span class="preset-desc">Same goal, different algorithm</span>
+      <span class="preset-expect">expect: moderate</span>
+    </div>
+    <div class="preset" data-idx="2">
+      <span class="preset-label">Comments only</span>
+      <span class="preset-desc">Docstrings + comments added, same AST</span>
+      <span class="preset-expect">expect: very high</span>
+    </div>
+    <div class="preset" data-idx="3">
+      <span class="preset-label">Subtle bug fix</span>
+      <span class="preset-desc">One-line fix, structural change</span>
+      <span class="preset-expect">expect: high</span>
+    </div>
+    <div class="preset" data-idx="4">
+      <span class="preset-label">Unrelated code</span>
+      <span class="preset-desc">Sorting vs HTTP client</span>
+      <span class="preset-expect">expect: low</span>
+    </div>
+  </div>
+
+  <!-- code editors -->
+  <div class="code-pair">
+    <div class="code-col">
+      <div class="code-label">before</div>
+      <textarea id="code-before" spellcheck="false"></textarea>
+    </div>
+    <div class="code-col">
+      <div class="code-label">after</div>
+      <textarea id="code-after" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button id="run-btn" disabled>Compare (cmd/ctrl+enter)</button>
+    <span class="hint">edit both panels, then hit compare</span>
+  </div>
+
+  <!-- cosine gauge -->
+  <div class="gauge-section" id="gauge-section" style="display:none">
+    <div class="gauge-header">
+      <span class="gauge-label">cosine similarity</span>
+      <span><span class="cos-value" id="cos-value"></span><span class="cos-verdict" id="cos-verdict"></span></span>
+    </div>
+    <div class="gauge-bar"><div class="gauge-fill" id="gauge-fill" style="width:0"></div></div>
+    <div class="gauge-marks"><span>0.0</span><span>0.25</span><span>0.50</span><span>0.75</span><span>1.0</span></div>
+    <div class="timing" id="timing"></div>
+  </div>
+
+  <!-- embedding heatmap -->
+  <div class="emb-section" id="emb-section" style="display:none">
+    <div class="emb-label">128-d latent embeddings</div>
+    <div class="emb-row"><span class="emb-tag">before</span><div class="emb-cells" id="emb-before"></div></div>
+    <div class="emb-row"><span class="emb-tag">after</span><div class="emb-cells" id="emb-after"></div></div>
+    <div class="emb-row"><span class="emb-tag">diff</span><div class="emb-cells" id="emb-diff"></div></div>
+  </div>
+
+  <!-- what's new -->
+  <div class="whats-new">
+    <h3>v2 vs v1 — what changed</h3>
+    <ul>
+      <li><strong>Attention pooling</strong> replaces CLS token — learnable readout over all patches</li>
+      <li><strong>3-loop encoder</strong> (was 6) — signal lives in early loops, deep supervision preserves it</li>
+      <li><strong>VICReg at readout</strong> — prevents representational collapse (eff. rank 53 vs 1.95)</li>
+      <li><strong>700 vocab</strong> (was 662) — expanded AST token set</li>
+      <li><strong>15-d actions</strong> (was 7) — richer edit descriptor for transition prediction</li>
+      <li>Config: <code>encoder_loops=3  aux_loops=1,2  reg_mode=vicreg  ema_decay=0.99999</code></li>
+    </ul>
+  </div>
+
+  <!-- Transition Prediction -->
+  <div class="whats-new" style="margin-top:16px; border-left-color: var(--flame);">
+    <h3>transition prediction</h3>
+    <p style="font-size:13px; color:var(--ink-soft); margin:0 0 8px;">
+      The world model predicts what code will look like <em>after</em> an edit, without seeing the result.
+      Enter before-code + action vector → model predicts next-state embedding → compare vs actual after-code.
+    </p>
+  </div>
+
+  <div id="pred-section" style="display:none; margin-top:12px;">
+    <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+      <label style="font-family:var(--mono); font-size:11px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.08em;">action vector</label>
+      <input id="action-input" type="text" style="
+        flex:1; background:var(--bg-card); border:1px solid var(--rule-soft); color:var(--ink-soft);
+        font-family:var(--mono); font-size:12px; padding:6px 10px;
+      " placeholder="15 comma-separated floats (edit descriptor)">
+      <button id="pred-btn" style="background:var(--flame); font-size:12px; padding:6px 14px;">Predict</button>
+    </div>
+    <div class="presets" id="action-presets" style="grid-template-columns: repeat(4, 1fr); margin-bottom:8px;">
+      <div class="preset active" data-action="1,0,0,0,0,0,0,0.5,0,0,0,0,0,0,0" data-label="insert">
+        <span class="preset-label">Insert</span>
+        <span class="preset-desc">Add new lines</span>
+      </div>
+      <div class="preset" data-action="0,1,0,0,0,0,0,0.5,0,0,0,0,0,0,0" data-label="delete">
+        <span class="preset-label">Delete</span>
+        <span class="preset-desc">Remove lines</span>
+      </div>
+      <div class="preset" data-action="0,0,1,0,0,0,0,0.5,0,0,0,0,0,0,0" data-label="modify">
+        <span class="preset-label">Modify</span>
+        <span class="preset-desc">Change in-place</span>
+      </div>
+      <div class="preset" data-action="1,0,1,0,0,0,0,0.2,0,0,0,0,0,0,0" data-label="refactor">
+        <span class="preset-label">Refactor</span>
+        <span class="preset-desc">Restructure code</span>
+      </div>
+    </div>
+
+    <!-- prediction gauge -->
+    <div class="gauge-section" id="pred-gauge-section" style="display:none">
+      <div class="gauge-header">
+        <span class="gauge-label">prediction accuracy (cos of predicted vs actual)</span>
+        <span><span class="cos-value" id="pred-cos-value"></span><span class="cos-verdict" id="pred-cos-verdict"></span></span>
+      </div>
+      <div class="gauge-bar"><div class="gauge-fill" id="pred-gauge-fill" style="width:0; background:var(--flame);"></div></div>
+      <div class="gauge-marks"><span>0.0</span><span>0.25</span><span>0.50</span><span>0.75</span><span>1.0</span></div>
+      <div class="timing" id="pred-timing"></div>
+    </div>
+
+    <!-- prediction embeddings -->
+    <div class="emb-section" id="pred-emb-section" style="display:none">
+      <div class="emb-label">predicted vs actual next-state</div>
+      <div class="emb-row"><span class="emb-tag">pred</span><div class="emb-cells" id="emb-pred"></div></div>
+      <div class="emb-row"><span class="emb-tag">actual</span><div class="emb-cells" id="emb-actual"></div></div>
+      <div class="emb-row"><span class="emb-tag">error</span><div class="emb-cells" id="emb-error"></div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <a href="search.html">Corpus search demo (v1 model)</a> &middot;
+    <a href="https://eren23.github.io/codewm2-paper-public/" target="_blank" rel="noopener">Paper 2</a> &middot;
+    <a href="https://eren23.github.io/codewm-paper-public/" target="_blank" rel="noopener">Paper 1</a>
+  </div>
+</div>
+
+<script type="module">
+  import init, { WasmCodeWM, tokenize_python } from "../synapse-wasm-pkg/synapse_wasm.js";
+
+  // ── Presets ────────────────────────────────────────────
+  const PRESETS = [
+    {
+      before: `def quicksort(arr):
     if len(arr) <= 1:
         return arr
     pivot = arr[len(arr) // 2]
     left = [x for x in arr if x < pivot]
     mid = [x for x in arr if x == pivot]
     right = [x for x in arr if x > pivot]
-    return quicksort(left) + mid + quicksort(right)</textarea>
-  <br>
-  <button id="search" disabled>Find Similar (cmd/ctrl+enter)</button>
-  <div class="example-links">
-    Examples:
-    <a data-code="import json
-def load_config(path):
-    with open(path) as f:
-        return json.load(f)">load_config</a>
-    <a data-code="class Server:
-    def __init__(self, port):
-        self.port = port
-    def run(self):
-        print(f'serving on {self.port}')">class Server</a>
-    <a data-code="def fibonacci(n):
+    return quicksort(left) + mid + quicksort(right)`,
+      after: `def fast_sort(data):
+    if len(data) <= 1:
+        return data
+    mid_val = data[len(data) // 2]
+    lo = [x for x in data if x < mid_val]
+    eq = [x for x in data if x == mid_val]
+    hi = [x for x in data if x > mid_val]
+    return fast_sort(lo) + eq + fast_sort(hi)`,
+    },
+    {
+      before: `def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    mid = [x for x in arr if x == pivot]
+    right = [x for x in arr if x > pivot]
+    return quicksort(left) + mid + quicksort(right)`,
+      after: `def merge_sort(arr):
+    if len(arr) <= 1:
+        return arr
+    mid = len(arr) // 2
+    left = merge_sort(arr[:mid])
+    right = merge_sort(arr[mid:])
+    merged = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if left[i] <= right[j]:
+            merged.append(left[i])
+            i += 1
+        else:
+            merged.append(right[j])
+            j += 1
+    merged.extend(left[i:])
+    merged.extend(right[j:])
+    return merged`,
+    },
+    {
+      before: `def fibonacci(n):
     a, b = 0, 1
     for _ in range(n):
         a, b = b, a + b
-    return a">fibonacci</a>
-  </div>
+    return a`,
+      after: `def fibonacci(n):
+    """Return the n-th Fibonacci number.
 
-  <div class="results" id="results"></div>
+    Uses iterative approach for O(n) time, O(1) space.
+    """
+    # base cases handled by the loop naturally
+    a, b = 0, 1
+    for _ in range(n):
+        a, b = b, a + b  # simultaneous assignment
+    return a`,
+    },
+    {
+      before: `def binary_search(arr, target):
+    lo, hi = 0, len(arr) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1`,
+      after: `def binary_search(arr, target):
+    lo, hi = 0, len(arr)
+    while lo < hi:
+        mid = lo + (hi - lo) // 2
+        if arr[mid] == target:
+            return mid
+        elif arr[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid
+    return -1`,
+    },
+    {
+      before: `def quicksort(arr):
+    if len(arr) <= 1:
+        return arr
+    pivot = arr[len(arr) // 2]
+    left = [x for x in arr if x < pivot]
+    mid = [x for x in arr if x == pivot]
+    right = [x for x in arr if x > pivot]
+    return quicksort(left) + mid + quicksort(right)`,
+      after: `import requests
 
-  <script type="module">
-    import init, { WasmCodeWM, tokenize_python } from "../synapse-wasm-pkg/synapse_wasm.js";
+def fetch_json(url, timeout=10):
+    resp = requests.get(url, timeout=timeout)
+    resp.raise_for_status()
+    return resp.json()
 
-    const statusEl = document.getElementById("status");
-    const resultsEl = document.getElementById("results");
-    const searchBtn = document.getElementById("search");
-    const queryEl = document.getElementById("query");
+def post_data(url, payload):
+    resp = requests.post(url, json=payload)
+    resp.raise_for_status()
+    return resp.status_code`,
+    },
+  ];
 
-    let model = null;
-    let corpus = null;
+  // ── DOM refs ───────────────────────────────────────────
+  const statusEl = document.getElementById("status");
+  const beforeEl = document.getElementById("code-before");
+  const afterEl = document.getElementById("code-after");
+  const runBtn = document.getElementById("run-btn");
+  const gaugeSection = document.getElementById("gauge-section");
+  const cosValueEl = document.getElementById("cos-value");
+  const cosVerdictEl = document.getElementById("cos-verdict");
+  const gaugeFillEl = document.getElementById("gauge-fill");
+  const timingEl = document.getElementById("timing");
+  const embSection = document.getElementById("emb-section");
+  const embBeforeEl = document.getElementById("emb-before");
+  const embAfterEl = document.getElementById("emb-after");
+  const embDiffEl = document.getElementById("emb-diff");
 
-    function setStatus(msg, isError = false) {
-      statusEl.textContent = msg;
-      statusEl.className = isError ? "stats error" : "stats";
+  let model = null;
+  let targetModel = null;  // target encoder for prediction reference
+
+  function setStatus(msg, isError = false) {
+    statusEl.textContent = msg;
+    statusEl.className = isError ? "stats error" : "stats";
+  }
+
+  function clearEl(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+  function l2norm(v) {
+    let n = 0;
+    for (let i = 0; i < v.length; i++) n += v[i] * v[i];
+    n = Math.sqrt(n);
+    if (n < 1e-30) return v;
+    const out = new Float32Array(v.length);
+    for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
+    return out;
+  }
+
+  function cosine(a, b) {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d += a[i] * b[i];
+    return d;
+  }
+
+  function verdict(cos) {
+    if (cos >= 0.95) return "near-identical structure";
+    if (cos >= 0.85) return "structurally similar";
+    if (cos >= 0.65) return "related but different";
+    if (cos >= 0.40) return "loosely related";
+    return "unrelated";
+  }
+
+  // ── Embedding heatmap ──────────────────────────────────
+  function renderHeatmap(container, values) {
+    clearEl(container);
+    const max = Math.max(...Array.from(values).map(Math.abs));
+    for (let i = 0; i < values.length; i++) {
+      const cell = document.createElement("div");
+      cell.className = "emb-cell";
+      const v = values[i];
+      const intensity = Math.abs(v) / (max || 1);
+      if (v >= 0) {
+        cell.style.background = "rgba(92,212,176," + (intensity * 0.9) + ")";
+      } else {
+        cell.style.background = "rgba(255,122,89," + (intensity * 0.9) + ")";
+      }
+      container.appendChild(cell);
     }
+  }
 
-    function cosine(a, b) {
-      let d = 0;
-      for (let i = 0; i < a.length; i++) d += a[i] * b[i];
-      return d;  // assuming both L2-normalized
-    }
+  // ── Compare ────────────────────────────────────────────
+  function runCompare() {
+    const codeBefore = beforeEl.value;
+    const codeAfter = afterEl.value;
+    if (!codeBefore.trim() || !codeAfter.trim() || !model) return;
 
-    function l2norm(v) {
-      let n = 0;
-      for (let i = 0; i < v.length; i++) n += v[i] * v[i];
-      n = Math.sqrt(n);
-      if (n < 1e-30) return v;
-      const out = new Float32Array(v.length);
-      for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
-      return out;
-    }
+    const t0 = performance.now();
 
-    async function main() {
-      setStatus("Loading WASM runtime…");
-      await init();
+    const tokBefore = tokenize_python(codeBefore, model.max_seq_len());
+    const tokAfter = tokenize_python(codeAfter, model.max_seq_len());
+    const t1 = performance.now();
 
-      setStatus("Loading model weights (3 MB)…");
-      const [configJson, weightsBytes, corpusJson] = await Promise.all([
-        fetch("g1b.config.json").then(r => r.text()),
-        fetch("g1b.safetensors").then(r => r.arrayBuffer()).then(b => new Uint8Array(b)),
-        fetch("corpus.json").then(r => r.json()),
-      ]);
+    const tokB_i32 = new Int32Array(tokBefore.length);
+    for (let i = 0; i < tokBefore.length; i++) tokB_i32[i] = tokBefore[i];
+    const tokA_i32 = new Int32Array(tokAfter.length);
+    for (let i = 0; i < tokAfter.length; i++) tokA_i32[i] = tokAfter[i];
 
-      setStatus("Initializing model…");
-      model = WasmCodeWM.create(configJson, weightsBytes);
-      corpus = corpusJson;
-      corpus.files.forEach(f => { f.embedding = l2norm(f.embedding); });
+    const zBefore = l2norm(model.encode(tokB_i32));
+    const zAfter = l2norm(model.encode(tokA_i32));
+    const t2 = performance.now();
 
-      setStatus(`Ready — corpus: ${corpus.count} files, model_dim=${model.model_dim()}, vocab=${model.vocab_size()}`);
-      searchBtn.disabled = false;
-    }
+    const cos = cosine(zBefore, zAfter);
+    const t3 = performance.now();
 
-    function renderResults(scored) {
-      while (resultsEl.firstChild) resultsEl.removeChild(resultsEl.firstChild);
-      scored.slice(0, 5).forEach(r => {
-        const div = document.createElement("div");
-        div.className = "result";
-        const score = document.createElement("span");
-        score.className = "result-score";
-        score.textContent = `cos=${r.score.toFixed(4)}`;
-        const path = document.createElement("span");
-        path.className = "result-path";
-        path.textContent = r.path;
-        const preview = document.createElement("div");
-        preview.className = "result-preview";
-        preview.textContent = r.preview;
-        div.appendChild(score);
-        div.appendChild(path);
-        div.appendChild(preview);
-        resultsEl.appendChild(div);
-      });
-    }
+    // gauge
+    gaugeSection.style.display = "";
+    cosValueEl.textContent = cos.toFixed(4);
+    cosVerdictEl.textContent = verdict(cos);
+    gaugeFillEl.style.width = (Math.max(0, cos) * 100) + "%";
 
-    function runSearch() {
-      const code = queryEl.value;
-      if (!code.trim() || !model) return;
+    // color the gauge by value
+    if (cos >= 0.85) gaugeFillEl.style.background = "var(--accent)";
+    else if (cos >= 0.5) gaugeFillEl.style.background = "#e6c54d";
+    else gaugeFillEl.style.background = "var(--flame)";
 
-      const t0 = performance.now();
-      const tokens = tokenize_python(code, model.max_seq_len());
-      const t1 = performance.now();
-      const tokens_i32 = new Int32Array(tokens.length);
-      for (let i = 0; i < tokens.length; i++) tokens_i32[i] = tokens[i];
-      const z_raw = model.encode(tokens_i32);
-      const z = l2norm(z_raw);
-      const t2 = performance.now();
+    timingEl.textContent =
+      "tokenize: " + (t1-t0).toFixed(1) + "ms \u00B7 " +
+      "encode\u00D72: " + (t2-t1).toFixed(1) + "ms \u00B7 " +
+      "cosine: " + (t3-t2).toFixed(1) + "ms \u00B7 " +
+      "total: " + (t3-t0).toFixed(1) + "ms";
 
-      const scored = corpus.files.map(f => ({
-        path: f.path, preview: f.preview, score: cosine(z, f.embedding)
-      }));
-      scored.sort((a, b) => b.score - a.score);
-      const t3 = performance.now();
+    // embedding heatmaps
+    embSection.style.display = "";
+    renderHeatmap(embBeforeEl, zBefore);
+    renderHeatmap(embAfterEl, zAfter);
+    const diff = new Float32Array(zBefore.length);
+    for (let i = 0; i < zBefore.length; i++) diff[i] = zAfter[i] - zBefore[i];
+    renderHeatmap(embDiffEl, diff);
+  }
 
-      setStatus(
-        `Search complete — tokenize: ${(t1-t0).toFixed(1)}ms, ` +
-        `encode: ${(t2-t1).toFixed(1)}ms, ` +
-        `cosine: ${(t3-t2).toFixed(1)}ms, ` +
-        `total: ${(t3-t0).toFixed(1)}ms`
-      );
-
-      renderResults(scored);
-    }
-
-    searchBtn.addEventListener("click", runSearch);
-    queryEl.addEventListener("keydown", (e) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runSearch();
+  // ── Preset loading ─────────────────────────────────────
+  function loadPreset(idx) {
+    beforeEl.value = PRESETS[idx].before;
+    afterEl.value = PRESETS[idx].after;
+    document.querySelectorAll(".preset").forEach(function(el, i) {
+      el.classList.toggle("active", i === idx);
     });
-    document.querySelectorAll(".example-links a").forEach(a => {
-      a.addEventListener("click", () => { queryEl.value = a.dataset.code; runSearch(); });
-    });
+    if (model) runCompare();
+  }
 
-    main().catch(e => setStatus(`Error: ${e.message || e}`, true));
-  </script>
+  document.querySelectorAll(".preset").forEach(function(el) {
+    el.addEventListener("click", function() { loadPreset(parseInt(el.dataset.idx)); });
+  });
+
+  // keyboard shortcut
+  document.addEventListener("keydown", function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "Enter") runCompare();
+  });
+  runBtn.addEventListener("click", runCompare);
+
+  // ── Init ───────────────────────────────────────────────
+  async function main() {
+    setStatus("Loading WASM runtime\u2026");
+    await init();
+
+    setStatus("Loading model weights (online + target: ~5 MB)\u2026");
+    const [configJson, weightsBytes, targetWeightsBytes] = await Promise.all([
+      fetch("vicreg_promotion.config.json").then(function(r) { return r.text(); }),
+      fetch("vicreg_promotion.safetensors").then(function(r) { return r.arrayBuffer(); }).then(function(b) { return new Uint8Array(b); }),
+      fetch("vicreg_promotion_target.safetensors").then(function(r) { return r.arrayBuffer(); }).then(function(b) { return new Uint8Array(b); }),
+    ]);
+
+    setStatus("Initializing models\u2026");
+    model = WasmCodeWM.create(configJson, weightsBytes);
+
+    // Target encoder: same config but only state_encoder.* weights (no action/predictor).
+    // Predictor outputs in TARGET encoder space — we need this to encode "after" code
+    // in the correct space for prediction comparison. Uses encoder-only loader that
+    // tolerates missing action/predictor tensors.
+    try {
+      targetModel = WasmCodeWM.create_encoder_only(configJson, targetWeightsBytes);
+    } catch(e) {
+      console.warn("Target encoder load failed:", e.message);
+      targetModel = null;
+    }
+
+    setStatus(
+      "Ready \u2014 v2 vicreg_promotion \u00B7 " +
+      "dim=" + model.model_dim() + " \u00B7 vocab=" + model.vocab_size() +
+      " \u00B7 actions=" + model.action_dim() + " \u00B7 enc_loops=" + model.encoder_loops() +
+      " \u00B7 pool=attn" + (targetModel ? " \u00B7 target\u2713" : " \u00B7 target\u2717")
+    );
+    runBtn.disabled = false;
+    document.getElementById("pred-section").style.display = "";
+    document.getElementById("pred-btn").disabled = false;
+
+    // Set default action for first preset
+    var actionEl = document.getElementById("action-input");
+    if (!actionEl.value) actionEl.value = "1,0,0,0,0,0,0,0.5,0,0,0,0,0,0,0";
+
+    // auto-run first preset
+    loadPreset(0);
+  }
+
+  // load first preset text immediately (before model loads)
+  beforeEl.value = PRESETS[0].before;
+  afterEl.value = PRESETS[0].after;
+
+  // ── Transition prediction ─────────────────────────────
+  var predBtn = document.getElementById("pred-btn");
+  var actionInput = document.getElementById("action-input");
+  var predGaugeSection = document.getElementById("pred-gauge-section");
+  var predCosValue = document.getElementById("pred-cos-value");
+  var predCosVerdict = document.getElementById("pred-cos-verdict");
+  var predGaugeFill = document.getElementById("pred-gauge-fill");
+  var predTiming = document.getElementById("pred-timing");
+  var predEmbSection = document.getElementById("pred-emb-section");
+
+  // action preset clicks
+  document.querySelectorAll("#action-presets .preset").forEach(function(el) {
+    el.addEventListener("click", function() {
+      actionInput.value = el.dataset.action;
+      document.querySelectorAll("#action-presets .preset").forEach(function(p) { p.classList.remove("active"); });
+      el.classList.add("active");
+      runPredict();
+    });
+  });
+
+  function parseAction(str) {
+    return str.split(",").map(function(s) { return parseFloat(s.trim()); }).filter(function(v) { return !isNaN(v); });
+  }
+
+  function runPredict() {
+    var codeBefore = beforeEl.value;
+    var codeAfter = afterEl.value;
+    if (!codeBefore.trim() || !codeAfter.trim() || !model) return;
+
+    var actionVec = parseAction(actionInput.value);
+    var adim = model.action_dim();
+    while (actionVec.length < adim) actionVec.push(0);
+    actionVec = actionVec.slice(0, adim);
+    var actionF32 = new Float32Array(actionVec);
+
+    var t0 = performance.now();
+
+    // Encode before state
+    var tokBefore = tokenize_python(codeBefore, model.max_seq_len());
+    var tokB_i32 = new Int32Array(tokBefore.length);
+    for (var i = 0; i < tokBefore.length; i++) tokB_i32[i] = tokBefore[i];
+    var zState = model.encode(tokB_i32);
+
+    // Encode action
+    var zAction = model.encode_action(actionF32);
+
+    // Predict next state
+    var zPredicted = model.predict(new Float32Array(zState), new Float32Array(zAction));
+    var t1 = performance.now();
+
+    // Encode actual after state — use TARGET encoder (prediction target space)
+    var tokAfter = tokenize_python(codeAfter, model.max_seq_len());
+    var tokA_i32 = new Int32Array(tokAfter.length);
+    for (var j = 0; j < tokAfter.length; j++) tokA_i32[j] = tokAfter[j];
+    var afterEncoder = targetModel || model;  // fall back to online if no target
+    var zActual = afterEncoder.encode(tokA_i32);
+    var t2 = performance.now();
+
+    // Compare predicted vs actual
+    var predNorm = l2norm(new Float32Array(zPredicted));
+    var actualNorm = l2norm(new Float32Array(zActual));
+    var predCos = cosine(predNorm, actualNorm);
+
+    // Display
+    predGaugeSection.style.display = "";
+    predCosValue.textContent = predCos.toFixed(4);
+    predCosVerdict.textContent = verdict(predCos);
+    predGaugeFill.style.width = (Math.max(0, predCos) * 100) + "%";
+    if (predCos >= 0.85) predGaugeFill.style.background = "var(--accent)";
+    else if (predCos >= 0.5) predGaugeFill.style.background = "#e6c54d";
+    else predGaugeFill.style.background = "var(--flame)";
+
+    predTiming.textContent =
+      "predict: " + (t1 - t0).toFixed(1) + "ms \u00B7 " +
+      "encode after: " + (t2 - t1).toFixed(1) + "ms \u00B7 " +
+      "total: " + (t2 - t0).toFixed(1) + "ms";
+
+    // Embedding heatmaps
+    predEmbSection.style.display = "";
+    renderHeatmap(document.getElementById("emb-pred"), predNorm);
+    renderHeatmap(document.getElementById("emb-actual"), actualNorm);
+    var err = new Float32Array(predNorm.length);
+    for (var k = 0; k < predNorm.length; k++) err[k] = actualNorm[k] - predNorm[k];
+    renderHeatmap(document.getElementById("emb-error"), err);
+  }
+
+  predBtn.addEventListener("click", runPredict);
+
+  main().catch(function(e) { setStatus("Error: " + (e.message || e), true); });
+</script>
 </body>
 </html>

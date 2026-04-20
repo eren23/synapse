@@ -3949,14 +3949,39 @@ impl WasmCodeWM {
         Ok(WasmCodeWM { model })
     }
 
-    /// Encode a token sequence to a 128-d latent. Accepts i32 for JS ergonomics;
-    /// values must be < vocab_size (662).
+    /// Build from config + encoder-only weights (target encoder for prediction).
+    /// Accepts partial safetensors with only state_encoder.* keys — action encoder
+    /// and predictor are left zeroed. Only `.encode()` is valid on this instance.
+    pub fn create_encoder_only(config_json: &str, weights_bytes: &[u8]) -> Result<WasmCodeWM, JsError> {
+        console_error_panic_hook::set_once();
+        let cfg = CodeWorldModelConfig::from_json_str(config_json)
+            .map_err(|e| JsError::new(&format!("Config error: {e}")))?;
+        let weights = parse_safetensors(weights_bytes)
+            .map_err(|e| JsError::new(&format!("Failed to parse weights: {e:?}")))?;
+        let mut model = CodeWorldModel::from_config(&cfg);
+        let stats = model.load_weights(weights)
+            .map_err(|e| JsError::new(&format!("load_weights failed: {e:?}")))?;
+        // Encoder-only: expect 17 (cls) or 22 (attn) state_encoder tensors.
+        let min_expected = match cfg.pool_mode {
+            PoolMode::Cls => 17,
+            PoolMode::Attn => 22,
+        };
+        if stats.loaded < min_expected {
+            return Err(JsError::new(&format!(
+                "Encoder-only mode expects >= {min_expected} tensors, got {}.", stats.loaded
+            )));
+        }
+        Ok(WasmCodeWM { model })
+    }
+
+    /// Encode a token sequence to a model_dim-d latent. Accepts i32 for JS
+    /// ergonomics; values must be < vocab_size.
     pub fn encode(&self, tokens: &[i32]) -> Vec<f32> {
         let tokens_i64: Vec<i64> = tokens.iter().map(|&t| t as i64).collect();
         self.model.encode(&tokens_i64)
     }
 
-    /// Encode an action vector (length action_dim = 7) to a 128-d latent.
+    /// Encode an action vector (length action_dim) to a model_dim-d latent.
     pub fn encode_action(&self, action: &[f32]) -> Vec<f32> {
         self.model.encode_action(action)
     }
@@ -3966,9 +3991,20 @@ impl WasmCodeWM {
         self.model.predict(z_state, z_action)
     }
 
+    /// Full transition prediction pipeline: encode state tokens + action vector
+    /// → predict next latent. Returns the predicted next-state embedding.
+    pub fn predict_transition(&self, tokens: &[i32], action: &[f32]) -> Vec<f32> {
+        let tokens_i64: Vec<i64> = tokens.iter().map(|&t| t as i64).collect();
+        let z_state = self.model.encode(&tokens_i64);
+        let z_action = self.model.encode_action(action);
+        self.model.predict(&z_state, &z_action)
+    }
+
     pub fn model_dim(&self) -> usize { self.model.config.model_dim }
     pub fn vocab_size(&self) -> usize { self.model.config.vocab_size }
     pub fn max_seq_len(&self) -> usize { self.model.config.max_seq_len }
+    pub fn action_dim(&self) -> usize { self.model.config.action_dim }
+    pub fn encoder_loops(&self) -> usize { self.model.config.encoder_loops }
 
     /// Tokenize Python source via the native AST tokenizer, then encode
     /// → 128-d latent in one JS call. Fully self-contained pipeline.
