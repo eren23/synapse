@@ -60,6 +60,10 @@ const SHADER_SOURCE: &str = concat!(
     "\n",
     include_str!("shaders/gemv_q4.metal"),
     "\n",
+    include_str!("shaders/layernorm_wb.metal"),
+    "\n",
+    include_str!("shaders/attention_bidi.metal"),
+    "\n",
     // Simple utility kernels kept inline
     r#"
 #include <metal_stdlib>
@@ -133,6 +137,8 @@ pub(crate) const KERNEL_NAMES: &[&str] = &[
     "adaln_layer_fused_simd",
     "conv1d_step",
     "gemv_q4",
+    "layernorm_wb",
+    "attention_bidi",
 ];
 
 /// Optional kernels that require specific Metal feature support.
