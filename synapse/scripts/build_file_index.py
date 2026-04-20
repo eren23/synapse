@@ -63,11 +63,11 @@ def main():
             break
         try:
             src = path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             continue
         try:
             toks = tokenize(src, max_len=args.max_len)
-        except Exception:
+        except (SyntaxError, ValueError, RecursionError):
             continue
         if (toks == 612).all():  # all PAD
             continue

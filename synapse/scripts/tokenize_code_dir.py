@@ -48,7 +48,7 @@ def main():
     for i, path in enumerate(py_files):
         try:
             source = path.read_text(encoding="utf-8", errors="replace")
-        except Exception as e:
+        except (OSError, UnicodeDecodeError) as e:
             print(f"  skip {path}: {e}")
             continue
         toks = tokenize(source, max_len=args.max_len)

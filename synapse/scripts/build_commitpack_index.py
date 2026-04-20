@@ -58,7 +58,7 @@ def main():
             continue
         try:
             toks = tokenize(src, max_len=args.max_len)
-        except Exception:
+        except (SyntaxError, ValueError, RecursionError):
             continue
 
         tokens_batch[kept] = toks
