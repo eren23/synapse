@@ -163,7 +163,7 @@ impl HybridModel {
             match layer {
                 HybridLayer::LivConv(l) => l.quantize_for_decode(),
                 HybridLayer::Gqa(l) => l.quantize_for_decode(),
-                HybridLayer::DeltaNet(_) => {} // TODO if needed
+                HybridLayer::DeltaNet(_) => {} // DeltaNet uses recurrent state, not weight matrices amenable to Q4
             }
         }
     }

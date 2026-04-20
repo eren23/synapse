@@ -4,7 +4,7 @@
 //!
 //! ## Image diffusion (UNet-based)
 //! Scaffolding for image generation via Stable Diffusion, SDXL, Flux, etc.
-//! Types compile and are importable but forward methods return `todo!()`.
+//! Types compile and are importable but forward methods are unimplemented.
 //!
 //! ## Diffusion LLM (text)
 //! Non-autoregressive text generation via iterative denoising of a masked
