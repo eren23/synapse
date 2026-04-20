@@ -51,7 +51,11 @@ def main():
         except (OSError, UnicodeDecodeError) as e:
             print(f"  skip {path}: {e}")
             continue
-        toks = tokenize(source, max_len=args.max_len)
+        try:
+            toks = tokenize(source, max_len=args.max_len)
+        except (SyntaxError, ValueError, RecursionError) as e:
+            print(f"  skip {path}: {e}")
+            continue
         tokens_batch[i] = toks
         rel = str(path.relative_to(root))
         filenames.append(rel)

@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
-from typing import Any
 
 import torch
 from safetensors.torch import save_file
