@@ -21,6 +21,7 @@ use crate::ops::fused_ops::{
 };
 use crate::weight_loading::{AlignedBuffer, RawTensor, WeightError};
 
+pub use super::LoadStats;
 use super::vit::{ViTConfig, ViTModel};
 
 /// Configuration for a LeWorldModel.
@@ -1804,14 +1805,6 @@ impl LeWorldModel {
     }
 }
 
-/// Statistics from weight loading.
-#[derive(Debug)]
-pub struct LoadStats {
-    /// Number of tensors successfully loaded.
-    pub loaded: usize,
-    /// Keys that were not recognized.
-    pub skipped: Vec<String>,
-}
 
 #[cfg(test)]
 mod tests {

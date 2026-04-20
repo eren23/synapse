@@ -11,3 +11,12 @@ pub use jepa::{JEPAConfig, JEPAModel};
 pub use lewm::{AdaLNTransformerLayer, LeWMConfig, LeWorldModel};
 pub use vit::{parse_vit_config, parse_vit_config_json, parse_vit_labels, parse_vit_labels_json, ViTConfig, ViTModel, ViTOutput};
 pub use world_model::{LatentState, RealtimeRollout, WorldModel, WorldModelConfig};
+
+/// Statistics from weight loading, shared across vision model implementations.
+#[derive(Debug, Clone)]
+pub struct LoadStats {
+    /// Number of tensors successfully loaded.
+    pub loaded: usize,
+    /// Keys that were not recognized or were skipped.
+    pub skipped: Vec<String>,
+}
