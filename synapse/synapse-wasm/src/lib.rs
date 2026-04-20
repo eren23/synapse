@@ -1450,7 +1450,7 @@ impl RealLeWMInt8 {
     }
 }
 
-// ── Keep the old WasmWorldModel for backward compat ─────────────────
+// ── WasmWorldModel: standalone dynamics predictor (public WASM API) ──
 
 /// A minimal world model dynamics predictor for WASM (demo with random weights).
 #[wasm_bindgen]
@@ -3294,8 +3294,8 @@ impl RealLeWMQ4 {
 
     pub fn encode_image(&self, pixels: &[f32], height: usize, width: usize) -> Vec<f32> {
         let vit_out = self.encode_image_inner(pixels, height, width);
-        // Slim models: project 192d encoder output to latent space (96d)
-        // Baseline: predict_next handles projection (backward compat)
+        // Slim models: project 192d encoder output to latent space (96d).
+        // Baseline models skip this — predict_next handles projection internally.
         if !self.input_proj_weight.is_empty() {
             RealLeWM::projection_forward(&vit_out,
                 &self.projector_layers, &self.projector_bn_weight, &self.projector_bn_bias,

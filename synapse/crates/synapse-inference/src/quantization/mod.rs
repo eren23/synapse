@@ -3,7 +3,7 @@ pub mod primitives;
 pub mod ssm;
 pub mod vision;
 
-// Re-export at the quantization:: level for backward compatibility
+// Flatten sub-modules into the `quantization::` namespace (public API surface).
 pub use primitives::*;
 pub use lm::*;
 pub use ssm::*;
