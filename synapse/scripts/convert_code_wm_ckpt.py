@@ -17,10 +17,13 @@ Usage:
         --out-dir synapse/models/code_wm
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import torch
 from safetensors.torch import save_file
@@ -42,7 +45,7 @@ DROP_PREFIXES = (
 )
 
 
-def convert(input_path: str, out_weights: str, out_config: str) -> dict:
+def convert(input_path: str, out_weights: str, out_config: str) -> dict[str, Any]:
     print(f"Loading {input_path} ...")
     ckpt = torch.load(input_path, map_location="cpu", weights_only=False)
     if "model_state_dict" in ckpt:

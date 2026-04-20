@@ -19,11 +19,14 @@ Usage:
         --layer 0 --max-outputs 4
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -50,7 +53,7 @@ class HardwiredAdaLNLayer(Elaboratable):
     FRAC = 8
     SCALE = 1 << 8
 
-    def __init__(self, layer_data: dict, hidden=192, seq_len=3,
+    def __init__(self, layer_data: dict[str, Any], hidden=192, seq_len=3,
                  max_adaln_out=None, max_qkv_out=None,
                  max_mlp_up_out=None, max_mlp_down_out=None):
         self.hidden = hidden
@@ -118,7 +121,7 @@ class HardwiredAdaLNLayer(Elaboratable):
         return m
 
 
-def analyze_full_layer(layer_data: dict, layer_idx: int):
+def analyze_full_layer(layer_data: dict[str, Any], layer_idx: int):
     """Analyze the full layer architecture and report stats."""
     print(f"\n{'='*70}")
     print(f"Full adaLN Layer {layer_idx} Architecture Analysis")
@@ -230,7 +233,7 @@ def analyze_full_layer(layer_data: dict, layer_idx: int):
     return total_luts
 
 
-def generate_adaln_proof(layer_data: dict, layer_idx: int, output_dir: Path,
+def generate_adaln_proof(layer_data: dict[str, Any], layer_idx: int, output_dir: Path,
                           max_outputs: int = 4):
     """Generate RTL for the adaln_linear component as a standalone proof."""
     print(f"\nGenerating RTL proof-of-concept (adaln_linear, top {max_outputs} outputs)...")

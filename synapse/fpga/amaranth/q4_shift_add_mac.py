@@ -17,6 +17,8 @@ Architecture:
     1 output x 32-bit accumulator
 """
 
+from __future__ import annotations
+
 from amaranth.hdl import *
 
 
@@ -89,7 +91,7 @@ class Q4ShiftAddMAC(Elaboratable):
         The accumulated dot product (integer, before scale multiplication).
     """
 
-    def __init__(self, weights: list, input_width: int = 16):
+    def __init__(self, weights: list[int], input_width: int = 16):
         assert len(weights) == 32, f"Q4 block must have 32 weights, got {len(weights)}"
         assert all(-8 <= w <= 7 for w in weights), f"Weights must be in [-8, 7]"
         self.weights = weights

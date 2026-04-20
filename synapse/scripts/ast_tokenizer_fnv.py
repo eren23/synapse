@@ -12,6 +12,8 @@ Usage:
 Note: this is for the BFS variant only (no OPEN/CLOSE brackets).
 """
 
+from __future__ import annotations
+
 import ast
 from typing import Optional
 
@@ -70,7 +72,7 @@ def ident_token(name: str) -> int:
     return IDENT_OFFSET + (fnv1a_32(name) % IDENT_BUCKETS)
 
 
-def _depths(tree: ast.AST) -> dict:
+def _depths(tree: ast.AST) -> dict[int, int]:
     depths = {id(tree): 0}
     def visit(n, d):
         for c in ast.iter_child_nodes(n):

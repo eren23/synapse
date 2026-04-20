@@ -11,6 +11,8 @@ Usage:
         --golden . --name golden_L0_adaln_linear_top8
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os
@@ -19,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -44,7 +47,7 @@ def flatten_verilog(verilog_path: Path, flat_path: Path):
     print(f"  Flattened -> {flat_path.name}")
 
 
-def generate_verilator_testbench(config: dict, inputs_path: Path,
+def generate_verilator_testbench(config: dict[str, int], inputs_path: Path,
                                   outputs_path: Path, tb_path: Path):
     """Generate a C++ testbench for Verilator."""
     n_in = config['in_features']

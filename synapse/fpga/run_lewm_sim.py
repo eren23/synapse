@@ -19,12 +19,15 @@ Usage:
     python run_lewm_sim.py --bin web/lewm-compress-demo/lewm-q4-pred.bin --rollout 20
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import math
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -131,9 +134,9 @@ def q4_forward_shift_add(q4l: Q4Linear, x: np.ndarray) -> np.ndarray:
 # Full predictor layer forward
 # ---------------------------------------------------------------------------
 
-def adaln_layer_forward(layer: dict, seq: np.ndarray, conditioning: np.ndarray,
-                         config: dict, use_shift_add: bool = True,
-                         multiply_count: dict = None):
+def adaln_layer_forward(layer: dict[str, Any], seq: np.ndarray, conditioning: np.ndarray,
+                         config: dict[str, Any], use_shift_add: bool = True,
+                         multiply_count: dict[str, int] | None = None):
     """Run one adaLN transformer layer.
 
     Args:
@@ -260,8 +263,8 @@ def adaln_layer_forward(layer: dict, seq: np.ndarray, conditioning: np.ndarray,
 # Full predict_next
 # ---------------------------------------------------------------------------
 
-def predict_next(model: dict, z_t: np.ndarray, action: np.ndarray,
-                  use_shift_add: bool = True, multiply_count: dict = None):
+def predict_next(model: dict[str, Any], z_t: np.ndarray, action: np.ndarray,
+                  use_shift_add: bool = True, multiply_count: dict[str, int] | None = None):
     """Full LEWM predict_next using Q4 predictor layers.
 
     Args:
@@ -315,8 +318,8 @@ def predict_next(model: dict, z_t: np.ndarray, action: np.ndarray,
     return target
 
 
-def rollout(model: dict, z_start: np.ndarray, actions: list,
-             use_shift_add: bool = True, multiply_count: dict = None):
+def rollout(model: dict[str, Any], z_start: np.ndarray, actions: list[np.ndarray],
+             use_shift_add: bool = True, multiply_count: dict[str, int] | None = None):
     """Multi-step rollout."""
     states = []
     z = z_start.copy()
