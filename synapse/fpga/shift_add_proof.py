@@ -14,6 +14,8 @@ Usage:
     python shift_add_proof.py [--bin path/to/lewm-q4-pred.bin] [--layer 0]
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import struct
@@ -21,6 +23,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -56,7 +59,7 @@ class Q4Block:
 class Q4Linear:
     out_features: int
     in_features: int
-    blocks: list  # list of Q4Block, row-major [out * blocks_per_row]
+    blocks: list[Q4Block]  # row-major [out * blocks_per_row]
 
     @property
     def blocks_per_row(self) -> int:
@@ -251,7 +254,7 @@ SHIFT_ADD_TABLE = {
 }
 
 
-def count_ops(w: int) -> dict:
+def count_ops(w: int) -> dict[str, int]:
     """Count hardware operations for a given weight value."""
     ops = SHIFT_ADD_TABLE[w]
     n_shifts = sum(1 for op in ops if op[0] in ("shift", "neg_shift"))
@@ -322,7 +325,7 @@ class LQ40Reader:
 
         return Q4Linear(out_features=out_features, in_features=in_features, blocks=blocks)
 
-    def read_q4_layer(self) -> dict:
+    def read_q4_layer(self) -> dict[str, Any]:
         """Read a full QuantizedQ4AdaLNLayer."""
         layer = {}
         layer['adaln_linear'] = self.read_q4_linear()
@@ -340,7 +343,7 @@ class LQ40Reader:
         layer['mlp_down_bias'] = self.read_f32_vec()
         return layer
 
-    def read_projection_head(self) -> list:
+    def read_projection_head(self) -> list[tuple[np.ndarray, np.ndarray]]:
         """Read a ProjectionHead: [u32 num_layers] then (weight_vec, bias_vec) pairs."""
         num_layers = self.read_u32()
         layers = []
@@ -350,7 +353,7 @@ class LQ40Reader:
             layers.append((weight, bias))
         return layers
 
-    def parse_q4_pred(self) -> dict:
+    def parse_q4_pred(self) -> dict[str, Any]:
         """Parse a q4-pred mode LQ40 file. Returns config + predictor layers."""
         # Magic
         magic = self.read_bytes(4)

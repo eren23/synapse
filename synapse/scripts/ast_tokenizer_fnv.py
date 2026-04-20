@@ -12,6 +12,8 @@ Usage:
 Note: this is for the BFS variant only (no OPEN/CLOSE brackets).
 """
 
+from __future__ import annotations
+
 import ast
 
 import numpy as np

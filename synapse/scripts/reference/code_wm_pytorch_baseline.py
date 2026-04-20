@@ -20,6 +20,8 @@ code_wm.py as <src>/code_wm/code_wm.py (matching the directory layout the
 model expects for its relative imports).
 """
 
+from __future__ import annotations
+
 import argparse
 import importlib.util
 import os
@@ -44,7 +46,7 @@ def load_code_wm_module(code_wm_src: str):
     return mod
 
 
-def build_model(code_wm_mod, ckpt_config: dict[str, Any]):
+def build_model(code_wm_mod, ckpt_config: dict[str, int | float]):
     """Instantiate CodeWorldModel with params from the checkpoint's config."""
     m = code_wm_mod.CodeWorldModel(
         vocab_size=ckpt_config["vocab_size"],

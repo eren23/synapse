@@ -10,10 +10,13 @@ Usage:
         --layer 0 --matrix adaln_linear --max-outputs 8 --num-vectors 10
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -101,7 +104,7 @@ def generate_vectors(q4_linear: Q4Linear, max_outputs: int, num_vectors: int,
     }
 
 
-def save_vectors(vectors: dict, output_dir: Path, name: str):
+def save_vectors(vectors: dict[str, Any], output_dir: Path, name: str):
     """Save vectors as numpy files for Verilator consumption."""
     output_dir.mkdir(parents=True, exist_ok=True)
 

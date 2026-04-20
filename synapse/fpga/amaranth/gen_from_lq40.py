@@ -16,6 +16,8 @@ Usage:
         --layer 0 --matrix adaln_linear --output ../gen/
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -36,7 +38,7 @@ class Q4ShiftAddBlock(Elaboratable):
     Scale multiplication is handled externally.
     """
 
-    def __init__(self, weights: list, input_width: int = 16):
+    def __init__(self, weights: list[int], input_width: int = 16):
         assert len(weights) == 32
         self.weights = weights
         self.input_width = input_width
