@@ -98,3 +98,8 @@ coverage/
 .cache/
 tmp/
 .superpowers/
+# Demo weights we keep locally but don't ship via LFS (regenerable).
+.demo/unixcoder-fp32/
+.demo/unixcoder-fp16/
+.demo/cdt_paper.safetensors
+.demo/cdt_paper_fp16.safetensors
