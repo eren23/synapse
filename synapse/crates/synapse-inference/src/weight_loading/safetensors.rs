@@ -67,10 +67,102 @@ pub fn load_safetensors_sharded(
 ///
 /// Memory-maps the file for zero-copy access to tensor data.
 /// Tensor data is loaded directly into 64-byte-aligned buffers in a single pass.
+/// If the file contains Q4_0-packed tensors (written by
+/// `scripts/export_unixcoder_reference.py to-q4`), they are dequantized
+/// into fp32 under the original tensor name before returning.
 pub fn load_safetensors(path: &Path) -> Result<HashMap<String, RawTensor>, WeightError> {
     let file = File::open(path).map_err(WeightError::Io)?;
     let mmap = unsafe { Mmap::map(&file) }.map_err(WeightError::Io)?;
-    parse_safetensors(&mmap)
+    let mut tensors = parse_safetensors(&mmap)?;
+    expand_q4_tensors(&mut tensors)?;
+    Ok(tensors)
+}
+
+/// Rewrite Q4_0-packed triples `(<name>.q4_nibbles, <name>.q4_scales,
+/// <name>.q4_orig_cols)` into a single fp32 `RawTensor` under `<name>`.
+///
+/// The on-disk layout (see `scripts/export_unixcoder_reference.py to-q4`):
+///   - `q4_nibbles` : `U8 [rows, blocks_per_row, 16]` — pair-packed
+///     signed 4-bit values, offset by +8 (matches `Q4Block::nibbles`).
+///   - `q4_scales`  : `F16 [rows, blocks_per_row]` — one scale per block,
+///     same as `Q4Block::scale` but fp16 for disk.
+///   - `q4_orig_cols` : `I64 [1]` — the original (unpadded) column count.
+///
+/// Dequantization is `(nibble - 8) * scale`. No Q4Linear struct is
+/// materialized — we go straight to a fp32 `AlignedBuffer` so the caller
+/// can load it into whatever RoBERTa/CDT struct expects f32 weights.
+pub fn expand_q4_tensors(
+    tensors: &mut HashMap<String, RawTensor>,
+) -> Result<(), WeightError> {
+    let q4_bases: Vec<String> = tensors
+        .keys()
+        .filter_map(|k| k.strip_suffix(".q4_nibbles").map(|s| s.to_string()))
+        .collect();
+
+    for base in q4_bases {
+        let nibbles = tensors
+            .remove(&format!("{base}.q4_nibbles"))
+            .ok_or_else(|| WeightError::InvalidFormat(format!("missing {base}.q4_nibbles")))?;
+        let scales = tensors
+            .remove(&format!("{base}.q4_scales"))
+            .ok_or_else(|| WeightError::InvalidFormat(format!("missing {base}.q4_scales")))?;
+        let orig_cols = tensors
+            .remove(&format!("{base}.q4_orig_cols"))
+            .ok_or_else(|| WeightError::InvalidFormat(format!("missing {base}.q4_orig_cols")))?;
+
+        // `q4_orig_cols` holds a single i64 (cast to f32 by the loader).
+        if orig_cols.data.is_empty() {
+            return Err(WeightError::InvalidFormat(format!(
+                "{base}.q4_orig_cols is empty"
+            )));
+        }
+        let cols = orig_cols.data[0] as usize;
+
+        // `q4_nibbles` shape is `[rows, blocks_per_row, 16]`; after the
+        // loader cast each byte sits in one f32 slot so len = rows * bpr * 16.
+        if nibbles.shape.len() != 3 || nibbles.shape[2] != 16 {
+            return Err(WeightError::ShapeMismatch(format!(
+                "{base}.q4_nibbles expected [rows, bpr, 16], got {:?}",
+                nibbles.shape
+            )));
+        }
+        let rows = nibbles.shape[0];
+        let bpr = nibbles.shape[1];
+        let padded_cols = bpr * 32;
+        if cols > padded_cols {
+            return Err(WeightError::ShapeMismatch(format!(
+                "{base}: orig_cols {cols} > padded_cols {padded_cols}"
+            )));
+        }
+        if scales.shape != vec![rows, bpr] {
+            return Err(WeightError::ShapeMismatch(format!(
+                "{base}.q4_scales expected [{rows}, {bpr}], got {:?}",
+                scales.shape
+            )));
+        }
+
+        let mut out = AlignedBuffer::new_zeroed(rows * cols);
+        for row in 0..rows {
+            for b in 0..bpr {
+                let scale = scales.data[row * bpr + b];
+                for ni in 0..16 {
+                    let byte_f = nibbles.data[(row * bpr + b) * 16 + ni];
+                    let byte = byte_f as u8;
+                    let v0 = ((byte & 0x0F) as i8 - 8) as f32 * scale;
+                    let v1 = ((byte >> 4) as i8 - 8) as f32 * scale;
+                    let col0 = b * 32 + 2 * ni;
+                    let col1 = col0 + 1;
+                    if col0 < cols { out[row * cols + col0] = v0; }
+                    if col1 < cols { out[row * cols + col1] = v1; }
+                }
+            }
+        }
+        tensors.insert(
+            base,
+            RawTensor { data: out, shape: vec![rows, cols] },
+        );
+    }
+    Ok(())
 }
 
 /// Parse safetensors from a byte slice into aligned f32 buffers.
@@ -157,6 +249,41 @@ pub fn parse_safetensors(data: &[u8]) -> Result<HashMap<String, RawTensor>, Weig
                 for (i, chunk) in tensor_bytes.chunks_exact(2).enumerate() {
                     let bits = u16::from_le_bytes(chunk.try_into().unwrap());
                     buf[i] = bf16_bits_to_f32(bits);
+                }
+                buf
+            }
+            // Index-style buffers (token ids, attention masks, registered
+            // `position_ids`) occasionally ship alongside model weights.
+            // Cast to f32; the receiving model is responsible for rounding
+            // back to an integer if it wants. Vocab sizes up to 2^24 are
+            // exactly representable in f32, so UniXcoder's 51416 vocab is
+            // lossless. Anything larger would need a dedicated i64 path.
+            "I64" => {
+                let count = tensor_bytes.len() / 8;
+                let mut buf = AlignedBuffer::new_zeroed(count);
+                for (i, chunk) in tensor_bytes.chunks_exact(8).enumerate() {
+                    let v = i64::from_le_bytes(chunk.try_into().unwrap());
+                    buf[i] = v as f32;
+                }
+                buf
+            }
+            "I32" => {
+                let count = tensor_bytes.len() / 4;
+                let mut buf = AlignedBuffer::new_zeroed(count);
+                for (i, chunk) in tensor_bytes.chunks_exact(4).enumerate() {
+                    let v = i32::from_le_bytes(chunk.try_into().unwrap());
+                    buf[i] = v as f32;
+                }
+                buf
+            }
+            // U8 is used by the Q4_0 on-disk format to carry packed
+            // nibble bytes; expand_q4_tensors dequantizes them into f32
+            // shortly after parse_safetensors returns. Non-Q4 callers
+            // that pass U8 tensors will just see the raw byte as f32.
+            "U8" => {
+                let mut buf = AlignedBuffer::new_zeroed(tensor_bytes.len());
+                for (i, &b) in tensor_bytes.iter().enumerate() {
+                    buf[i] = b as f32;
                 }
                 buf
             }

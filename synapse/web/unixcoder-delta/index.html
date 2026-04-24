@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CodeDeltaTok in the browser</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    max-width: 920px; margin: 2rem auto; padding: 0 1rem;
+    background: #0b0b10; color: #d3d3dc;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: .5rem; }
+  p  { line-height: 1.45; }
+  textarea {
+    width: 100%; height: 9rem; resize: vertical;
+    background: #15161d; color: #eaeaf2;
+    border: 1px solid #333; border-radius: 4px;
+    padding: .6rem; font-family: inherit; font-size: .9rem;
+  }
+  input[type=file] { margin: .25rem 0 .75rem 0; }
+  button {
+    background: #3c6aff; color: white; border: 0;
+    padding: .6rem 1rem; border-radius: 4px; cursor: pointer;
+    font-family: inherit; font-weight: 600;
+  }
+  button:disabled { background: #333; cursor: not-allowed; }
+  pre {
+    background: #15161d; border: 1px solid #333; border-radius: 4px;
+    padding: .6rem; overflow-x: auto; font-size: .8rem;
+  }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .ok { color: #58d68d; } .err { color: #e74c3c; } .warn { color: #f1c40f; }
+</style>
+</head>
+<body>
+<h1>CodeDeltaTok&nbsp;·&nbsp;WASM demo</h1>
+
+<p>
+  Loads <code>microsoft/unixcoder-base</code> + a trained CodeDeltaTok head
+  into the browser as pure-Rust WASM, then computes the 768-dim delta token
+  for a (before, after) code pair on-device. No server-side inference.
+</p>
+
+<p class="warn">
+  Note: UniXcoder is 480 MB in fp32; point the “UniXcoder safetensors” picker
+  at the file shipped by <code>huggingface-cli download microsoft/unixcoder-base</code>.
+  The CDT head is ~300 MB — export with
+  <code>python scripts/export_unixcoder_reference.py convert-cdt ...</code>
+  before loading.
+</p>
+
+<label>UniXcoder safetensors (<code>model.safetensors</code>):</label>
+<input id="unixcoderFile" type="file" accept=".safetensors">
+
+<label>CodeDeltaTok safetensors (<code>cdt_paper.safetensors</code>):</label>
+<input id="cdtFile" type="file" accept=".safetensors">
+
+<label>RoBERTa <code>vocab.json</code> (optional; real BPE matches HF ids):</label>
+<input id="vocabFile" type="file" accept=".json">
+
+<label>RoBERTa <code>merges.txt</code> (optional):</label>
+<input id="mergesFile" type="file" accept=".txt">
+
+<button id="loadBtn" disabled>Load models</button>
+
+<div class="row" style="margin-top: 1rem;">
+  <div>
+    <label>before.py</label>
+    <textarea id="before">def add(a, b):
+    return a + b
+</textarea>
+  </div>
+  <div>
+    <label>after.py</label>
+    <textarea id="after">def add(a, b):
+    # sum two numbers
+    return a + b
+</textarea>
+  </div>
+</div>
+
+<button id="runBtn" disabled style="margin-top: .75rem;">Compute delta token</button>
+
+<pre id="out">Idle.</pre>
+
+<script type="module">
+// Main-thread UI; all inference runs in worker.js so the 13s CLS call
+// doesn't freeze the page.
+import { makeBpeTokenizer } from './roberta_bpe.js';
+
+const PAD = 1, BOS = 0, EOS = 2, MAX_LEN = 128;
+
+const log = (s, cls = '') => {
+  const out = document.getElementById('out');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = s;
+  out.appendChild(line);
+  out.scrollTop = out.scrollHeight;
+};
+
+let tokenizer = null;     // real BPE once vocab/merges are loaded
+let runEnabled = false;
+
+const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+
+function mockEncode(text) {
+  // Fallback when no vocab.json/merges.txt is provided: hash characters.
+  // Keeps the demo functional; numbers won't match HF.
+  const out = [];
+  for (const ch of text) out.push(100 + (ch.charCodeAt(0) % 40000));
+  return out;
+}
+
+function encodeRoberta(text, maxLen) {
+  const body = (tokenizer ? tokenizer.encode(text) : mockEncode(text));
+  const reserve = 2;
+  const take = body.slice(0, Math.max(0, maxLen - reserve));
+  const ids = [BOS, ...take, EOS];
+  const realLen = ids.length;
+  while (ids.length < maxLen) ids.push(PAD);
+  const mask = Array.from({ length: maxLen }, (_, i) => (i < realLen ? 1 : 0));
+  return { ids: new Int32Array(ids), mask: new Int32Array(mask) };
+}
+
+async function readBytes(input) {
+  const f = input.files?.[0];
+  if (!f) return null;
+  return new Uint8Array(await f.arrayBuffer());
+}
+
+async function readText(input) {
+  const f = input.files?.[0];
+  if (!f) return null;
+  return await f.text();
+}
+
+function cosine(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na  += a[i] * a[i];
+    nb  += b[i] * b[i];
+  }
+  return dot / (Math.sqrt(na) * Math.sqrt(nb) + 1e-12);
+}
+
+worker.onerror = (e) => log(`worker error: ${e.message}`, 'err');
+worker.onmessage = (ev) => {
+  const m = ev.data;
+  if (m.type === 'log') {
+    log(`[worker.${m.level}] ${m.text}`, m.level === 'error' ? 'err' : 'warn');
+  } else if (m.type === 'error') {
+    log(`worker: ${m.message}`, 'err');
+  } else if (m.type === 'loaded') {
+    log(`  ✓ UniXcoder loaded  (hidden_size=${m.hiddenSize})`, 'ok');
+    if (m.cdtD) {
+      log(`  ✓ CodeDeltaTok loaded  (K=${m.cdtK}, D=${m.cdtD})`, 'ok');
+    } else {
+      log(`  (no CDT head loaded — CLS cosine only)`, 'warn');
+    }
+    runEnabled = true;
+    document.getElementById('runBtn').disabled = false;
+  } else if (m.type === 'encoded') {
+    log(`UniXcoder CLS: 2 snippets in ${m.timingMs.cls.toFixed(1)} ms`);
+    log(`  cos(h_b, h_a) = ${cosine(m.hb, m.ha).toFixed(4)}`);
+    if (m.delta && m.recon) {
+      const dNorm = Math.sqrt(m.delta.reduce((s, x) => s + x * x, 0));
+      log(
+        `CDT encode+decode in ${m.timingMs.cdt.toFixed(1)} ms  ·  ‖d‖=${dNorm.toFixed(2)}  ·  recon cos=${cosine(m.recon, m.ha).toFixed(4)}`,
+        'ok',
+      );
+    }
+  }
+};
+
+(async () => {
+  log('UI ready. Select the two safetensors files (+ optional vocab.json / merges.txt) above, then click Load.', 'ok');
+
+  const ufile = document.getElementById('unixcoderFile');
+  const cfile = document.getElementById('cdtFile');
+  const vfile = document.getElementById('vocabFile');
+  const mfile = document.getElementById('mergesFile');
+  const loadBtn = document.getElementById('loadBtn');
+  const runBtn  = document.getElementById('runBtn');
+
+  const maybeEnable = () => { loadBtn.disabled = !(ufile.files?.length); };
+  ufile.onchange = cfile.onchange = vfile.onchange = mfile.onchange = maybeEnable;
+
+  loadBtn.onclick = async () => {
+    try {
+      if (vfile.files?.length && mfile.files?.length) {
+        log(`Loading RoBERTa BPE tokenizer…`);
+        const vocabText  = await readText(vfile);
+        const mergesText = await readText(mfile);
+        tokenizer = makeBpeTokenizer({ vocabJson: vocabText, mergesTxt: mergesText });
+        log(`  ✓ BPE tokenizer ready  (vocab size=${tokenizer.vocabSize})`, 'ok');
+      } else {
+        log(`  (no vocab/merges provided — using mock tokenizer; numbers won't match HF)`, 'warn');
+      }
+
+      log(`Reading UniXcoder bytes…`);
+      const ub = await readBytes(ufile);
+
+      const hasCdt = !!cfile.files?.length;
+      if (hasCdt) log(`Reading CDT bytes…`);
+      const cb = hasCdt ? await readBytes(cfile) : null;
+
+      worker.postMessage(
+        { type: 'load', unixcoderBytes: ub, cdtBytes: cb },
+        // Transfer ownership of the big ArrayBuffers.
+        [ub.buffer, ...(cb ? [cb.buffer] : [])],
+      );
+    } catch (e) {
+      log(`Load failed: ${e}`, 'err');
+    }
+  };
+
+  runBtn.onclick = () => {
+    if (!runEnabled) return;
+    const b = document.getElementById('before').value;
+    const a = document.getElementById('after').value;
+    const tb = encodeRoberta(b, MAX_LEN);
+    const ta = encodeRoberta(a, MAX_LEN);
+    worker.postMessage(
+      {
+        type: 'encode',
+        idsBefore:  tb.ids,  maskBefore: tb.mask,
+        idsAfter:   ta.ids,  maskAfter:  ta.mask,
+      },
+      [tb.ids.buffer, tb.mask.buffer, ta.ids.buffer, ta.mask.buffer],
+    );
+  };
+})();
+</script>
+</body>
+</html>

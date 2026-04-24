@@ -149,6 +149,61 @@ impl Q4Linear {
         self.forward_scalar(x, m)
     }
 
+    /// Batched pure-Rust Q4 forward that dequantizes one weight row at a
+    /// time and reuses it across all `m` input rows. For `m=1` the cost is
+    /// the same as [`Q4Linear::forward_scalar`]; for `m >> 1` (encoder
+    /// batches, seq-major inputs) this is the hot path because it avoids
+    /// re-walking the nibble blocks for every row of `x`.
+    ///
+    /// Complexity: `O(N * M * K)` flops like fp32, plus `O(N * padded_k)`
+    /// dequant writes (amortized across `M`). Memory: a single
+    /// `padded_k`-element scratch buffer, not a full dequantized copy of
+    /// the weight matrix.
+    pub fn forward_batched(&self, x: &[f32], m: usize) -> Vec<f32> {
+        let k = self.in_features;
+        let n = self.out_features;
+        if m == 0 || k == 0 || n == 0 { return vec![0.0f32; m * n]; }
+        let padded_k = (k + 31) / 32 * 32;
+        let blocks_per_row = padded_k / 32;
+
+        let mut out = vec![0.0f32; m * n];
+        let mut deq_row = vec![0.0f32; padded_k];
+
+        for j in 0..n {
+            for b in 0..blocks_per_row {
+                let block = &self.blocks[j * blocks_per_row + b];
+                let scale = block.scale;
+                let off = b * 32;
+                for ni in 0..16 {
+                    let byte = block.nibbles[ni];
+                    deq_row[off + 2 * ni]     = ((byte & 0x0F) as i8 - 8) as f32 * scale;
+                    deq_row[off + 2 * ni + 1] = ((byte >> 4) as i8 - 8) as f32 * scale;
+                }
+            }
+            for mi in 0..m {
+                let row = &x[mi * k..(mi + 1) * k];
+                let mut sum = 0.0f32;
+                // Manual 4-way unroll so the autovectorizer has something
+                // to chew on; the scalar fallback existed for correctness
+                // only.
+                let mut p = 0;
+                while p + 4 <= k {
+                    sum += row[p]     * deq_row[p]
+                         + row[p + 1] * deq_row[p + 1]
+                         + row[p + 2] * deq_row[p + 2]
+                         + row[p + 3] * deq_row[p + 3];
+                    p += 4;
+                }
+                while p < k {
+                    sum += row[p] * deq_row[p];
+                    p += 1;
+                }
+                out[mi * n + j] = sum;
+            }
+        }
+        out
+    }
+
     /// Pure-Rust scalar fallback for Q4 forward pass.
     #[allow(dead_code)] // available for benchmarking or non-Zig targets
     fn forward_scalar(&self, x: &[f32], m: usize) -> Vec<f32> {

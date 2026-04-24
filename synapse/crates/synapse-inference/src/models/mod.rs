@@ -1,5 +1,6 @@
 pub mod lm;
 pub mod ssm;
+pub mod text_encoder;
 pub mod traits;
 pub mod vision;
 
@@ -8,6 +9,13 @@ pub use lm::{CausalLM, DecoderLayer, LoadResult, ModelBuilder, ModelOutput};
 
 // Re-export traits at models:: level
 pub use traits::{Model, ModelState};
+
+// Re-export text-encoder types at models:: level.
+pub use text_encoder::{
+    parse_roberta_config, unixcoder_base, CodeDeltaTokConfig, CodeDeltaTokHead,
+    DeltaTokBlock, Q4CodeDeltaTokHead, Q4DeltaTokBlock, Q4RoBERTaEncoder,
+    Q4RoBERTaLayer, RoBERTaConfig, RoBERTaEmbeddings, RoBERTaEncoder, RoBERTaLayer,
+};
 
 // Re-export vision types at models:: level
 pub use vision::{

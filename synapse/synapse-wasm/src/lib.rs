@@ -4027,3 +4027,91 @@ pub fn tokenize_python(source: &str, max_len: usize) -> Vec<u16> {
     synapse_code_tokenizer::tokenize(source, max_len)
 }
 
+
+// ── UniXcoder + CodeDeltaTok ──────────────────────────────────────────
+//
+// The codewm3 paper's frozen-backbone delta tokenizer. Exposed here so
+// the WASM embeddable widget can compute a 768-dim delta token for a
+// (before, after) code pair directly in the browser.
+
+#[wasm_bindgen]
+pub struct WasmUnixcoder {
+    model: synapse_inference::models::text_encoder::RoBERTaEncoder,
+}
+
+#[wasm_bindgen]
+impl WasmUnixcoder {
+    /// Load UniXcoder from the HF safetensors bytes. Always uses the
+    /// `microsoft/unixcoder-base` config so we don't need to ship JSON.
+    #[wasm_bindgen(constructor)]
+    pub fn load_from_bytes(weights_bytes: &[u8]) -> Result<WasmUnixcoder, JsError> {
+        console_error_panic_hook::set_once();
+        use synapse_inference::models::text_encoder::{unixcoder_base, RoBERTaEncoder};
+        use synapse_inference::weight_loading::{
+            expand_q4_tensors, parse_safetensors, WeightMapper,
+        };
+
+        let mut tensors = parse_safetensors(weights_bytes)
+            .map_err(|e| JsError::new(&format!("safetensors parse: {e}")))?;
+        expand_q4_tensors(&mut tensors)
+            .map_err(|e| JsError::new(&format!("q4 expand: {e}")))?;
+        let mut model = RoBERTaEncoder::from_config(unixcoder_base());
+        model
+            .load_weights(tensors, &WeightMapper::unixcoder())
+            .map_err(|e| JsError::new(&format!("load_weights: {e}")))?;
+        Ok(WasmUnixcoder { model })
+    }
+
+    /// Compute the CLS feature for a pre-tokenized sequence. `input_ids`
+    /// and `attention_mask` must have the same length; the caller is
+    /// responsible for RoBERTa's `<s> ... </s> <pad>*` framing.
+    pub fn cls_feature(&self, input_ids: &[i32], attention_mask: &[i32]) -> Vec<f32> {
+        let ids: Vec<i64> = input_ids.iter().map(|&x| x as i64).collect();
+        let mask: Vec<i64> = attention_mask.iter().map(|&x| x as i64).collect();
+        self.model.cls_feature(&ids, &mask)
+    }
+
+    pub fn hidden_size(&self) -> usize { self.model.config.hidden_size }
+}
+
+#[wasm_bindgen]
+pub struct WasmCodeDeltaTok {
+    head: synapse_inference::models::text_encoder::CodeDeltaTokHead,
+}
+
+#[wasm_bindgen]
+impl WasmCodeDeltaTok {
+    /// Load a converted CodeDeltaTok checkpoint (as produced by
+    /// `scripts/export_unixcoder_reference.py convert-cdt`).
+    #[wasm_bindgen(constructor)]
+    pub fn load_from_bytes(weights_bytes: &[u8]) -> Result<WasmCodeDeltaTok, JsError> {
+        console_error_panic_hook::set_once();
+        use synapse_inference::models::text_encoder::{CodeDeltaTokConfig, CodeDeltaTokHead};
+        use synapse_inference::weight_loading::{
+            expand_q4_tensors, parse_safetensors, WeightMapper,
+        };
+
+        let mut tensors = parse_safetensors(weights_bytes)
+            .map_err(|e| JsError::new(&format!("safetensors parse: {e}")))?;
+        expand_q4_tensors(&mut tensors)
+            .map_err(|e| JsError::new(&format!("q4 expand: {e}")))?;
+        let mut head = CodeDeltaTokHead::from_config(CodeDeltaTokConfig::paper_default());
+        head
+            .load_weights(tensors, &WeightMapper::code_deltatok())
+            .map_err(|e| JsError::new(&format!("load_weights: {e}")))?;
+        Ok(WasmCodeDeltaTok { head })
+    }
+
+    /// Compress `(h_b, h_a)` into `K × D` delta-token values (flat).
+    pub fn encode(&self, h_b: &[f32], h_a: &[f32]) -> Vec<f32> {
+        self.head.encode(h_b, h_a)
+    }
+
+    /// Reconstruct the after-state features from a delta token + before.
+    pub fn decode(&self, delta: &[f32], h_b: &[f32]) -> Vec<f32> {
+        self.head.decode(delta, h_b)
+    }
+
+    pub fn feature_dim(&self) -> usize { self.head.config.feature_dim }
+    pub fn num_delta_tokens(&self) -> usize { self.head.config.num_delta_tokens }
+}

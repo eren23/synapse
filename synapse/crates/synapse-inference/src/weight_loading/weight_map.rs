@@ -118,6 +118,7 @@ impl WeightMapper {
             "vit" => Ok(Self::vit()),
             "clip" => Ok(Self::clip()),
             "dinov2" => Ok(Self::dinov2()),
+            "roberta" | "unixcoder" => Ok(Self::unixcoder()),
             "mamba" | "mamba2" => Err(WeightError::InvalidFormat(
                 "Mamba uses direct weight loading, not WeightMapper. Use MambaModel::from_weights().".into(),
             )),
@@ -562,6 +563,151 @@ impl WeightMapper {
             rule("classifier.weight", "classifier.weight"),
             rule("classifier.bias", "classifier.bias"),
         ])
+    }
+
+    /// Create a mapper for HuggingFace RoBERTa / UniXcoder
+    /// (`microsoft/unixcoder-base`) weight names.
+    ///
+    /// The raw UniXcoder `model.safetensors` does **not** prefix tensors
+    /// with `roberta.` (it was saved from the base `RobertaModel` directly,
+    /// so keys look like `embeddings.word_embeddings.weight`). Downstream
+    /// finetunes often do add the `roberta.` prefix when they wrap it in
+    /// another head. We emit rules for both prefixes; the non-matching set
+    /// is simply inert and its keys don't exist in either file.
+    ///
+    /// The pooler (`pooler.dense.*`) and the registered buffer
+    /// `embeddings.position_ids` are intentionally unmapped — the paper
+    /// uses the raw CLS feature and position ids are reconstructed on the
+    /// fly from the attention mask.
+    pub fn unixcoder() -> Self {
+        let mut rules: Vec<MappingRule> = Vec::new();
+        for prefix in ["", "roberta."] {
+            rules.extend([
+                rule(
+                    &format!("{prefix}embeddings.word_embeddings.weight"),
+                    "embeddings.word",
+                ),
+                rule(
+                    &format!("{prefix}embeddings.position_embeddings.weight"),
+                    "embeddings.position",
+                ),
+                rule(
+                    &format!("{prefix}embeddings.token_type_embeddings.weight"),
+                    "embeddings.token_type",
+                ),
+                rule(
+                    &format!("{prefix}embeddings.LayerNorm.weight"),
+                    "embeddings.ln.weight",
+                ),
+                rule(
+                    &format!("{prefix}embeddings.LayerNorm.bias"),
+                    "embeddings.ln.bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.self.query.weight"),
+                    "layers[{i}].attention.w_q",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.self.query.bias"),
+                    "layers[{i}].attention.q_bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.self.key.weight"),
+                    "layers[{i}].attention.w_k",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.self.key.bias"),
+                    "layers[{i}].attention.k_bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.self.value.weight"),
+                    "layers[{i}].attention.w_v",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.self.value.bias"),
+                    "layers[{i}].attention.v_bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.output.dense.weight"),
+                    "layers[{i}].attention.w_o",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.output.dense.bias"),
+                    "layers[{i}].attention.o_bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.output.LayerNorm.weight"),
+                    "layers[{i}].attn_norm.weight",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.attention.output.LayerNorm.bias"),
+                    "layers[{i}].attn_norm.bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.intermediate.dense.weight"),
+                    "layers[{i}].ffn.w_up",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.intermediate.dense.bias"),
+                    "layers[{i}].ffn.up_bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.output.dense.weight"),
+                    "layers[{i}].ffn.w_down",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.output.dense.bias"),
+                    "layers[{i}].ffn.down_bias",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.output.LayerNorm.weight"),
+                    "layers[{i}].ffn_norm.weight",
+                ),
+                rule(
+                    &format!("{prefix}encoder.layer.{{i}}.output.LayerNorm.bias"),
+                    "layers[{i}].ffn_norm.bias",
+                ),
+            ]);
+        }
+        WeightMapper::new(rules)
+    }
+
+    /// Create a mapper for a CodeDeltaTok head checkpoint.
+    ///
+    /// The head converter (`scripts/export_unixcoder_reference.py
+    /// convert-cdt`) writes the raw `torch.save` state dict into
+    /// safetensors under the `cdt.` prefix. We rewrite those keys into the
+    /// canonical shape expected by [`super::super::models::text_encoder::
+    /// CodeDeltaTokHead`] — `encoder.0.x` → `encoder[0].x`.
+    pub fn code_deltatok() -> Self {
+        let mut rules: Vec<MappingRule> = Vec::new();
+        rules.push(rule("cdt.z_embed",  "z_embed"));
+        rules.push(rule("cdt.pos_prev", "pos_prev"));
+        rules.push(rule("cdt.pos_next", "pos_next"));
+        rules.push(rule("cdt.pos_z",    "pos_z"));
+        rules.push(rule("cdt.encoder_norm.weight", "encoder_norm.weight"));
+        rules.push(rule("cdt.encoder_norm.bias",   "encoder_norm.bias"));
+        rules.push(rule("cdt.decoder_norm.weight", "decoder_norm.weight"));
+        rules.push(rule("cdt.decoder_norm.bias",   "decoder_norm.bias"));
+        rules.push(rule("cdt.out_proj.weight", "out_proj.weight"));
+        rules.push(rule("cdt.out_proj.bias",   "out_proj.bias"));
+        for side in ["encoder", "decoder"] {
+            for suffix in [
+                "norm1.weight", "norm1.bias", "norm2.weight", "norm2.bias",
+                "attn.in_proj_weight", "attn.in_proj_bias",
+                "attn.out_proj.weight", "attn.out_proj.bias",
+                "mlp_gate.weight", "mlp_gate.bias",
+                "mlp_up.weight",   "mlp_up.bias",
+                "mlp_down.weight", "mlp_down.bias",
+                "scale1", "scale2",
+            ] {
+                rules.push(rule(
+                    &format!("cdt.{side}.{{i}}.{suffix}"),
+                    &format!("{side}[{{i}}].{suffix}"),
+                ));
+            }
+        }
+        WeightMapper::new(rules)
     }
 
     /// Map a single source name. Returns `None` if no rule matches.
